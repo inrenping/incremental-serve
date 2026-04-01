@@ -7,7 +7,7 @@ engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 指定 Schema
-Base = declarative_base(metadata=MetaData(schema="blunt"))
+Base = declarative_base(metadata=MetaData(schema=settings.SCHEMA))
 
 def get_db():
     db = SessionLocal()
