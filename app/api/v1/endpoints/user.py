@@ -15,3 +15,15 @@ def get_user_by_name(username: str, db: Session = Depends(get_db)):
         )
     
     return user
+
+@router.get("/useremail/{email}")
+def get_user_by_email(email: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.user_email == email,User.active == True).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f"User with email '{email}' not found"
+        )
+    
+    return user

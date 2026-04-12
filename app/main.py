@@ -7,9 +7,9 @@ app = FastAPI(title="Running AI MVP")
 ENV = os.getenv("APP_ENV", "development")
 
 if ENV == "production":
-    app = FastAPI(title="blunt",docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Incremental",docs_url=None, redoc_url=None, openapi_url=None)
 else:
-    app = FastAPI(title="blunt")
+    app = FastAPI(title="Incremental")
 
 app.include_router(api_router, prefix="/api/v1")
 
