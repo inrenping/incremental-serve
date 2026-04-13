@@ -2,9 +2,9 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Union, Optional
 from jose import jwt
+from app.core.config import settings
 
-# --- 配置建议放在 app/core/config.py 中 ---
-SECRET_KEY = "你的超级加密密钥_务必换成复杂的随机字符串" 
+SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30  # Access Token 有效期 30 分钟
 

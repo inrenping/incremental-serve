@@ -13,4 +13,3 @@ class UserRefreshToken(Base):
     expires_ip = Column(String(45))
     user_agent = Column(Text)    
     revoked = Column(Boolean, nullable=False, default=False)
-    user = relationship("User", back_populates="refresh_tokens")

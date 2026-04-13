@@ -11,7 +11,7 @@ from app.models.user_verify_code import UserVerifyCode
 from app.models.refresh_token import UserRefreshToken
 from app.core.security import create_access_token, create_refresh_token
 
-router = APIRouter(prefix="/auth", tags=["认证"])
+router = APIRouter()
 
 # --- 辅助方法：统一验证码校验逻辑 ---
 def verify_captcha_logic(db: Session, email: str, code: str, purpose: str):
@@ -122,7 +122,7 @@ def generate_user_tokens(db: Session, user: User, request: Request):
 @router.post("/send-captcha")
 def send_captcha(
     email: str, 
-    purpose: str,  # "login" 或 "register"
+    purpose: str,
     request: Request, 
     db: Session = Depends(get_db)
 ):
