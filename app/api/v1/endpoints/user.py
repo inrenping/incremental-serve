@@ -1,54 +1,44 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from typing import Optional
 from app.db.session import get_db
 from app.models.user import User
 
+# 注意：建议将 prefix 设置为 "/user"
 router = APIRouter()
 
-@router.get("/username/{username}")
-def get_user_by_name(username: str, db: Session = Depends(get_db)):   
+@router.get("")
+def get_user(
+    username: Optional[str] = Query(None, description="通过用户名查询"),
+    email: Optional[str] = Query(None, description="通过电子邮箱查询"),
+    db: Session = Depends(get_db)
+):   
     """
-    通过用户名获取激活状态的用户信息。
-
-    Args:
-        username (str): 要查询的用户名。
-        db (Session): 数据库会话实例，由 FastAPI 依赖注入提供。
-
-    Returns:
-        User: 返回查询到的用户对象模型。
-
-    Raises:
-        HTTPException: 如果用户不存在或未激活，抛出 404 错误。
+    获取用户信息。支持通过 username 或 email 进行查询。
+    接口格式示例：
+    - /user?username=inrenping
+    - /user?email=test@example.com
     """
-    user = db.query(User).filter(User.user_name == username, User.active == True).first()       
+    query = db.query(User).filter(User.active == True)
+
+    # 根据传入的参数动态构建查询条件
+    if username:
+        query = query.filter(User.user_name == username)
+    elif email:
+        query = query.filter(User.user_email == email)
+    else:
+        # 如果既没有传 username 也没有传 email，抛出 400 错误
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="必须提供 username 或 email 其中之一作为查询参数"
+        )
+
+    user = query.first()
+    
     if not user:
+        identifier = username or email
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"User with username '{username}' not found"
+            detail=f"未找到用户: {identifier}"
         )
-    return user
-
-@router.get("/useremail/{email}")
-def get_user_by_email(email: str, db: Session = Depends(get_db)):
-    """
-    通过电子邮件获取激活状态的用户信息。
-
-    Args:
-        email (str): 用户的电子邮箱地址。
-        db (Session): 数据库会话。
-
-    Returns:
-        User: 匹配的用户对象。
-
-    Raises:
-        HTTPException: 当找不到匹配且激活的用户时抛出。
-    """
-    user = db.query(User).filter(User.user_email == email, User.active == True).first()
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, 
-            detail=f"User with email '{email}' not found"
-        )
-    
     return user

@@ -155,7 +155,7 @@ def send_captcha(
         # 4. 调用 Resend 发送邮件
         # 注意：如果你没验证域名，from 必须用 "onboarding@resend.dev"
         r = resend.Emails.send({
-            "from": "Auth <onboarding@resend.dev>",
+            "from": "Incremental <onboarding@resend.dev>",
             "to": [email],
             "subject": f"您的验证码是: {code}",
             "html": f"""
