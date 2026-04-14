@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from app.db.session import get_db
 from app.models.user import User
+from app.core.security import get_current_user
 
-# 注意：建议将 prefix 设置为 "/user"
 router = APIRouter()
 
 @router.get("")
@@ -42,3 +42,19 @@ def get_user(
             detail=f"未找到用户: {identifier}"
         )
     return user
+
+@router.get("/me")
+def read_users_me(current_user: User = Depends(get_current_user)):
+    """
+    通过此接口验证 Token 有效性。
+    如果 Token 无效，FastAPI 会自动返回 401。
+    如果有效，将返回当前登录的用户信息。
+    """
+    return {
+        "status": "token_valid",
+        "user": {
+            "id": current_user.user_id,
+            "username": current_user.user_name,
+            "email": current_user.user_email
+        }
+    }

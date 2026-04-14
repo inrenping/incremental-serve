@@ -60,7 +60,7 @@ def register(
         created_at=datetime.now(timezone.utc)
     )
     db.add(new_user)
-    db.flush()  # 刷新以获取 new_user.user_id
+    db.flush()
 
     # D. 生成 Tokens
     tokens = generate_user_tokens(db, new_user, request)
@@ -129,18 +129,16 @@ def send_captcha(
     """
     生成验证码，存入数据库，并通过 Resend 发送邮件
     """
-    # 1. 业务逻辑检查：如果是注册，检查邮箱是否已存在
     if purpose == "register":
         existing_email = db.query(User).filter(User.user_email == email).first()
         if existing_email:
             raise HTTPException(status_code=400, detail="该邮箱已注册")
 
-    # 2. 生成 6 位随机验证码
     code = f"{random.randint(100000, 999999)}"
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(minutes=5)
 
-    # 3. 构造数据库记录 (使用你的 UserVerifyCode 模型)
+    # 构造数据库记录 (使用你的 UserVerifyCode 模型)
     db_captcha = UserVerifyCode(
         email=email,
         code=code,
@@ -152,8 +150,7 @@ def send_captcha(
     )
     
     try:
-        # 4. 调用 Resend 发送邮件
-        # 注意：如果你没验证域名，from 必须用 "onboarding@resend.dev"
+        # 调用 Resend 发送邮件
         r = resend.Emails.send({
             "from": "Incremental <onboarding@resend.dev>",
             "to": [email],
@@ -165,7 +162,7 @@ def send_captcha(
             """
         })
         
-        # 5. 邮件发送成功后，将记录写入数据库
+        # 邮件发送成功后，将记录写入数据库
         db.add(db_captcha)
         db.commit()
         
@@ -177,3 +174,43 @@ def send_captcha(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"邮件发送失败: {str(e)}"
         )
+@router.post("/refresh")
+def refresh_token_endpoint(
+    refresh_token: str, 
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    使用 Refresh Token 获取新的 Access Token。
+    """
+    now = datetime.now(timezone.utc)
+    
+    # 在数据库中查找该 Refresh Token
+    db_token = db.query(UserRefreshToken).filter(
+        UserRefreshToken.refresh_token == refresh_token,
+        UserRefreshToken.revoked == False,
+        UserRefreshToken.expires_time > now
+    ).first()
+
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Refresh Token 无效或已过期"
+        )
+
+    # 检查关联用户是否存在且活跃
+    user = db.query(User).filter(User.user_id == db_token.user_id).first()
+    if not user or not user.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="用户不存在或已被禁用"
+        )
+
+    # 标记旧的 Refresh Token 为已撤回（Rotation 机制）
+    db_token.revoked = True
+    
+    # 生成一套全新的 Tokens
+    new_tokens = generate_user_tokens(db, user, request)
+    
+    db.commit()
+    return new_tokens

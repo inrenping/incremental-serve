@@ -10,10 +10,11 @@ pip freeze > requirements.txt
 TODO
 ==============
 
-* 通过邮件验证码登录
+* <del>已登录账号自动登录；</del>
+* <del>通过邮件验证码登录;</del>
 * 通过 Google 登录
 * 通过 GitHub 登录
-* 通过邮件验证码注册
+* <del>通过邮件验证码注册;</del>
 * 通过 Google 注册
 * 通过 GitHub 注册
 * 修改邮箱
