@@ -46,11 +46,12 @@ def send_captcha_email(email: str, code: str) -> Dict[str, Any]:
         response = resend.Emails.send({
             "from": settings.RESEND_EMAIL_FROM,
             "to": [email],
-            "subject": f"您的验证码是: {code}",
+            "subject": f"[Incremental] Sudo email verification code",
             "html": f"""
-                <p>您好，</p>
-                <p>您的验证码为：<strong>{code}</strong></p>
-                <p>有效期为 5 分钟。如果您没有请求此代码，请忽略此邮件。</p>
+                <p>Here is your Incremental sudo authentication code:</p>
+                <p><strong>{code}</strong></p>
+                <p>This code is valid for 15 minutes and can only be used once.</p>
+                <p>Please don't share this code with anyone: we'll never ask for it on the phone or via email.</p>
             """
         })
         return response
