@@ -1,37 +1,34 @@
-from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-import random
-import resend
 
 from app.db.session import get_db
-from app.models.user import User
-from app.models.user_verify_code import UserVerifyCode
-from app.models.refresh_token import UserRefreshToken
-from app.core.security import create_access_token, create_refresh_token
+from app.services.auth_service import register_user, login_user, handle_oauth_user, refresh_user_token
+from app.services.oauth_service import verify_google_id_token, verify_github_access_token, exchange_github_code, fetch_github_user_info
+from app.services.captcha_service import create_and_send_captcha
 
 router = APIRouter()
 
-# --- 辅助方法：统一验证码校验逻辑 ---
-def verify_captcha_logic(db: Session, email: str, code: str, purpose: str):
-    now = datetime.now(timezone.utc)
-    db_code = db.query(UserVerifyCode).filter(
-        UserVerifyCode.email == email,
-        UserVerifyCode.code == code,
-        UserVerifyCode.purpose == purpose,
-        UserVerifyCode.used == False,
-        UserVerifyCode.expires_at > now
-    ).first()
-    
-    if not db_code:
-        raise HTTPException(status_code=400, detail="验证码无效、已过期或已使用")
-    
-    # 标记验证码已使用
-    db_code.used = True
-    return db_code
+class GoogleLoginRequest(BaseModel):
+    email: str
+    name: str
+    avatar: Optional[str]
+    googleId: str
+    idToken: str
+    accessToken: Optional[str] = None
+    refreshToken: Optional[str] = None
 
-# --- 1. 注册接口 ---
+
+class GitHubLoginRequest(BaseModel):
+    email: str
+    name: str
+    avatar: Optional[str]
+    githubId: str
+    accessToken: str
+    refreshToken: Optional[str] = None
+
+
 @router.post("/register")
 def register(
     username: str, 
@@ -40,33 +37,9 @@ def register(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    # A. 校验用户名和邮箱是否已存在
-    existing_user = db.query(User).filter(
-        or_(User.user_name == username, User.user_email == email)
-    ).first()
-    
-    if existing_user:
-        field = "用户名" if existing_user.user_name == username else "邮箱"
-        raise HTTPException(status_code=400, detail=f"该{field}已被注册")
+    """用户注册"""
+    return register_user(db, username, email, captcha, request)
 
-    # B. 校验验证码（purpose设为 'register'）
-    verify_captcha_logic(db, email, captcha, "register")
-
-    # C. 创建并激活用户
-    new_user = User(
-        user_name=username,
-        user_email=email,
-        active=True,
-        created_at=datetime.now(timezone.utc)
-    )
-    db.add(new_user)
-    db.flush()  # 刷新以获取 new_user.user_id
-
-    # D. 生成 Tokens
-    tokens = generate_user_tokens(db, new_user, request)
-    
-    db.commit()
-    return tokens
 
 # --- 2. 登录接口 ---
 @router.post("/login")
@@ -76,48 +49,101 @@ def login(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    # A. 校验验证码（purpose设为 'login'）
-    verify_captcha_logic(db, email, captcha, "login")
+    """用户登录"""
+    return login_user(db, email, captcha, request)
 
-    # B. 查找用户
-    user = db.query(User).filter(User.user_email == email).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="该邮箱未注册，请先注册")
-    
-    if not user.active:
-        raise HTTPException(status_code=400, detail="账号已被禁用")
+@router.post("/google-login")
+def google_login(
+    payload: GoogleLoginRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Google OAuth 登录"""
+    # 1. 校验 Google idToken 与 googleId
+    verify_google_id_token(payload.idToken, payload.googleId, payload.email)
 
-    # C. 生成 Tokens
-    tokens = generate_user_tokens(db, user, request)
-    
-    db.commit()
-    return tokens
-
-# --- 3. 封装 Token 生成逻辑 ---
-def generate_user_tokens(db: Session, user: User, request: Request):
-    # 生成 Access Token (通常 15-60 分钟)
-    access_token = create_access_token(data={"sub": str(user.user_id)})
-    
-    # 生成 Refresh Token (通常 7 天)
-    refresh_token_str = create_refresh_token()
-    
-    new_refresh_token = UserRefreshToken(
-        user_id=user.user_id,
-        refresh_token=refresh_token_str,
-        expires_time=datetime.now(timezone.utc) + timedelta(days=7),
-        created_at=datetime.now(timezone.utc),
-        expires_ip=request.client.host,
-        user_agent=request.headers.get("user-agent"),
-        revoked=False
+    # 2. 处理 OAuth 用户（自动创建或绑定账户）
+    user, social = handle_oauth_user(
+        db=db,
+        provider="google",
+        provider_user_id=payload.googleId,
+        email=payload.email,
+        name=payload.name,
+        avatar=payload.avatar,
+        access_token=payload.accessToken,
+        request=request
     )
-    db.add(new_refresh_token)
-    
+
+    # 3. 生成系统 Tokens
+    from app.services.auth_service import generate_user_tokens
+    tokens = generate_user_tokens(db, user, request)
+    db.commit()
+
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token_str,
-        "token_type": "bearer",
-        "user_id": user.user_id
+        **tokens,
+        "user": {
+            "id": user.user_id,
+            "username": user.user_name,
+            "email": user.user_email,
+        }
     }
+
+
+@router.post("/github-login")
+def github_login(
+    payload: GitHubLoginRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """GitHub OAuth 登录"""
+    # 1. 校验 GitHub accessToken 与 githubId
+    verify_github_access_token(payload.accessToken, payload.githubId, payload.email)
+
+    # 2. 处理 OAuth 用户（自动创建或绑定账户）
+    user, social = handle_oauth_user(
+        db=db,
+        provider="github",
+        provider_user_id=payload.githubId,
+        email=payload.email,
+        name=payload.name,
+        avatar=payload.avatar,
+        access_token=payload.accessToken,
+        request=request
+    )
+
+    # 3. 生成系统 Tokens
+    from app.services.auth_service import generate_user_tokens
+    tokens = generate_user_tokens(db, user, request)
+    db.commit()
+
+    return {
+        **tokens,
+        "user": {
+            "id": user.user_id,
+            "username": user.user_name,
+            "email": user.user_email,
+        }
+    }
+
+
+@router.get("/github/callback")
+def github_callback(
+    code: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """GitHub OAuth 回调"""
+    access_token = exchange_github_code(code)
+    github_user = fetch_github_user_info(access_token)
+    payload = GitHubLoginRequest(
+        email=github_user["email"],
+        name=github_user.get("name") or github_user.get("login") or "GitHub User",
+        avatar=github_user.get("avatar_url"),
+        githubId=str(github_user["id"]),
+        accessToken=access_token,
+    )
+    return github_login(payload, request, db)
+
 
 @router.post("/send-captcha")
 def send_captcha(
@@ -126,54 +152,14 @@ def send_captcha(
     request: Request, 
     db: Session = Depends(get_db)
 ):
-    """
-    生成验证码，存入数据库，并通过 Resend 发送邮件
-    """
-    # 1. 业务逻辑检查：如果是注册，检查邮箱是否已存在
-    if purpose == "register":
-        existing_email = db.query(User).filter(User.user_email == email).first()
-        if existing_email:
-            raise HTTPException(status_code=400, detail="该邮箱已注册")
+    """生成验证码，存入数据库，并通过 Resend 发送邮件"""
+    return create_and_send_captcha(db, email, purpose, request.client.host)
 
-    # 2. 生成 6 位随机验证码
-    code = f"{random.randint(100000, 999999)}"
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(minutes=5)
-
-    # 3. 构造数据库记录 (使用你的 UserVerifyCode 模型)
-    db_captcha = UserVerifyCode(
-        email=email,
-        code=code,
-        purpose=purpose,
-        expires_at=expires_at,
-        created_at=now,
-        used=False,
-        ip_address=request.client.host
-    )
-    
-    try:
-        # 4. 调用 Resend 发送邮件
-        # 注意：如果你没验证域名，from 必须用 "onboarding@resend.dev"
-        r = resend.Emails.send({
-            "from": "Incremental <onboarding@resend.dev>",
-            "to": [email],
-            "subject": f"您的验证码是: {code}",
-            "html": f"""
-                <p>您好，</p>
-                <p>您的验证码为：<strong>{code}</strong></p>
-                <p>有效期为 5 分钟。如果您没有请求此代码，请忽略此邮件。</p>
-            """
-        })
-        
-        # 5. 邮件发送成功后，将记录写入数据库
-        db.add(db_captcha)
-        db.commit()
-        
-        return {"message": "验证码已发送", "id": r["id"]}
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"邮件发送失败: {str(e)}"
-        )
+@router.post("/refresh")
+def refresh_token_endpoint(
+    refresh_token: str, 
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """使用 Refresh Token 获取新的 Access Token"""
+    return refresh_user_token(db, refresh_token, request)
