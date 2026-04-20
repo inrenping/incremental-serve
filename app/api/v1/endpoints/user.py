@@ -1,16 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import Optional
+
 from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
+from app.services.user_service import get_user_info
 
 router = APIRouter()
 
 @router.get("")
 def get_user(
-    username: Optional[str] = Query(None, description="通过用户名查询"),
-    email: Optional[str] = Query(None, description="通过电子邮箱查询"),
+    username: Optional[str] = None,
+    email: Optional[str] = None,
     db: Session = Depends(get_db)
 ):   
     """
@@ -19,29 +21,7 @@ def get_user(
     - /user?username=inrenping
     - /user?email=test@example.com
     """
-    query = db.query(User).filter(User.active == True)
-
-    # 根据传入的参数动态构建查询条件
-    if username:
-        query = query.filter(User.user_name == username)
-    elif email:
-        query = query.filter(User.user_email == email)
-    else:
-        # 如果既没有传 username 也没有传 email，抛出 400 错误
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="必须提供 username 或 email 其中之一作为查询参数"
-        )
-
-    user = query.first()
-    
-    if not user:
-        identifier = username or email
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"未找到用户: {identifier}"
-        )
-    return user
+    return get_user_info(db, username=username, email=email)
 
 @router.get("/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
