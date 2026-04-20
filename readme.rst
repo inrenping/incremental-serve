@@ -27,3 +27,6 @@ TODO
 #部署说明 TODO 
 ==============
 
+GTIHUB ACTIONS 需要配置的变量
+* 
+* 
