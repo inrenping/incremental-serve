@@ -21,6 +21,12 @@ Blunt Serv
 
     pip freeze > requirements.txt
 
+查看日志~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+sudo journalctl -u incremental-serve.service -f
+
 TODO
 ----
 
