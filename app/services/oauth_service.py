@@ -15,6 +15,14 @@ def verify_google_id_token(id_token: str, google_id: str, email: str) -> None:
     if not settings.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="Google Client ID 未配置")
 
+    # 快速检查：ID Token 应该是 JWT 格式（包含两个点）
+    # 如果是以 ya29. 开头，通常是 Access Token
+    if id_token.startswith("ya29.") or id_token.count(".") != 2:
+        raise HTTPException(
+            status_code=400, 
+            detail="提供的 idToken 格式不正确。请确保传入的是 JWT ID Token 而非 Access Token (ya29.xx)"
+        )
+
     try:
         response = requests.get(
             "https://oauth2.googleapis.com/tokeninfo",
