@@ -1,7 +1,7 @@
 Blunt Serv
 ==========
 
-这是一个基于 FastAPI 的用户认证服务项目。
+这是一个基于 FastAPI 的后端接口。
 
 快速开始
 --------
@@ -12,6 +12,7 @@ Blunt Serv
 .. code-block:: python
 
     uvicorn app.main:app --reload
+    python -m uvicorn app.main:app --reload
 
 更新 requirements.txt
 ~~~~~~~~~~~~~~~~~~~~~
@@ -111,3 +112,22 @@ TODO
     sudo systemctl daemon-reload
     sudo systemctl start incremental-serve.service
     sudo systemctl status incremental-serve.service
+
+Github Actions 部署
+~~~~~~~~~~~~~~~~~~
+
+需要在 secrets 中添加以下环境变量：
+
+    REMOTE_HOST=服务器IP
+    REMOTE_USER=服务器用户名
+    SSH_PRIVATE_KEY=远程登录用到
+    DATABASE_URL=postgresql://user:password@localhost:5432/db_name
+    # SCHEMA=your_schema_name
+    SECRET_KEY=your_secret_key_here
+    RESEND_API_KEY=re_your_secret_key_here
+    RESEND_EMAIL_FROM=Your App <noreply@yourdomain.com>
+    GOOGLE_CLIENT_ID=你的_CLIENT_ID
+    GOOGLE_CLIENT_SECRET=你的_CLIENT_SECRET
+    # GITHUB 不允许 GITHUB_ 开头的环境变量，所以改成 GIT_HUB_ 开头
+    GIT_HUB_CLIENT_ID=你的_CLIENT_ID
+    GIT_HUB_CLIENT_SECRET=你的_CLIENT_SECRET

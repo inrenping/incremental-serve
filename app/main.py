@@ -1,13 +1,15 @@
 import os
 from fastapi import FastAPI
 from app.api.v1.api import api_router
+from app.core.config import settings
 
-app = FastAPI(title="Running AI MVP")
-
-ENV = os.getenv("APP_ENV", "development")
-
-if ENV == "production":
-    app = FastAPI(title="Incremental",docs_url=None, redoc_url=None, openapi_url=None)
+if settings.ENV == "production":
+    app = FastAPI(
+        title="Incremental",
+        docs_url=None, 
+        redoc_url=None, 
+        openapi_url=None
+    )
 else:
     app = FastAPI(title="Incremental")
 
