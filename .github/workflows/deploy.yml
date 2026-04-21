@@ -1,4 +1,4 @@
-name: CI/CD for FastAPI
+name: CI/CD for Incremental Serve
 
 on:
   push:
@@ -74,8 +74,8 @@ jobs:
             echo "RESEND_EMAIL_FROM=${{ secrets.RESEND_EMAIL_FROM }}" >> .env
             echo "GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}" >> .env
             echo "GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}" >> .env
-            echo "GITHUB_CLIENT_ID=${{ secrets.GIT_HUB_CLIENT_ID }}" >> .env
-            echo "GITHUB_CLIENT_SECRET=${{ secrets.GIT_HUB_CLIENT_SECRET }}" >> .env
+            echo "GIT_HUB_CLIENT_ID=${{ secrets.GIT_HUB_CLIENT_ID }}" >> .env
+            echo "GIT_HUB_CLIENT_SECRET=${{ secrets.GIT_HUB_CLIENT_SECRET }}" >> .env
 
             # 3. 安装依赖 (使用你已有的 venv)
             source venv/bin/activate
