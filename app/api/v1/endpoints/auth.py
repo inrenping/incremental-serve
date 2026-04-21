@@ -59,8 +59,9 @@ def google_login(
     db: Session = Depends(get_db)
 ):
     """Google OAuth 登录"""
-    # 1. 校验 Google idToken 与 googleId
-    verify_google_id_token(payload.idToken, payload.googleId, payload.email)
+    # 优先使用 idToken，如果没有则使用 accessToken
+    token_to_verify = payload.idToken or payload.accessToken
+    verify_google_id_token(token_to_verify, payload.googleId, payload.email)
 
     # 2. 处理 OAuth 用户（自动创建或绑定账户）
     user, social = handle_oauth_user(

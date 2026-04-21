@@ -7,36 +7,42 @@ from app.core.config import settings
 
 # ============ Google OAuth =============
 
-def verify_google_id_token(id_token: str, google_id: str, email: str) -> None:
+def verify_google_token(token: str, google_id: str, email: str) -> None:
     """
-    验证 Google ID Token
-    检查 token 签名、客户端ID、用户ID、邮箱匹配情况
+    自适应验证 Google Token (支持 ID Token 和 Access Token)
     """
     if not settings.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="Google Client ID 未配置")
 
+    # 1. 自动判断 Token 类型并决定验证接口
+    if token.startswith("ya29."):
+        # 这是 Access Token
+        verify_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+        params = {}
+        headers = {"Authorization": f"Bearer {token}"}
+    else:
+        # 假设是 ID Token (JWT)
+        verify_url = "https://oauth2.googleapis.com/tokeninfo"
+        params = {"id_token": token}
+        headers = {}
+
     try:
-        response = requests.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": id_token},
-            timeout=5,
-        )
+        response = requests.get(verify_url, params=params, headers=headers, timeout=5)
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
-        raise HTTPException(status_code=400, detail=f"Google ID Token 校验失败: {str(exc)}")
+        raise HTTPException(status_code=400, detail=f"Google Token 校验失败: {str(exc)}")
 
-    if payload.get("aud") != settings.GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=400, detail="idToken 的客户端 ID 不匹配")
+    # 2. 字段名在不同接口中可能略有不同
+    # Access Token 接口返回 'sub'，ID Token 接口也返回 'sub'
+    remote_sub = payload.get("sub")
+    remote_email = payload.get("email")
 
-    if payload.get("sub") != google_id:
-        raise HTTPException(status_code=400, detail="googleId 与 idToken 不匹配")
+    if remote_sub != google_id:
+        raise HTTPException(status_code=400, detail="googleId 与 Token 不匹配")
 
-    if payload.get("email") != email:
-        raise HTTPException(status_code=400, detail="idToken 中的邮箱与请求邮箱不匹配")
-
-    if payload.get("email_verified") not in (True, "true", "True"):
-        raise HTTPException(status_code=400, detail="Google 账户邮箱未验证")
+    if remote_email != email:
+        raise HTTPException(status_code=400, detail="Token 中的邮箱不匹配")
 
 
 # ============ GitHub OAuth =============
