@@ -25,7 +25,7 @@ Blunt Serv
 
 .. code-block:: python
 
-sudo journalctl -u incremental-serve.service -f
+    sudo journalctl -u incremental-serve.service -f
 
 TODO
 ----
