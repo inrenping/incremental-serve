@@ -71,7 +71,7 @@ def exchange_github_code(code: str) -> str:
     """
     用 GitHub Authorization Code 换取 Access Token
     """
-    if not settings.GITHUB_CLIENT_ID or not settings.GITHUB_CLIENT_SECRET:
+    if not settings.GIT_HUB_CLIENT_ID or not settings.GIT_HUB_CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="GitHub 客户端配置未配置")
 
     try:
@@ -79,8 +79,8 @@ def exchange_github_code(code: str) -> str:
             "https://github.com/login/oauth/access_token",
             headers={"Accept": "application/json"},
             data={
-                "client_id": settings.GITHUB_CLIENT_ID,
-                "client_secret": settings.GITHUB_CLIENT_SECRET,
+                "client_id": settings.GIT_HUB_CLIENT_ID,
+                "client_secret": settings.GIT_HUB_CLIENT_SECRET,
                 "code": code,
             },
             timeout=5,
