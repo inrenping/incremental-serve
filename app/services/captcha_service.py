@@ -50,7 +50,7 @@ def send_captcha_email(email: str, code: str) -> Dict[str, Any]:
             "html": f"""
                 <p>Here is your Incremental sudo authentication code:</p>
                 <p><strong>{code}</strong></p>
-                <p>This code is valid for 15 minutes and can only be used once.</p>
+                <p>This code is valid for 5 minutes and can only be used once.</p>
                 <p>Please don't share this code with anyone: we'll never ask for it on the phone or via email.</p>
             """
         })
