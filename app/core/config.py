@@ -12,6 +12,11 @@ class Settings:
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL is not set in environment variables")
         
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if ENV == "production" and not GOOGLE_CLIENT_ID:
+        # 生产环境下如果缺失关键变量，提前抛出异常防止服务带着错误配置运行
+        raise ValueError("GOOGLE_CLIENT_ID must be set in production")
+
     # SCHEMA = os.getenv("SCHEMA")
     SECRET_KEY = os.getenv("SECRET_KEY")
     RESEND_API_KEY = os.getenv("RESEND_API_KEY")

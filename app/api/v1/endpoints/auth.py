@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.services.auth_service import register_user, login_user, handle_oauth_user, refresh_user_token
+from app.services.auth_service import register_user, login_user, handle_oauth_user, refresh_user_token, generate_user_tokens
 from app.services.oauth_service import verify_google_id_token, verify_github_access_token, exchange_github_code, fetch_github_user_info
 from app.services.captcha_service import create_and_send_captcha
 
@@ -75,7 +75,6 @@ def google_login(
     )
 
     # 3. 生成系统 Tokens
-    from app.services.auth_service import generate_user_tokens
     tokens = generate_user_tokens(db, user, request)
     db.commit()
 
@@ -112,7 +111,6 @@ def github_login(
     )
 
     # 3. 生成系统 Tokens
-    from app.services.auth_service import generate_user_tokens
     tokens = generate_user_tokens(db, user, request)
     db.commit()
 
