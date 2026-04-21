@@ -124,6 +124,36 @@ def github_login(
         }
     }
 
+@router.post("/github-login-by-code")
+def github_login_by_code(
+    code: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    专门给前端 callback 页面调用的接口
+    接收前端传来的 code，换取用户信息并返回 JSON
+    """
+    # 1. 用 code 换 GitHub 的 access_token
+    # 必须是 https://i.incremental.icu/login/callback
+    github_access_token = exchange_github_code(code) 
+    
+    # 2. 获取 GitHub 用户信息
+    github_user = fetch_github_user_info(github_access_token)
+    
+    # 3. 构造 LoginRequest（复用你之前的 Pydantic 模型）
+    payload = GitHubLoginRequest(
+        email=github_user["email"],
+        name=github_user.get("name") or github_user.get("login") or "GitHub User",
+        avatar=github_user.get("avatar_url"),
+        githubId=str(github_user["id"]),
+        accessToken=github_access_token,
+    )
+    
+    # 4. 直接调用你写好的 github_login 逻辑
+    # 它会处理 handle_oauth_user 和 generate_user_tokens
+    # 最终返回类似 {"access_token": "...", "user": {...}} 的 JSON
+    return github_login(payload, request, db)
 
 @router.get("/github/callback")
 def github_callback(
