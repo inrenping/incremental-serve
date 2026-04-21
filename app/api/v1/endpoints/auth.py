@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.auth_service import register_user, login_user, handle_oauth_user, refresh_user_token, generate_user_tokens
-from app.services.oauth_service import verify_google_id_token, verify_github_access_token, exchange_github_code, fetch_github_user_info
+from app.services.oauth_service import verify_google_token, verify_github_access_token, exchange_github_code, fetch_github_user_info
 from app.services.captcha_service import create_and_send_captcha
 
 router = APIRouter()
@@ -61,7 +61,7 @@ def google_login(
     """Google OAuth 登录"""
     # 优先使用 idToken，如果没有则使用 accessToken
     token_to_verify = payload.idToken or payload.accessToken
-    verify_google_id_token(token_to_verify, payload.googleId, payload.email)
+    verify_google_token(token_to_verify, payload.googleId, payload.email)
 
     # 2. 处理 OAuth 用户（自动创建或绑定账户）
     user, social = handle_oauth_user(
