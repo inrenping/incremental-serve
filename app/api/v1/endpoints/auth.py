@@ -72,6 +72,7 @@ def google_login(
         name=payload.name,
         avatar=payload.avatar,
         access_token=payload.accessToken,
+        idToken=payload.idToken,
         request=request
     )
 
