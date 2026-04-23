@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from fastapi import HTTPException
 from app.models.user import User
+from app.models.user_social import UserSocial
 
 
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
@@ -103,3 +104,19 @@ def get_user_info(db: Session, username: str = None, email: str = None) -> Dict[
         "created_at": user.created_at,
         "updated_at": user.updated_at,
     }
+
+
+def get_user_social_info(db: Session, user: User) -> list[dict]:
+    """根据当前用户获取该用户的社交登录信息"""
+    socials = db.query(UserSocial).filter(UserSocial.user_id == user.user_id).all()
+    return [
+        {
+            "id": social.id,
+            "user_id": social.user_id,
+            "provider": social.provider,
+            "provider_user_id": social.provider_user_id,
+            # "access_token": social.access_token,
+            "created_at": social.created_at,
+        }
+        for social in socials
+    ]

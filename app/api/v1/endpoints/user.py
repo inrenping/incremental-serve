@@ -5,7 +5,7 @@ from typing import Optional
 from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
-from app.services.user_service import get_user_info
+from app.services.user_service import get_user_info, get_user_social_info
 
 router = APIRouter()
 
@@ -38,3 +38,13 @@ def read_users_me(current_user: User = Depends(get_current_user)):
             "email": current_user.user_email
         }
     }
+
+
+@router.get("/socials")
+def get_user_socials(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """根据当前登录用户获取其社交登录信息。"""
+    return get_user_social_info(db, current_user)
+
