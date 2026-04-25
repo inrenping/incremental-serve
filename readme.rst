@@ -6,12 +6,12 @@ Blunt Serv
 快速开始
 --------
 
-启动服务器
+启动服务
 ~~~~~~~~~~
 
 .. code-block:: python
 
-    uvicorn app.main:app --reload
+    # uvicorn app.main:app --reload
     python -m uvicorn app.main:app --reload
 
 更新 requirements.txt
