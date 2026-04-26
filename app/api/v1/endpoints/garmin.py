@@ -33,7 +33,36 @@ class TokenData(BaseModel):
 class GarminSaveRequest(BaseModel):
     tokenData: TokenData
 
-@router.post("/connect")
+@router.get("/getConfig")
+def get_garmin_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    获取当前用户的 Garmin 授权配置列表。
+    由于支持不同区域（CN/GLOBAL），一个用户可能拥有多个配置。
+    """
+    configs = db.query(GarminConnect).filter(
+        GarminConnect.user_id == current_user.user_id
+    ).all()
+
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": c.id,
+                "region": c.region,
+                "garmin_guid": c.garmin_guid,
+                "garmin_display_name": c.garmin_display_name,
+                "is_active": c.is_active,
+                "last_synced_at": c.last_synced_at,
+                "updated_at": c.updated_at
+            }
+            for c in configs
+        ]
+    }
+
+@router.post("/save")
 def save_garmin_config(
     payload: GarminSaveRequest,
     current_user: User = Depends(get_current_user),
@@ -69,11 +98,12 @@ def save_garmin_config(
         raise HTTPException(status_code=400, detail=f"解析 Garmin Token 失败: {str(e)}")
 
     garmin_auth = db.query(GarminConnect).filter(
-        GarminConnect.user_id == current_user.user_id
+        GarminConnect.user_id == current_user.user_id,
+        GarminConnect.region == region
     ).first()
 
     if not garmin_auth:
-        garmin_auth = GarminConnect(user_id=current_user.user_id)
+        garmin_auth = GarminConnect(user_id=current_user.user_id, region=region)
         db.add(garmin_auth)
 
     garmin_auth.region = region
