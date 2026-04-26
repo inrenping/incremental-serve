@@ -39,7 +39,7 @@ class GarminConnect(Base):
 
     __tablename__ = "t_garmin_connect"
     __table_args__ = (
-        UniqueConstraint("user_id", name="t_user_garmin_auth_user_id_key"),
+        UniqueConstraint("user_id", "region", name="t_user_garmin_auth_user_id_region_key"),
         Index("idx_garmin_auth_region", "region"),
         Index("idx_garmin_auth_sync_status", "is_active", "last_synced_at"),
     )
