@@ -62,6 +62,8 @@ def get_garmin_config(
         ]
     }
 
+
+#  TODO 要单独保存对应邮箱（用户名）
 @router.post("/save")
 def save_garmin_config(
     payload: GarminSaveRequest,
