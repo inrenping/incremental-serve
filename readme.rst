@@ -38,14 +38,25 @@ TODO
 * ✓ 通过 Google 登录
 * ✓ 通过 GitHub 登录
 * ✓ 通过邮件验证码注册
-* ✓ 通过 Google 注册
+* ✓ 通过 Google 注册*
 * ✓ 通过 GitHub 注册
 * 修改用户名，修改邮箱（先做显示暂不做修改）
 * 查看关联绑定，支持重新绑定
-* 注销账号
-* 用户信息展示
+* 注销账号(后续再做)
+* ✓ 用户信息展示
 * 用户操作日志展示（后续再做）
-* 用户其他信息完善和修改。
+* 用户其他信息完善和修改（还没加字段）
+
+* 获取佳明运动数据，同步到数据库
+* 上传运动数据到佳明（单条上传）
+
+* 获取佳明心率数据，同步到数据库（后续再做）
+* 获取佳明睡眠数据，同步到数据库（后续再做）
+* 运动数据，网页上 Table 格式展示（后续再做）
+* 心率数据，网页上 Table 格式展示（后续再做）
+* 睡眠数据，网页上 Table 格式展示（后续再做）
+
+
 
 部署说明
 --------
@@ -125,6 +136,8 @@ Github Actions 部署
 
 需要在 secrets 中添加以下环境变量：
 
+.. code-block:: bash
+
     REMOTE_HOST=服务器IP
     REMOTE_USER=服务器用户名
     SSH_PRIVATE_KEY=远程登录用到
@@ -138,3 +151,23 @@ Github Actions 部署
     # GITHUB 不允许 GITHUB_ 开头的环境变量，所以改成 GIT_HUB_ 开头
     GIT_HUB_CLIENT_ID=你的_CLIENT_ID
     GIT_HUB_CLIENT_SECRET=你的_CLIENT_SECRET
+
+
+佳明相关 API
+~~~~~~~~~~~~~~~~~~
+
+.. code-block:: json
+
+GARMIN_URL_DICT = {
+  "garmin_connect_activities" : "/activitylist-service/activities/search/activities",
+  "garmin_connect_fit_download": "/download-service/files/activity",
+  "garmin_connect_upload": "/upload-service/upload"
+}
+
+
+[Garmin API SDK](https://github.com/cyberjunky/python-garminconnect.git)
+
+
+上传接口 
+
+https://connectapi.garmin.com/upload-service/upload/
