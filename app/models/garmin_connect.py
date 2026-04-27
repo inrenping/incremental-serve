@@ -35,6 +35,8 @@ class GarminConnect(Base):
         last_synced_at: 最近一次同步时间
         created_at: 创建时间
         updated_at: 更新时间
+        garmin_account: 登录用户名
+        garmin_password: 登录密码
     """
 
     __tablename__ = "t_garmin_connect"
@@ -58,6 +60,8 @@ class GarminConnect(Base):
     )
     garmin_guid = Column(UUID(as_uuid=True), comment="佳明内部唯一标识 (通过 JWT 解析)")
     garmin_display_name = Column(String(255), comment="佳明显示名称")
+    garmin_account = Column(String(255), comment="登录用户名")
+    garmin_password = Column(Text, comment="登录密码")
     oauth_token = Column(String(255), comment="OAuth 1.0 访问令牌")
     oauth_token_secret = Column(String(255), comment="OAuth 1.0 令牌密钥")
     access_token = Column(Text, comment="OAuth 2.0 Access Token (JWT)")
