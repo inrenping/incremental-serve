@@ -50,7 +50,7 @@ def get_apps_config(
     }
     if garmin_global:
         garmin_item.update({
-            "email": current_user.user_email,
+            "email": garmin_global.garmin_account,
             "addedAt": format_datetime(garmin_global.created_at),
             "status": "验证通过" if garmin_global.is_active else "已失效",
             "region": "国际区",
@@ -67,7 +67,7 @@ def get_apps_config(
     }
     if garmin_cn:
         garmin_cn_item.update({
-            "email": current_user.user_email,
+            "email": garmin_cn.garmin_account,
             "addedAt": format_datetime(garmin_cn.created_at),
             "status": "验证通过" if garmin_cn.is_active else "已失效",
             "region": "中国区",
