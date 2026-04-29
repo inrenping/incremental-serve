@@ -66,6 +66,18 @@ def get_garmin_config(
         ]
     }
 
+@router.get("/refreshToken")
+def refresh_token(
+    region: str = "CN",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+  ):
+    """
+    调用 GarminConnect 模拟登录 获取相关数据存入数据库
+
+    """
+    return '';
+
 @router.post("/saveConfig")
 def save_garmin_config(
     payload: GarminSaveRequest,
@@ -135,7 +147,6 @@ def save_garmin_config(
         }
     }
 
-
 @router.get("/fetchActivities")
 def fetch_activities(
     region: str = "CN",
@@ -161,8 +172,8 @@ def fetch_activities(
     params = {
         "start": 0,
         "limit": 5,
-        "activityType": "running", # 可选过滤
-        "startDate": "2026-01-01"  # 可选过滤
+        "activityType": "running", 
+        "startDate": "2026-01-01"  
     }
     
     headers = {

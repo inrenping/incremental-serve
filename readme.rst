@@ -6,10 +6,27 @@ Blunt Serv
 快速开始
 --------
 
+安装服务
+~~~~~~~~~~
+
+.. code-block:: bash
+
+    apt update
+    apt install python3-pip python3-venv -y
+
+    python3 -m venv venv
+    source venv/bin/activate
+
+    pip install -r requirements.txt
+
+    pip install gunicorn
+
+记得配置好环境变量
+
 启动服务
 ~~~~~~~~~~
 
-.. code-block:: python
+.. code-block:: bash
 
     # uvicorn app.main:app --reload
     python -m uvicorn app.main:app --reload
@@ -17,14 +34,14 @@ Blunt Serv
 更新 requirements.txt
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+.. code-block:: bash
 
     pip freeze > requirements.txt
 
 在服务器上查看日志
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+.. code-block:: bash
 
     sudo journalctl -u incremental-serve.service -f
 
