@@ -19,7 +19,7 @@ router = APIRouter()
 def format_datetime(dt: Optional[datetime]) -> str:
     if not dt:
         return ""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.isoformat()
 
 def format_duration(seconds: Optional[float]) -> str:
     if seconds is None:
@@ -61,6 +61,7 @@ def get_apps_config(
         "label": "Garmin Connect",
         "description": "连接您的 Garmin Connect 账号",
         "isConnected": garmin_global.is_active if garmin_global else False,
+        "total_count": garmin_global.total_count if garmin_global else 0,
     }
     if garmin_global:
         garmin_item.update({
@@ -68,7 +69,7 @@ def get_apps_config(
             "addedAt": format_datetime(garmin_global.created_at),
             "status": "验证通过" if garmin_global.is_active else "已失效",
             "region": "国际区",
-            "lastUpdate": format_datetime(garmin_global.updated_at)
+            "lastUpdate": format_datetime(garmin_global.updated_at),
         })
     results.append(garmin_item)
 
@@ -78,6 +79,7 @@ def get_apps_config(
         "label": "Garmin Connect (CN)",
         "description": "连接您的 Garmin Connect (中国) 账号",
         "isConnected": garmin_cn.is_active if garmin_cn else False,
+        "total_count": garmin_global.total_count if garmin_global else 0,
     }
     if garmin_cn:
         garmin_cn_item.update({
@@ -85,7 +87,8 @@ def get_apps_config(
             "addedAt": format_datetime(garmin_cn.created_at),
             "status": "验证通过" if garmin_cn.is_active else "已失效",
             "region": "中国区",
-            "lastUpdate": format_datetime(garmin_cn.updated_at)
+            "lastUpdate": format_datetime(garmin_cn.updated_at),
+            "total_count": garmin_cn.total_count if garmin_cn else 0,
         })
     results.append(garmin_cn_item)
 
@@ -95,8 +98,17 @@ def get_apps_config(
         "label": "Coros",
         "description": "连接您的 Coros 账号",
         "isConnected": coros_config.is_active if coros_config else False,
+        "total_count": coros_config.total_count if coros_config else 0,
     }
-    # Coros 详情后续可以按需在此补充
+    if coros_config:
+        coros_item.update({
+            "email": coros_config.coros_account,
+            "addedAt": format_datetime(coros_config.created_at),
+            "status": "验证通过" if coros_config.is_active else "已失效",
+            "region":coros_config.region,
+            "lastUpdate": format_datetime(coros_config.updated_at),
+            "total_count": coros_config.total_count if coros_config else 0,
+        })
     results.append(coros_item)
 
     return results
@@ -170,7 +182,7 @@ def get_activities_by_page(
         for activity in corosActivities:
             data.append({
                 "title": activity.name,
-                "date": format_datetime(activity.start_time),
+                "date": activity.start_time,
                 "time": activity.start_time.strftime("%H:%M") if activity.start_time else "",
                 "type": str(activity.sport_type), 
                 "workoutTime": format_duration(activity.duration),
@@ -179,7 +191,7 @@ def get_activities_by_page(
                 "elevation": "0 m",
                 "platform": "Coros",
                 "platformId": activity.label_id,
-                "syncTime": format_datetime(activity.updated_at)
+                "syncTime": activity.updated_at
             })
             
         return {

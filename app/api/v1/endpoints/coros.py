@@ -44,8 +44,9 @@ def login_coros(
     # 目前默认使用中国区登录地址
     login_url = "https://teamcnapi.coros.com/account/login"
     
-    # 密码需要 MD5 加密
-    hashed_password = hashlib.md5(payload.password.encode()).hexdigest()
+    # 密码需要 MD5 加密，前端已经加密过了
+    # hashed_password = hashlib.md5(payload.password.encode()).hexdigest()
+    hashed_password = payload.password
     
     login_data = {
         "account": payload.email,
@@ -69,7 +70,7 @@ def login_coros(
         raise HTTPException(status_code=400, detail=f"请求 Coros 接口失败: {str(e)}")
 
     if login_response.get("result") != "0000":
-        raise HTTPException(status_code=401, detail=f"高驰登录失败: {login_response.get('message')}")
+        raise HTTPException(status_code=500, detail=f"高驰登录失败: {login_response.get('message')}")
 
     data = login_response.get("data", {})
     access_token = data.get("accessToken")
@@ -86,11 +87,10 @@ def login_coros(
         db.add(coros_auth)
 
     coros_auth.coros_account = payload.email
-    # TODO：建议对密码进行加密后再存储，此处遵循项目中 garmin 的处理方式
     coros_auth.coros_password = payload.password 
     coros_auth.access_token = access_token
     coros_auth.coros_user_id = str(coros_user_id)
-    coros_auth.region_id = str(region_id)
+    coros_auth.region = region_id
     coros_auth.is_active = True
 
     db.commit()
@@ -164,8 +164,8 @@ def save_coros_activities(
             continue
 
         # 转换时间戳 (高驰返回的是秒级时间戳)
-        start_dt = datetime.fromtimestamp(item.get("startTime", 0), tz=timezone.utc)
-        end_dt = datetime.fromtimestamp(item.get("endTime", 0), tz=timezone.utc)
+        start_dt = item.get("startTime", 0)
+        end_dt = item.get("endTime", 0)
 
         new_activity = CorosActivity(
             user_id=current_user.user_id,
