@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timezone
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -280,3 +281,15 @@ def save_activities(
     db.commit()
 
     return {"status": "success", "saved_count": saved_count}
+
+@router.get("/getActivities")
+def get_activities(db: Session = Depends(get_db)):
+    """
+    获取 GarminActivity 表中的所有数据，按开始时间降序排列。
+    """
+    activities = (
+        db.query(GarminActivity)
+        .order_by(desc(GarminActivity.start_time_gmt))
+        .all()
+    )
+    return {"status": "success", "data": activities}
