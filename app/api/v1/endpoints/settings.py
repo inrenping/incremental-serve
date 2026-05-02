@@ -61,7 +61,7 @@ def get_apps_config(
         "label": "Garmin Connect",
         "description": "连接您的 Garmin Connect 账号",
         "isConnected": garmin_global.is_active if garmin_global else False,
-            "count": garmin_global.count if garmin_global else 0,
+        "total_count": garmin_global.total_count if garmin_global else 0,
     }
     if garmin_global:
         garmin_item.update({
@@ -79,7 +79,7 @@ def get_apps_config(
         "label": "Garmin Connect (CN)",
         "description": "连接您的 Garmin Connect (中国) 账号",
         "isConnected": garmin_cn.is_active if garmin_cn else False,
-            "count": garmin_global.count if garmin_global else 0,
+        "total_count": garmin_global.total_count if garmin_global else 0,
     }
     if garmin_cn:
         garmin_cn_item.update({
@@ -88,7 +88,7 @@ def get_apps_config(
             "status": "验证通过" if garmin_cn.is_active else "已失效",
             "region": "中国区",
             "lastUpdate": format_datetime(garmin_cn.updated_at),
-            "count": garmin_cn.count if garmin_cn else 0,
+            "total_count": garmin_cn.total_count if garmin_cn else 0,
         })
     results.append(garmin_cn_item)
 
@@ -98,7 +98,7 @@ def get_apps_config(
         "label": "Coros",
         "description": "连接您的 Coros 账号",
         "isConnected": coros_config.is_active if coros_config else False,
-        "count": coros_config.count if coros_config else 0,
+        "total_count": coros_config.total_count if coros_config else 0,
     }
     if coros_config:
         coros_item.update({
@@ -107,7 +107,7 @@ def get_apps_config(
             "status": "验证通过" if coros_config.is_active else "已失效",
             "region":coros_config.region,
             "lastUpdate": format_datetime(coros_config.updated_at),
-            "count": coros_config.count if coros_config else 0,
+            "total_count": coros_config.total_count if coros_config else 0,
         })
     results.append(coros_item)
 

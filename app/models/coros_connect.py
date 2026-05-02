@@ -29,7 +29,7 @@ class CorosConnect(Base):
         access_token_expires_at: Access Token 过期时间
         is_active: 授权是否有效
         last_synced_at: 最近一次同步时间
-        count: 同步的活动记录总数
+        total_count: 同步的活动记录总数
         region: 地区
         created_at: 创建时间
         updated_at: 更新时间
@@ -59,7 +59,7 @@ class CorosConnect(Base):
         default=True,
         comment="授权是否有效 (Token失效或手动解绑后置为 false)",
     )
-    count = Column(Integer, default=0, comment="同步的活动记录总数")
+    total_count = Column(Integer, default=0, comment="同步的活动记录总数")
     last_synced_at = Column(DateTime(timezone=True), comment="该用户最近一次成功同步运动数据的时间")
     region = Column(Integer, comment="地区") 
     created_at = Column(
