@@ -2,9 +2,12 @@
 from datetime import datetime, timezone
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.coros_activity import CorosActivity
+from app.models.garmin_activity import GarminActivity
 from app.models.user import User
 from app.models.garmin_connect import GarminConnect
 from app.models.coros_connect import CorosConnect
@@ -17,6 +20,17 @@ def format_datetime(dt: Optional[datetime]) -> str:
     if not dt:
         return ""
     return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def format_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "00:00"
+    total_seconds = int(seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 @router.get("/getAppsConfigs")
 def get_apps_config(
@@ -86,3 +100,92 @@ def get_apps_config(
     results.append(coros_item)
 
     return results
+
+@router.get("/getActivitiesByPage")
+def get_activities_by_page(
+    platform: str,
+    pageSize: int = 10,
+    pageCount: int = 1,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """分页获取运动记录，支持不同平台查询。"""
+
+    if platform in ["garmin", "garmin_cn"]:
+        region_filter = "GLOBAL" if platform == "garmin" else "CN"
+        # 联合查询以获取账号所属区域，区分国际版和中国版
+        query = (
+            db.query(GarminActivity, GarminConnect.region)
+            .join(GarminConnect, GarminActivity.garmin_connect_id == GarminConnect.id)
+            .filter(GarminActivity.user_id == current_user.user_id)
+            .filter(GarminConnect.region == region_filter)
+        )
+
+        total = query.count()
+
+        results = (
+            query.order_by(desc(GarminActivity.start_time_gmt))
+            .limit(pageSize)
+            .offset((pageCount - 1) * pageSize)
+            .all()
+        )
+        
+        data = []
+        for activity, region in results:
+            data.append({
+                "title": activity.activity_name ,
+                "date": format_datetime(activity.start_time_local),
+                "time": activity.start_time_local.strftime("%H:%M") if activity.start_time_local else "",
+                "type": activity.activity_type_key,
+                "workoutTime": format_duration(activity.moving_duration_seconds),
+                "totalTime": format_duration(activity.duration_seconds),
+                "distance": f"{float(activity.distance_meters or 0) / 1000:.2f} km",
+                "elevation": "--",
+                "platform":  region ,
+                "platformId": str(activity.activity_id),
+                "syncTime": format_datetime(activity.updated_at)
+            })
+            
+        return {
+            "status": "success",
+            "data": data,
+            "total": total
+        }
+    elif platform == "coros":
+        query = (
+            db.query(CorosActivity)
+            .filter(CorosActivity.user_id == current_user.user_id)
+        )
+
+        total = query.count()
+
+        corosActivities = (
+            query.order_by(desc(CorosActivity.start_time))
+            .limit(pageSize)
+            .offset((pageCount - 1) * pageSize)
+            .all()
+        )
+        
+        data = []
+        for activity in corosActivities:
+            data.append({
+                "title": activity.name,
+                "date": format_datetime(activity.start_time),
+                "time": activity.start_time.strftime("%H:%M") if activity.start_time else "",
+                "type": str(activity.sport_type), 
+                "workoutTime": format_duration(activity.duration),
+                "totalTime": format_duration(activity.duration),
+                "distance": f"{float(activity.distance or 0) / 1000:.2f} km",
+                "elevation": "0 m",
+                "platform": "Coros",
+                "platformId": activity.label_id,
+                "syncTime": format_datetime(activity.updated_at)
+            })
+            
+        return {
+            "status": "success",
+            "data": data,
+            "total": total
+        }
+    else:
+        raise HTTPException(status_code=400, detail="不支持的平台类型")
