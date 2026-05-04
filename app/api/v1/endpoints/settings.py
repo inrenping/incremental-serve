@@ -11,6 +11,8 @@ from app.models.user import User
 from app.models.garmin_connect import GarminConnect
 from app.models.coros_connect import CorosConnect
 from app.core.security import get_current_user
+from app.api.v1.endpoints.garmin import save_all_activities as sync_garmin
+from app.api.v1.endpoints.coros import save_all_activities as sync_coros
 
 router = APIRouter()
 
@@ -217,11 +219,25 @@ def get_activities_with_platform_by_page(
         raise HTTPException(status_code=400, detail="不支持的平台类型")
     
 
-@router.get("/syncActivities")
-def sync_activities(
+@router.post("/syncAllActivities")
+def sync_all_activities(
     count: int = 10,
     platform: str = "garmin",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return "";
+    """
+    同步指定平台的运动记录。
+    根据 platform 参数分别调用 Garmin (Global/CN) 或 Coros 的同步逻辑。
+    """
+    if platform == "garmin":
+        # 调用 Garmin 国际区同步接口
+        return sync_garmin(region="GLOBAL", current_user=current_user, db=db)
+    elif platform == "garmin_cn":
+        # 调用 Garmin 中国区同步接口
+        return sync_garmin(region="CN", current_user=current_user, db=db)
+    elif platform == "coros":
+        # 调用 Coros 同步接口
+        return sync_coros(current_user=current_user, db=db)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的平台类型")
