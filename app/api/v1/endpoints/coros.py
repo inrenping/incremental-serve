@@ -148,9 +148,8 @@ def refresh_token(
         }
     }
 
-@router.get("/saveActivities")
-def save_coros_activities(
-    count: int = Query(10, gt=0, le=100),
+@router.post("/saveAllActivities")
+def save_all_activities(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -166,63 +165,103 @@ def save_coros_activities(
     if not coros_auth or not coros_auth.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权配置，请先绑定账号")
 
-    # 2. 调用高驰接口获取列表
     base_url = get_team_api_base(str(coros_auth.region))
-    # size 设置为用户请求的条数
-    query_url = f"{base_url}/activity/query?size={count}&pageNumber=1"
-    
     headers = {
         "Accept": "application/json, text/plain, */*",
         "accesstoken": coros_auth.access_token,
     }
-    print(query_url);
-    print(headers);
-    try:
-        response = requests.get(query_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        result = response.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"获取高驰数据失败: {str(e)}")
 
-    if result.get("result") != "0000":
-        raise HTTPException(status_code=400, detail=f"高驰 API 返回异常: {result.get('message')}")
+    page_size = 100
+    page_number = 1
+    total_count = 0
+    total_fetched = 0
+    new_saved_count = 0
 
-    activities_list = result.get("data", {}).get("dataList", [])
-    
-    saved_count = 0
-    for item in activities_list:
-        label_id = str(item.get("labelId"))
-        
-        # 检查是否已存在
-        existing = db.query(CorosActivity).filter(CorosActivity.label_id == label_id).first()
-        if existing:
-            continue
 
-        # 转换时间戳 (高驰返回的是秒级时间戳)
-        start_ts = item.get("startTime", 0)
-        end_ts = item.get("endTime", 0)
-        start_dt = datetime.fromtimestamp(start_ts, tz=timezone.utc) if start_ts else None
-        end_dt = datetime.fromtimestamp(end_ts, tz=timezone.utc) if end_ts else None
+    while True:
+        query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
+        print(f"请求 URL: {query_url}")
+        try:
+            response = requests.get(query_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            result = response.json()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"获取高驰数据失败: {str(e)}")
 
-        new_activity = CorosActivity(
-            user_id=current_user.user_id,
-            coros_connect_id=coros_auth.id,
-            label_id=label_id,
-            name=item.get("name"),
-            sport_type=item.get("sportType"),
-            mode=item.get("mode"),
-            distance=item.get("distance"),
-            duration=item.get("duration"),
-            calories=item.get("calorie"),
-            avg_hr=item.get("avgHr"),
-            max_hr=item.get("maxHr"),
-            start_time=start_dt,
-            end_time=end_dt
-        )
-        db.add(new_activity)
-        saved_count += 1
+        if result.get("result") != "0000":
+            raise HTTPException(status_code=400, detail=f"高驰 API 返回异常: {result.get('message')}")
+
+        data = result.get("data", {})
+        if page_number == 1:
+            total_count = data.get("count", 0)
+            # 更新数据库中的活动总数记录
+            print(f"高驰活动总数记录更新: {total_count}")
+            update_coros_count(db, coros_auth.id, total_count)
+
+        activities_list = data.get("dataList", [])
+        if not activities_list:
+            break
+
+        for item in activities_list:
+            label_id = str(item.get("labelId"))
+
+            # 检查是否已存在（避免重复同步）
+            existing = db.query(CorosActivity).filter(CorosActivity.label_id == label_id).first()
+            if existing:
+                continue
+
+            # 转换时间戳 (高驰返回的是秒级时间戳)
+            start_ts = item.get("startTime", 0)
+            end_ts = item.get("endTime", 0)
+            start_dt = datetime.fromtimestamp(start_ts, tz=timezone.utc) if start_ts else None
+            end_dt = datetime.fromtimestamp(end_ts, tz=timezone.utc) if end_ts else None
+
+            new_activity = CorosActivity(
+                user_id=current_user.user_id,
+                coros_connect_id=coros_auth.id,
+                label_id=label_id,
+                name=item.get("name"),
+                sport_type=item.get("sportType"),
+                mode=item.get("mode"),
+                distance=item.get("distance"),
+                ascent=item.get("ascent"),
+                descent=item.get("descent"),
+                calories=item.get("calorie"),
+                avg_hr=item.get("avgHr"),
+                max_hr=item.get("maxHr"),
+                workout_time=item.get("workoutTime"),
+                total_time=item.get("totalTime"),
+                start_time=start_dt,
+                end_time=end_dt
+            )
+            db.add(new_activity)
+            new_saved_count += 1
+
+        total_fetched += len(activities_list)
+        # 如果已获取数量达到总数，或者当前页返回数量不足 page_size，说明已全部下载完
+        if total_fetched >= total_count or len(activities_list) < page_size:
+            break
+
+        page_number += 1
 
     coros_auth.last_synced_at = datetime.now(timezone.utc)
     db.commit()
 
-    return {"status": "success", "fetched": len(activities_list), "new_saved": saved_count}
+    return {
+        "status": "success",
+        "total_in_platform": total_count,
+        "fetched_count": total_fetched,
+        "new_saved_count": new_saved_count
+    }
+
+
+def update_coros_count(db: Session, coros_connect_id: int, total_count: int):
+    """
+    更新 CorosConnect 中对应的 total_count 的值。
+    """
+    coros_auth = db.query(CorosConnect).filter(CorosConnect.id == coros_connect_id).first()
+    if coros_auth:
+        coros_auth.total_count = total_count
+        db.commit()
+        return True
+    return False

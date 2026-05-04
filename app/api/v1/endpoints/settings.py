@@ -1,6 +1,5 @@
-
-from datetime import datetime, timezone
-from typing import Optional, Any
+from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -13,7 +12,6 @@ from app.models.garmin_connect import GarminConnect
 from app.models.coros_connect import CorosConnect
 from app.core.security import get_current_user
 
-
 router = APIRouter()
 
 def format_datetime(dt: Optional[datetime]) -> str:
@@ -23,7 +21,7 @@ def format_datetime(dt: Optional[datetime]) -> str:
 
 def format_duration(seconds: Optional[float]) -> str:
     if seconds is None:
-        return "00:00"
+        return None
     total_seconds = int(seconds)
     hours = total_seconds // 3600
     minutes = (total_seconds % 3600) // 60
@@ -79,7 +77,7 @@ def get_apps_config(
         "label": "Garmin Connect (CN)",
         "description": "连接您的 Garmin Connect (中国) 账号",
         "isConnected": garmin_cn.is_active if garmin_cn else False,
-        "total_count": garmin_global.total_count if garmin_global else 0,
+        "total_count": garmin_cn.total_count if garmin_cn else 0,
     }
     if garmin_cn:
         garmin_cn_item.update({
@@ -88,7 +86,6 @@ def get_apps_config(
             "status": "验证通过" if garmin_cn.is_active else "已失效",
             "region": "中国区",
             "lastUpdate": format_datetime(garmin_cn.updated_at),
-            "total_count": garmin_cn.total_count if garmin_cn else 0,
         })
     results.append(garmin_cn_item)
 
@@ -107,17 +104,19 @@ def get_apps_config(
             "status": "验证通过" if coros_config.is_active else "已失效",
             "region":coros_config.region,
             "lastUpdate": format_datetime(coros_config.updated_at),
-            "total_count": coros_config.total_count if coros_config else 0,
+            "total_count": coros_config.total_count,
         })
     results.append(coros_item)
 
     return results
 
-@router.get("/getActivitiesByPage")
-def get_activities_by_page(
+@router.get("/getActivitiesWithPlatformByPage")
+def get_activities_with_platform_by_page(
     platform: str,
     pageSize: int = 10,
     pageCount: int = 1,
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -125,35 +124,46 @@ def get_activities_by_page(
 
     if platform in ["garmin", "garmin_cn"]:
         region_filter = "GLOBAL" if platform == "garmin" else "CN"
-        # 联合查询以获取账号所属区域，区分国际版和中国版
+
+        # 获取该用户的 Garmin 授权配置，避免联合查询
+        config = db.query(GarminConnect).filter(
+            GarminConnect.user_id == current_user.user_id,
+            GarminConnect.region == region_filter
+        ).first()
+
+        if not config:
+            return {"status": "success", "data": [], "total": 0}
+
         query = (
-            db.query(GarminActivity, GarminConnect.region)
-            .join(GarminConnect, GarminActivity.garmin_connect_id == GarminConnect.id)
-            .filter(GarminActivity.user_id == current_user.user_id)
-            .filter(GarminConnect.region == region_filter)
+            db.query(GarminActivity)
+            .filter(GarminActivity.garmin_connect_id == config.id)
         )
+
+        if startDate:
+            query = query.filter(GarminActivity.start_time_local >= startDate)
+        if endDate:
+            query = query.filter(GarminActivity.start_time_local <= endDate)
 
         total = query.count()
 
         results = (
-            query.order_by(desc(GarminActivity.start_time_gmt))
+            query.order_by(desc(GarminActivity.start_time_local))
             .limit(pageSize)
             .offset((pageCount - 1) * pageSize)
             .all()
         )
         
         data = []
-        for activity, region in results:
+        for activity in results:
             data.append({
-                "title": activity.activity_name ,
-                "date": format_datetime(activity.start_time_local),
-                "time": activity.start_time_local.strftime("%H:%M") if activity.start_time_local else "",
+                "title": activity.activity_name,
+                "startTime": activity.start_time_local,
                 "type": activity.activity_type_key,
                 "workoutTime": format_duration(activity.moving_duration_seconds),
                 "totalTime": format_duration(activity.duration_seconds),
                 "distance": f"{float(activity.distance_meters or 0) / 1000:.2f} km",
-                "elevation": "--",
-                "platform":  region ,
+                "elevation": None,
+                "platform": region_filter,
                 "platformId": str(activity.activity_id),
                 "syncTime": format_datetime(activity.updated_at)
             })
@@ -169,6 +179,11 @@ def get_activities_by_page(
             .filter(CorosActivity.user_id == current_user.user_id)
         )
 
+        if startDate:
+            query = query.filter(CorosActivity.start_time >= startDate)
+        if endDate:
+            query = query.filter(CorosActivity.start_time <= endDate)
+
         total = query.count()
 
         corosActivities = (
@@ -182,13 +197,12 @@ def get_activities_by_page(
         for activity in corosActivities:
             data.append({
                 "title": activity.name,
-                "date": activity.start_time,
-                "time": activity.start_time.strftime("%H:%M") if activity.start_time else "",
+                "startTime": activity.start_time,
                 "type": str(activity.sport_type), 
-                "workoutTime": format_duration(activity.duration),
-                "totalTime": format_duration(activity.duration),
+                "workoutTime": format_duration(activity.workout_time),
+                "totalTime": format_duration(activity.total_time),
                 "distance": f"{float(activity.distance or 0) / 1000:.2f} km",
-                "elevation": "0 m",
+                "elevation": activity.ascent,
                 "platform": "Coros",
                 "platformId": activity.label_id,
                 "syncTime": activity.updated_at
