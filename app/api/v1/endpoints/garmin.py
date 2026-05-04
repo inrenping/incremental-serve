@@ -232,6 +232,8 @@ def save_all_activities(
                 start_lon=item.get("startLongitude"),
                 location_name=item.get("locationName"),
                 device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
+                evelation_gain=item.get("elevationGain"),
+                elevation_loss=item.get("elevationLoss")
             )
             db.add(new_activity)
             total_saved_count += 1

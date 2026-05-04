@@ -148,7 +148,7 @@ def get_activities_with_platform_by_page(
 
         total = query.count()
 
-        results = (
+        garminActivities = (
             query.order_by(desc(GarminActivity.start_time_local))
             .limit(pageSize)
             .offset((pageCount - 1) * pageSize)
@@ -156,7 +156,7 @@ def get_activities_with_platform_by_page(
         )
         
         data = []
-        for activity in results:
+        for activity in garminActivities:
             data.append({
                 "title": activity.activity_name,
                 "startTime": activity.start_time_local,
@@ -164,7 +164,7 @@ def get_activities_with_platform_by_page(
                 "workoutTime": format_duration(activity.moving_duration_seconds),
                 "totalTime": format_duration(activity.duration_seconds),
                 "distance": f"{float(activity.distance_meters or 0) / 1000:.2f} km",
-                "elevation": None,
+                "elevation": activity.elevation_gain,
                 "platform": region_filter,
                 "platformId": str(activity.activity_id),
                 "syncTime": format_datetime(activity.updated_at)
