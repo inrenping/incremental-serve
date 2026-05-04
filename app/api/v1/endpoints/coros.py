@@ -202,12 +202,21 @@ def save_all_activities(
         if not activities_list:
             break
 
+        # 减少数据库查询次数
+        label_ids = [str(item.get("labelId")) for item in activities_list if item.get("labelId")]
+        existing_ids = set()
+        if label_ids:
+            existing_ids = {
+                lid for (lid,) in db.query(CorosActivity.label_id)
+                .filter(CorosActivity.label_id.in_(label_ids))
+                .all()
+            }
+
         for item in activities_list:
             label_id = str(item.get("labelId"))
 
             # 检查是否已存在（避免重复同步）
-            existing = db.query(CorosActivity).filter(CorosActivity.label_id == label_id).first()
-            if existing:
+            if label_id in existing_ids:
                 continue
 
             # 转换时间戳 (高驰返回的是秒级时间戳)
