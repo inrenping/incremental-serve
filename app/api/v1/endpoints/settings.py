@@ -201,3 +201,13 @@ def get_activities_by_page(
         }
     else:
         raise HTTPException(status_code=400, detail="不支持的平台类型")
+    
+
+@router.get("/syncActivities")
+def sync_activities(
+    count: int = 10,
+    platform: str = "garmin",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return "";

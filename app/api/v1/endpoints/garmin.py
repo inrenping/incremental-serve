@@ -129,14 +129,13 @@ def save_garmin_config(
     garmin_auth.oauth_token_secret = oauth1.oauth_token_secret
     garmin_auth.access_token = oauth2.access_token
     garmin_auth.refresh_token = oauth2.refresh_token
-    # 转换时间戳为 datetime (带时区)
-    garmin_auth.access_token_expires_at = datetime.fromtimestamp(oauth2.expires_at, tz=timezone.utc)
-    garmin_auth.refresh_token_expires_at = datetime.fromtimestamp(oauth2.refresh_token_expires_at, tz=timezone.utc)
+    garmin_auth.access_token_expires_at = oauth2.expires_at,
+    garmin_auth.refresh_token_expires_at = oauth2.refresh_token_expires_at,
     garmin_auth.is_active = True
     garmin_auth.garmin_account = payload.username
-    # TODO：密码加密存储
-    garmin_auth.garmin_password = payload.password 
-    
+
+    # TODO：密码加密存储(前端就要加密，后端使用的时候单独解密)
+    garmin_auth.garmin_password = payload.password     
 
     db.commit()
 
