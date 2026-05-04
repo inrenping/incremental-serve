@@ -232,7 +232,7 @@ def save_all_activities(
                 start_lon=item.get("startLongitude"),
                 location_name=item.get("locationName"),
                 device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
-                evelation_gain=item.get("elevationGain"),
+                elevation_gain=item.get("elevationGain"),
                 elevation_loss=item.get("elevationLoss")
             )
             db.add(new_activity)
@@ -247,7 +247,7 @@ def save_all_activities(
         
         start += limit
 
-    # 更新关联账号的总记录数
+    # 更新关联账号的总记录数，只在全量更新的时候总数才准确
     if total_fetched_count:
         update_garmin_count(db, config.id, total_fetched_count)
     
@@ -270,3 +270,100 @@ def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int):
         db.commit()
         return True
     return False
+
+
+@router.get("/saveNewActivities")
+def save_new_activities(
+    region: str = "CN",
+    new_count:int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从佳明接口获取全部运动数据并保存到本地数据库。
+    使用分页参数 (start, limit) 循环拉取，直到数据取完。
+    """
+    config = db.query(GarminConnect).filter(
+        GarminConnect.user_id == current_user.user_id,
+        GarminConnect.region == region
+    ).first()
+
+    if not config or not config.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
+
+    base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
+    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
+    
+    headers = {
+        "Authorization": f"Bearer {config.access_token}",
+        "Accept": "application/json",
+        "di-backend": base_url,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    params = {"start": 0, "limit": new_count}
+    try:
+        print(f"请求 URL: {api_url} {params}")
+        response = requests.get(api_url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        activities_data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"同步数据失败: {str(e)}")
+
+    if not activities_data or not isinstance(activities_data, list):
+        return {"status": "success", "fetched_count": 0, "saved_count": 0}
+
+    # 减少数据库查询次数，进行增量查重
+    activity_ids = [item.get("activityId") for item in activities_data if item.get("activityId")]
+    existing_ids = set()
+    if activity_ids:
+        # 只查询 activity_id 这一列，提高效率
+        existing_ids = {
+            act_id for (act_id,) in db.query(GarminActivity.activity_id)
+            .filter(GarminActivity.activity_id.in_(activity_ids))
+            .all()
+        }
+
+    total_saved_count = 0
+    for item in activities_data:
+        activity_id = item.get("activityId")
+        if activity_id in existing_ids:
+            continue
+
+        new_activity = GarminActivity(
+            user_id=current_user.user_id,
+            garmin_connect_id=config.id,
+            activity_id=activity_id,
+            activity_name=item.get("activityName"),
+            activity_type_key=item.get("activityType", {}).get("typeKey"),
+            start_time_local=item.get("startTimeLocal"),
+            start_time_gmt=item.get("startTimeGMT"),
+            distance_meters=item.get("distance"),
+            duration_seconds=item.get("duration"),
+            moving_duration_seconds=item.get("movingDuration"),
+            calories=item.get("calories"),
+            average_hr=item.get("averageHR"),
+            max_hr=item.get("maxHR"),
+            average_cadence=item.get("averageRunningCadenceInStepsPerMinute") or item.get("averageBikingCadenceInRevPerMinute"),
+            max_cadence=item.get("maxRunningCadenceInStepsPerMinute") or item.get("maxBikingCadenceInRevPerMinute"),
+            average_speed=item.get("averageSpeed"),
+            max_speed=item.get("maxSpeed"),
+            start_lat=item.get("startLatitude"),
+            start_lon=item.get("startLongitude"),
+            location_name=item.get("locationName"),
+            device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
+            elevation_gain=item.get("elevationGain"),
+            elevation_loss=item.get("elevationLoss")
+        )
+        db.add(new_activity)
+        total_saved_count += 1
+        print(f"同步到了新的活动：{new_activity.activity_id}")
+
+    config.last_synced_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {
+        "status": "success", 
+        "fetched_count": len(activities_data), 
+        "saved_count": total_saved_count
+    }
