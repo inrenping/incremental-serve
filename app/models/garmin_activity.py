@@ -48,6 +48,8 @@ class GarminActivity(Base):
     distance_meters = Column(Numeric(12, 2), comment="总距离（单位：米）")
     duration_seconds = Column(Numeric(10, 2), comment="总耗时（秒，含暂停）")
     moving_duration_seconds = Column(Numeric(10, 2), comment="净运动耗时（秒）")
+    elevation_gain=Column(Numeric(10, 2), comment="爬升（米）")
+    elevation_loss=Column(Numeric(10, 2), comment="下降（米）")
     calories = Column(Numeric(10, 2), comment="消耗热量（大卡）")
     average_hr = Column(SmallInteger, comment="平均心率")
     max_hr = Column(SmallInteger, comment="最大心率")
