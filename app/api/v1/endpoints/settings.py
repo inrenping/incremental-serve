@@ -17,7 +17,7 @@ from app.api.v1.endpoints.garmin import (
 )
 from app.api.v1.endpoints.coros import (
     save_all_activities as sync_coros,
-    save_new_activities as sync_new_coros
+    save_new_coros_activities as sync_new_coros
 )
 
 router = APIRouter()
@@ -164,6 +164,7 @@ def get_activities_with_platform_by_page(
         data = []
         for activity in garminActivities:
             data.append({
+                "id": activity.id,
                 "title": activity.activity_name,
                 "startTime": activity.start_time_local,
                 "type": activity.activity_type_key,
@@ -204,6 +205,7 @@ def get_activities_with_platform_by_page(
         data = []
         for activity in corosActivities:
             data.append({
+                "id":activity.id,
                 "title": activity.name,
                 "startTime": activity.start_time,
                 "type": str(activity.sport_type), 
@@ -300,3 +302,14 @@ def sync_new_activities(
         "status": "success",
         "results": results
     }
+
+    
+@router.post("/downloadActivity/{id}")
+def download_activity(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    
+
+    return None;

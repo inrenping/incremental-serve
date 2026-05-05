@@ -48,3 +48,9 @@ def get_user_socials(
     """根据当前登录用户获取其社交登录信息。"""
     return get_user_social_info(db, current_user)
 
+@router.delete("")
+def delete_user(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+  return {"status": "success"}
