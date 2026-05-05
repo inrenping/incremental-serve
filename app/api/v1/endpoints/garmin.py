@@ -348,30 +348,38 @@ def download_garmin_activity(
 
     try:
         # 4. 执行文件下载流
-        file_response = requests.get(download_url, headers=headers, stream=True, timeout=30)
-
-        # 检查是否有重定向发生
-        if file_response.history:
-            redirect_log = " -> ".join([f"{r.status_code}({r.url})" for r in file_response.history])
-            final_url = file_response.url
-            # 警告：如果最终域名不是 .com，说明被污染或重定向了
-            if "garmin.com" not in final_url:
-                print(f"🚨 严重警告：请求被重定向到了非国际版域名！历史: {redirect_log} -> 最终: {final_url}")
-            else:
-                print(f"⚠️ 请求发生了重定向，但最终域名正常: {redirect_log} -> {final_url}")
-        else:
-            print(f"✅ 请求无重定向，直接访问成功: {file_response.url}")
-        # --- 重定向监控逻辑 End ---
+        file_response = requests.get(download_url, headers=headers, stream=True, timeout=30)      
 
         # 检查状态码
         if file_response.status_code != 200:
-            print(f"❌ 下载失败，HTTP状态码: {file_response.status_code}, 响应URL: {file_response.url}")
+            print(f"下载失败，HTTP状态码: {file_response.status_code}, 响应URL: {file_response.url}")
             raise HTTPException(status_code=file_response.status_code, detail="文件下载失败，服务器返回错误")
 
+        filename = f"activity_{garmin_activity.activity_id}.fit"
+        response_headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+        upstream_content_type = file_response.headers.get("Content-Type", "application/octet-stream")
+
+        return StreamingResponse(
+            file_response.iter_content(chunk_size=8192),
+            media_type=upstream_content_type,
+            headers=response_headers,
+        )
+    except HTTPException:
+        raise
     except requests.exceptions.ConnectionError as conn_err:
         # 这通常是网络层面的问题，比如 SSL 握手失败、连接被重置（常见于被墙的连接）
-        print(f"🔗 网络连接错误 (可能是被墙或DNS污染): {str(conn_err)}")
+        print(f"网络连接错误 (可能是被墙或DNS污染): {str(conn_err)}")
         raise HTTPException(status_code=502, detail="网络连接错误，请检查网络环境或尝试使用代理")
     except Exception as e:
-        print(f"❌ 未知错误: {str(e)}")
+        print(f"未知错误: {str(e)}")
         raise HTTPException(status_code=400, detail=f"佳明文件下载失败: {str(e)}")
+
+@router.get("/uploadActivity")
+def upload_garmin_activity(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return None;
