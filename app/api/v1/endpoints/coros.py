@@ -2,6 +2,7 @@ import hashlib
 import requests
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -66,7 +67,8 @@ def _perform_coros_login_and_update(
         if is_refresh and coros_auth:
             coros_auth.is_active = False
             db.commit()
-        raise HTTPException(status_code=401, detail=f"高驰登录失败: {login_response.get('message')}")
+        # 不要返回 401 会被前端截断导致注销…    
+        raise HTTPException(status_code=400, detail=f"高驰登录失败: {login_response.get('message')}")
 
     data = login_response.get("data", {})
     if not coros_auth:
@@ -277,7 +279,7 @@ def update_coros_count(db: Session, coros_connect_id: int, total_count: int):
 
 
 @router.post("/saveNewActivities")
-def save_new_activities(
+def save_new_coros_activities(
     new_count:int = 10,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -380,3 +382,60 @@ def save_new_activities(
         "fetched_count": len(activities_list),
         "new_saved_count": new_saved_count
     }
+
+
+@router.get("/downloadActivity/{id}")
+def download_coros_activity(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    coros_auth = db.query(CorosConnect).filter(        
+        CorosConnect.user_id == current_user.user_id,
+        CorosConnect.is_active == True
+    ).first()
+
+    if not coros_auth or not coros_auth.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的高驰授权配置，请先绑定账号")
+
+    base_url = get_team_api_base(str(coros_auth.region))
+
+    coros_activity = db.query(CorosActivity).filter(        
+        CorosActivity.user_id == current_user.user_id,
+        CorosActivity.id == id
+    ).first()
+
+    if not coros_activity:
+        raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
+    
+    download_meta_url = f"{base_url}/activity/detail/download?labelId={coros_activity.label_id}&sportType={coros_activity.sport_type}&fileType=4"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "accesstoken": coros_auth.access_token,
+    }
+
+    try:
+        meta_response = requests.post(download_meta_url, headers=headers, timeout=10)
+        meta_response.raise_for_status()
+        meta_result = meta_response.json()
+
+        if meta_result.get("result") != "0000":
+            raise HTTPException(status_code=400, detail=f"获取下载链接失败: {meta_result.get('message')}")
+
+        download_url = meta_result.get("data", {}).get("fileUrl")
+        if not download_url:
+            raise HTTPException(status_code=404, detail="未找到文件下载地址")
+
+        # 2. 真正下载文件流
+        file_response = requests.get(download_url, headers=headers, stream=True, timeout=30)
+        file_response.raise_for_status()
+
+        filename = f"coros_activity_{coros_activity.label_id}.fit"
+        return StreamingResponse(
+            file_response.iter_content(chunk_size=8192),
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"文件下载失败: {str(e)}")

@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timezone
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -77,6 +78,7 @@ def refresh_token(
     调用 GarminConnect 模拟登录 获取相关数据存入数据库
 
     """
+    # TODO
     return '';
 
 @router.post("/saveConfig")
@@ -147,6 +149,81 @@ def save_garmin_config(
         }
     }
 
+def _sync_garmin_activities(
+    db: Session,
+    config: GarminConnect,
+    current_user: User,
+    start: int = 0,
+    limit: int = 100
+):
+    """辅助方法：抓取并保存佳明活动。返回 (获取到的记录数, 新保存的记录数)"""
+    base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
+    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
+    
+    headers = {
+        "Authorization": f"Bearer {config.access_token}",
+        "Accept": "application/json",
+        "di-backend": base_url,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    params = {"start": start, "limit": limit}
+    try:
+        response = requests.get(api_url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        activities_data = response.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"同步佳明数据失败: {str(e)}")
+
+    if not activities_data or not isinstance(activities_data, list):
+        return 0, 0
+
+    # 查重逻辑：批量查询数据库中已存在的 ID
+    activity_ids = [item.get("activityId") for item in activities_data if item.get("activityId")]
+    existing_ids = set()
+    if activity_ids:
+        existing_ids = {
+            act_id for (act_id,) in db.query(GarminActivity.activity_id)
+            .filter(GarminActivity.activity_id.in_(activity_ids))
+            .all()
+        }
+
+    saved_count = 0
+    for item in activities_data:
+        activity_id = item.get("activityId")
+        if activity_id in existing_ids:
+            continue
+
+        new_activity = GarminActivity(
+            user_id=current_user.user_id,
+            garmin_connect_id=config.id,
+            activity_id=activity_id,
+            activity_name=item.get("activityName"),
+            activity_type_key=item.get("activityType", {}).get("typeKey"),
+            start_time_local=item.get("startTimeLocal"),
+            start_time_gmt=item.get("startTimeGMT"),
+            distance_meters=item.get("distance"),
+            duration_seconds=item.get("duration"),
+            moving_duration_seconds=item.get("movingDuration"),
+            calories=item.get("calories"),
+            average_hr=item.get("averageHR"),
+            max_hr=item.get("maxHR"),
+            average_cadence=item.get("averageRunningCadenceInStepsPerMinute") or item.get("averageBikingCadenceInRevPerMinute"),
+            max_cadence=item.get("maxRunningCadenceInStepsPerMinute") or item.get("maxBikingCadenceInRevPerMinute"),
+            average_speed=item.get("averageSpeed"),
+            max_speed=item.get("maxSpeed"),
+            start_lat=item.get("startLatitude"),
+            start_lon=item.get("startLongitude"),
+            location_name=item.get("locationName"),
+            device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
+            elevation_gain=item.get("elevationGain"),
+            elevation_loss=item.get("elevationLoss")
+        )
+        db.add(new_activity)
+        saved_count += 1
+
+    return len(activities_data), saved_count
+
 @router.get("/saveAllActivities")
 def save_all_activities(
     region: str = "CN",
@@ -165,92 +242,23 @@ def save_all_activities(
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
-    base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
-    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
-    
-    headers = {
-        "Authorization": f"Bearer {config.access_token}",
-        "Accept": "application/json",
-        "di-backend": base_url,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
     start = 0
     limit = 100
     total_saved_count = 0
     total_fetched_count = 0
 
     while True:
-        params = {"start": start, "limit": limit}
-        try:
-            print(f"请求 URL: {api_url} {params}")
-            response = requests.get(api_url, params=params, headers=headers, timeout=10)
-            response.raise_for_status()
-            activities_data = response.json()
-            print(activities_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"同步数据失败: {str(e)}")
+        fetched, saved = _sync_garmin_activities(db, config, current_user, start, limit)
+        total_fetched_count += fetched
+        total_saved_count += saved
 
-        if not activities_data or not isinstance(activities_data, list):
+        if fetched < limit:
             break
-
-        # 减少数据库查询次数
-        activity_ids = [item.get("activityId") for item in activities_data if item.get("activityId")]
-        existing_ids = set()
-        if activity_ids:
-            # 只查询 activity_id 这一列，提高效率
-            existing_ids = {
-                act_id for (act_id,) in db.query(GarminActivity.activity_id)
-                .filter(GarminActivity.activity_id.in_(activity_ids))
-                .all()
-            }
-
-        for item in activities_data:
-            activity_id = item.get("activityId")
-            if activity_id in existing_ids:
-                continue
-
-            new_activity = GarminActivity(
-                user_id=current_user.user_id,
-                garmin_connect_id=config.id,
-                activity_id=activity_id,
-                activity_name=item.get("activityName"),
-                activity_type_key=item.get("activityType", {}).get("typeKey"),
-                start_time_local=item.get("startTimeLocal"),
-                start_time_gmt=item.get("startTimeGMT"),
-                distance_meters=item.get("distance"),
-                duration_seconds=item.get("duration"),
-                moving_duration_seconds=item.get("movingDuration"),
-                calories=item.get("calories"),
-                average_hr=item.get("averageHR"),
-                max_hr=item.get("maxHR"),
-                average_cadence=item.get("averageRunningCadenceInStepsPerMinute") or item.get("averageBikingCadenceInRevPerMinute"),
-                max_cadence=item.get("maxRunningCadenceInStepsPerMinute") or item.get("maxBikingCadenceInRevPerMinute"),
-                average_speed=item.get("averageSpeed"),
-                max_speed=item.get("maxSpeed"),
-                start_lat=item.get("startLatitude"),
-                start_lon=item.get("startLongitude"),
-                location_name=item.get("locationName"),
-                device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
-                elevation_gain=item.get("elevationGain"),
-                elevation_loss=item.get("elevationLoss")
-            )
-            db.add(new_activity)
-            total_saved_count += 1
-
-        total_fetched_count += len(activities_data)
-        
-      
-        # 如果返回数量不足 limit，说明已经全部获取完成
-        if len(activities_data) < limit:
-            break
-        
         start += limit
 
-    # 更新关联账号的总记录数，只在全量更新的时候总数才准确
     if total_fetched_count:
         update_garmin_count(db, config.id, total_fetched_count)
-    
+
     config.last_synced_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -291,79 +299,79 @@ def save_new_activities(
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
-    base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
-    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
-    
-    headers = {
-        "Authorization": f"Bearer {config.access_token}",
-        "Accept": "application/json",
-        "di-backend": base_url,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
-    params = {"start": 0, "limit": new_count}
-    try:
-        print(f"请求 URL: {api_url} {params}")
-        response = requests.get(api_url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        activities_data = response.json()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"同步数据失败: {str(e)}")
-
-    if not activities_data or not isinstance(activities_data, list):
-        return {"status": "success", "fetched_count": 0, "saved_count": 0}
-
-    # 减少数据库查询次数，进行增量查重
-    activity_ids = [item.get("activityId") for item in activities_data if item.get("activityId")]
-    existing_ids = set()
-    if activity_ids:
-        # 只查询 activity_id 这一列，提高效率
-        existing_ids = {
-            act_id for (act_id,) in db.query(GarminActivity.activity_id)
-            .filter(GarminActivity.activity_id.in_(activity_ids))
-            .all()
-        }
-
-    total_saved_count = 0
-    for item in activities_data:
-        activity_id = item.get("activityId")
-        if activity_id in existing_ids:
-            continue
-
-        new_activity = GarminActivity(
-            user_id=current_user.user_id,
-            garmin_connect_id=config.id,
-            activity_id=activity_id,
-            activity_name=item.get("activityName"),
-            activity_type_key=item.get("activityType", {}).get("typeKey"),
-            start_time_local=item.get("startTimeLocal"),
-            start_time_gmt=item.get("startTimeGMT"),
-            distance_meters=item.get("distance"),
-            duration_seconds=item.get("duration"),
-            moving_duration_seconds=item.get("movingDuration"),
-            calories=item.get("calories"),
-            average_hr=item.get("averageHR"),
-            max_hr=item.get("maxHR"),
-            average_cadence=item.get("averageRunningCadenceInStepsPerMinute") or item.get("averageBikingCadenceInRevPerMinute"),
-            max_cadence=item.get("maxRunningCadenceInStepsPerMinute") or item.get("maxBikingCadenceInRevPerMinute"),
-            average_speed=item.get("averageSpeed"),
-            max_speed=item.get("maxSpeed"),
-            start_lat=item.get("startLatitude"),
-            start_lon=item.get("startLongitude"),
-            location_name=item.get("locationName"),
-            device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
-            elevation_gain=item.get("elevationGain"),
-            elevation_loss=item.get("elevationLoss")
-        )
-        db.add(new_activity)
-        total_saved_count += 1
-        print(f"同步到了新的活动：{new_activity.activity_id}")
+    fetched, saved = _sync_garmin_activities(db, config, current_user, 0, new_count)
 
     config.last_synced_at = datetime.now(timezone.utc)
     db.commit()
 
     return {
         "status": "success", 
-        "fetched_count": len(activities_data), 
-        "saved_count": total_saved_count
+        "fetched_count": fetched, 
+        "saved_count": saved
     }
+
+@router.get("/downloadActivity/{id}")
+def download_garmin_activity(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    下载佳明运动记录的原文件 (FIT)。
+    """
+    # 1. 查找运动记录
+    garmin_activity = db.query(GarminActivity).filter(
+        GarminActivity.user_id == current_user.user_id,
+        GarminActivity.id == id
+    ).first()
+
+    if not garmin_activity:
+        raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
+
+    # 2. 获取关联的佳明授权配置
+    garmin_auth = garmin_activity.garmin_connect
+
+    if not garmin_auth or not garmin_auth.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权配置，请检查账号绑定状态")
+    
+    # 3. 构造佳明原始文件 (FIT) 下载地址
+    base_domain = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
+    download_url = f"https://{base_domain}/download-service/files/activity/{garmin_activity.activity_id}"
+
+    print(f"[用户: {current_user.user_id}] 尝试下载活动: {id}, 构造URL: {download_url}")
+    
+    headers = {
+        "di-backend": base_domain,
+        "Authorization": f"Bearer {garmin_auth.access_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+        # 4. 执行文件下载流
+        file_response = requests.get(download_url, headers=headers, stream=True, timeout=30)
+
+        # 检查是否有重定向发生
+        if file_response.history:
+            redirect_log = " -> ".join([f"{r.status_code}({r.url})" for r in file_response.history])
+            final_url = file_response.url
+            # 警告：如果最终域名不是 .com，说明被污染或重定向了
+            if "garmin.com" not in final_url:
+                print(f"🚨 严重警告：请求被重定向到了非国际版域名！历史: {redirect_log} -> 最终: {final_url}")
+            else:
+                print(f"⚠️ 请求发生了重定向，但最终域名正常: {redirect_log} -> {final_url}")
+        else:
+            print(f"✅ 请求无重定向，直接访问成功: {file_response.url}")
+        # --- 重定向监控逻辑 End ---
+
+        # 检查状态码
+        if file_response.status_code != 200:
+            print(f"❌ 下载失败，HTTP状态码: {file_response.status_code}, 响应URL: {file_response.url}")
+            raise HTTPException(status_code=file_response.status_code, detail="文件下载失败，服务器返回错误")
+
+    except requests.exceptions.ConnectionError as conn_err:
+        # 这通常是网络层面的问题，比如 SSL 握手失败、连接被重置（常见于被墙的连接）
+        print(f"🔗 网络连接错误 (可能是被墙或DNS污染): {str(conn_err)}")
+        raise HTTPException(status_code=502, detail="网络连接错误，请检查网络环境或尝试使用代理")
+    except Exception as e:
+        print(f"❌ 未知错误: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"佳明文件下载失败: {str(e)}")
