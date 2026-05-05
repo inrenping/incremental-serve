@@ -320,3 +320,58 @@ def download_activity(
     if platform.lower() == "coros":
         return download_coros(id=id, current_user=current_user, db=db)
     return download_garmin(id=id, current_user=current_user, db=db)
+
+@router.get("/generateSyncTask")
+def download_activity(
+    total_count: int = 10,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # TODO
+
+    # 获取三个平台的配置信息
+
+    garmin_configs = db.query(GarminConnect).filter(
+        GarminConnect.user_id == current_user.user_id,
+        GarminConnect.is_active == True
+    ).all()
+
+    coros_auth = db.query(CorosConnect).filter(
+        CorosConnect.user_id == current_user.user_id,
+        CorosConnect.is_active == True
+    ).first()
+
+    # 获取三个平台的数据
+
+    # 再获取 batchId,生成 batchId
+
+    # 往临时表插入 高驰的数据 
+
+    # 往临时表插入 佳明国际版的数据（比对数据后插入）
+
+    # 往临时表插入 佳明中国版的数据（比对数据后插入）
+
+    # 遍历出有空值的记录，插入同步任务表。
+    
+    # 要根据获取的配置表来生成，如果有两个空，则生成两个任务
+    
+    # 执行上传任务
+
+    return None;
+
+@router.get("/uploadActivity")
+def upload_activity(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # TODO 执行当前用户未完成的上传任务
+    return None;
+
+
+@router.delete("/deleteTemp")
+def upload_activity(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # TODO 定时任务删除前一天的临时表
+    return None;
