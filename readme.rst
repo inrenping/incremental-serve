@@ -1,7 +1,7 @@
-Blunt Serv
+Incremental Serv
 ==========
 
-这是一个基于 FastAPI 的后端接口。
+这是[Incremental](https://github.com/inrenping/incremental.icu)的后端接口，代码基本通过 Google Gemini Assist 和 Cursor 生成。
 
 快速开始
 --------
@@ -12,7 +12,7 @@ Blunt Serv
 .. code-block:: bash
 
     apt update
-    apt install python3-pip python3-venv -y
+    D
 
     python3 -m venv venv
     source venv/bin/activate
@@ -44,36 +44,6 @@ Blunt Serv
 .. code-block:: bash
 
     sudo journalctl -u incremental-serve.service -f
-
-TODO
-----
-
-以下是项目的待办事项列表：
-
-* ✓ 已登录账号自动登录
-* ✓ 通过邮件验证码登录
-* ✓ 通过 Google 登录
-* ✓ 通过 GitHub 登录
-* ✓ 通过邮件验证码注册
-* ✓ 通过 Google 注册*
-* ✓ 通过 GitHub 注册
-* 修改用户名，修改邮箱（先做显示暂不做修改）
-* 查看关联绑定，支持重新绑定
-* 注销账号(后续再做)
-* ✓ 用户信息展示
-* 用户操作日志展示（后续再做）
-* 用户其他信息完善和修改（还没加字段）
-
-* 获取佳明运动数据，同步到数据库
-* 上传运动数据到佳明（单条上传）
-
-* 获取佳明心率数据，同步到数据库（后续再做）
-* 获取佳明睡眠数据，同步到数据库（后续再做）
-* 运动数据，网页上 Table 格式展示（后续再做）
-* 心率数据，网页上 Table 格式展示（后续再做）
-* 睡眠数据，网页上 Table 格式展示（后续再做）
-
-
 
 部署说明
 --------
