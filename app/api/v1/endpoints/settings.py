@@ -306,7 +306,7 @@ def sync_new_activities(
     }
 
     
-@router.post("/downloadActivity")
+@router.get("/downloadActivity")
 def download_activity(
     id: int,
     platform: str = "coros",
