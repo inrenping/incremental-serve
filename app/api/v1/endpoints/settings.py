@@ -13,11 +13,13 @@ from app.models.coros_connect import CorosConnect
 from app.core.security import get_current_user
 from app.api.v1.endpoints.garmin import (
     save_all_activities as sync_garmin,
-    save_new_activities as sync_new_garmin
+    save_new_activities as sync_new_garmin,
+    download_garmin_activity as download_garmin
 )
 from app.api.v1.endpoints.coros import (
     save_all_activities as sync_coros,
-    save_new_coros_activities as sync_new_coros
+    save_new_coros_activities as sync_new_coros,
+    download_coros_activity as download_coros
 )
 
 router = APIRouter()
@@ -304,12 +306,17 @@ def sync_new_activities(
     }
 
     
-@router.post("/downloadActivity/{id}")
+@router.post("/downloadActivity")
 def download_activity(
     id: int,
+    platform: str = "coros",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    
-
-    return None;
+    """
+    通用运动记录下载接口。
+    根据 platform 参数分发到对应的平台下载逻辑。
+    """
+    if platform.lower() == "coros":
+        return download_coros(id=id, current_user=current_user, db=db)
+    return download_garmin(id=id, current_user=current_user, db=db)
