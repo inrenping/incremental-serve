@@ -135,8 +135,8 @@ def get_apps_config(
     results = []
 
     # 依次构建各平台配置
-    results.append(_build_app_config_item("garmin", "Garmin Connect", "连接您的 Garmin Connect 账号", garmin_global, "国际区"))
-    results.append(_build_app_config_item("garmin_cn", "Garmin Connect (CN)", "连接您的 Garmin Connect (中国) 账号", garmin_cn, "中国区"))
+    results.append(_build_app_config_item("garmin", "Garmin Connect", "连接您的 Garmin Connect 账号", garmin_global, "GLOBAL"))
+    results.append(_build_app_config_item("garmin_cn", "Garmin Connect (CN)", "连接您的 Garmin Connect (中国) 账号", garmin_cn, "CN"))
     results.append(_build_app_config_item("coros", "Coros", "连接您的 Coros 账号", coros_config))
 
     return results
