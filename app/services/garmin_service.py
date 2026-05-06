@@ -182,6 +182,7 @@ def get_garmin_activity_download_info(db: Session, user_id: int, activity_id: in
 
     try:
         resp = requests.get(url, headers=headers, stream=True, timeout=30)
+        print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail="文件下载失败，服务器返回错误")
             

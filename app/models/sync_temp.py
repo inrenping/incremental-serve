@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer
+from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, Numeric
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -51,5 +51,7 @@ class SyncTemp(Base):
         nullable=True,
         comment="记录更新时间",
     )
+    start_time = Column(DateTime, comment="开始时间")
+    distance = Column(Numeric(12, 2), comment="总距离（单位：米）")
 
     user = relationship("User")

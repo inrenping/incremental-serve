@@ -1,5 +1,7 @@
+import os
 import json
 import hashlib
+import zipfile
 import requests
 from datetime import datetime, timezone
 from typing import Optional, List, Tuple
@@ -9,8 +11,12 @@ from sqlalchemy.orm import Session
 from app.models.coros_connect import CorosConnect
 from app.models.coros_activity import CorosActivity
 from app.models.garmin_activity import GarminActivity
+from app.services.oss.ali_oss_client import AliOssClient
+from app.services.oss.aws_oss_client import AwsOssClient
 from app.utils.coros_region_config import REGIONCONFIG
 from app.utils.coros_sts_config import STS_CONFIG
+from app.utils.md5_utils import calculate_md5_file
+from app.utils.config import GARMIN_FIT_DIR
 
 def get_team_api_base(region_id: str) -> str:
     """根据区域 ID 获取高驰 Team API 的基准 URL。"""
@@ -199,42 +205,94 @@ def get_coros_activity_download_info(db: Session, user_id: int, activity_id: int
     
     return file_response, f"coros_activity_{activity.label_id}.fit"
 
+
 def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> dict:
-    """将佳明活动上传到高驰。"""
-    ga = db.query(GarminActivity).filter(user_id == user_id, GarminActivity.id == garmin_activity_id).first()
+    """将佳明活动上传到高驰，支持 OSS + uploadActivity 流程"""
+    # 查询 Garmin 活动
+    ga = db.query(GarminActivity).filter(
+        GarminActivity.user_id == user_id,
+        GarminActivity.id == garmin_activity_id
+    ).first()
     if not ga or not ga.garmin_connect:
         raise HTTPException(status_code=404, detail="未找到有效的佳明记录或授权")
 
-    ca = db.query(CorosConnect).filter(user_id == user_id, CorosConnect.is_active == True).first()
+    # 查询 Coros 授权
+    ca = db.query(CorosConnect).filter(
+        CorosConnect.user_id == user_id,
+        CorosConnect.is_active == True
+    ).first()
     if not ca:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
 
-    # 下载
+    # 下载 Garmin 文件
     base = "connect.garmin.cn" if ga.garmin_connect.region == "CN" else "connect.garmin.com"
     down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
+    print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
     headers = {"di-backend": base, "Authorization": f"Bearer {ga.garmin_connect.access_token}"}
     file_data = requests.get(down_url, headers=headers, timeout=30).content
 
-    # 上传
+    # 校验下载文件大小
+    if len(file_data) < 20000:  # 20 KB 以下可能不完整
+        raise HTTPException(
+            status_code=400,
+            detail=f"下载到的 Garmin 文件可能不完整，大小: {len(file_data)} 字节"
+        )
+    print(f"成功下载 Garmin 活动 {ga.activity_id}，文件大小: {len(file_data)} 字节")
+
+    # 保存为 ZIP 文件
+    os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
+    zip_path = os.path.join(GARMIN_FIT_DIR, f"{ga.activity_id}.zip")
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{ga.activity_id}.fit", file_data)
+    filesize = os.path.getsize(zip_path)
+    md5_hash = calculate_md5_file(zip_path)
+    print(f"生成 ZIP 文件: {zip_path}，大小: {filesize}, MD5: {md5_hash}")
+
+    # 上传到 OSS
+    oss_path = f"{ca.user_id}/{md5_hash}.zip"
+    if ca.region == 2:  # 中国区
+        oss_client = AliOssClient()
+    else:  # 国外
+        oss_client = AwsOssClient()
+    try:
+        oss_client.multipart_upload(zip_path, oss_path)
+        print(f"成功上传到 OSS: {oss_path}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"上传到 OSS 失败: {str(e)}")
+
+    # 调用 Coros uploadActivity 接口
     team_api = get_team_api_base(str(ca.region))
     upload_url = f"{team_api}/activity/fit/import"
     rid = int(ca.region) if ca.region else 1
     sts = STS_CONFIG.get(rid, STS_CONFIG[1])
-    
-    fname = f"garmin_sync_{ga.activity_id}.fit"
-    params = {
-        "source": 1, "timezone": 32, "bucket": sts["bucket"], "md5": hashlib.md5(file_data).hexdigest(),
-        "size": len(file_data), "object": fname, "serviceName": sts["service"], "oriFileName": fname
-    }
 
-    files = {"file": (fname, file_data, "application/octet-stream")}
-    res = requests.post(upload_url, headers={"accesstoken": ca.access_token}, files=files, data={"jsonParameter": json.dumps(params)}, timeout=60).json()
-    
-    if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
-        return {"status": "success", "message": "已成功同步到高驰", "data": res}
-    
-    return {
-        "status": "error", 
-        "message": f"高驰导入失败: {res.get('message', '未知错误')}",
-        "details": res
+    params = {
+        "source": 1,
+        "timezone": 32,
+        "bucket": sts["bucket"],
+        "md5": md5_hash,
+        "size": filesize,
+        "object": f"fit_zip/{oss_path}",
+        "serviceName": sts["service"],
+        "oriFileName": f"{ga.activity_id}.zip"
     }
+    print("上传参数:", json.dumps(params, indent=2))
+
+    data = {"jsonParameter": json.dumps(params, separators=(',', ':'))}
+
+    try:
+        res = requests.post(
+            upload_url,
+            headers={"accesstoken": ca.access_token},
+            data=data,
+            timeout=60
+        ).json()
+    except Exception as e:
+        print("上传异常:", e)
+        return {"status": "error", "message": f"上传异常: {str(e)}"}
+
+    # 检查返回结果
+    print(f"高驰上传结果，响应内容: {res}")
+    if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:        
+        return {"status": "success", "message": "已成功同步到高驰", "data": res}
+    return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}

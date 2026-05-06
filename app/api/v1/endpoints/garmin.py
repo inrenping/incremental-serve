@@ -111,7 +111,12 @@ def save_new_activities(
     从佳明接口获取最新的运动数据并保存。
     默认获取最近的 10 条记录，用于快速增量同步。
     """
-    return garmin_service.sync_new_garmin_activities(db, current_user.user_id, region, limit=new_count)
+    return garmin_service.sync_new_garmin_activities(
+        db=db,
+        user_id=current_user.user_id,
+        region=region,
+        limit=new_count
+    )
 
 @router.get("/downloadActivity/{id}")
 def download_garmin_activity(

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from app import db
 from app.db.session import get_db
 from app.models.coros_activity import CorosActivity
 from app.models.garmin_activity import GarminActivity
@@ -271,12 +272,14 @@ def sync_all_activities(
 
 @router.post("/syncNewActivities")
 def sync_new_activities(
+    total_count: int = 10,
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     同步所有已连接平台的最新运动记录。
     此接口会尝试为用户绑定的所有活跃平台（Garmin Global, Garmin CN, Coros）触发增量同步。
     """
+    print("一键同步开始。")
     results = {}
 
     # 1. 获取并处理 Garmin 配置 (可能包含多个区域)
@@ -312,7 +315,7 @@ def sync_new_activities(
         try:
             # 调用 Garmin 增量同步
             res = sync_new_garmin(
-                region=config.region, current_user=current_user, db=db
+                total_count,region=config.region, current_user=current_user, db=db
             )
             results[platform_key] = res
         except Exception as e:
@@ -321,44 +324,14 @@ def sync_new_activities(
     if coros_auth:
         try:
             # 调用 Coros 增量同步
-            res = sync_new_coros(current_user=current_user, db=db)
+            res = sync_new_coros(total_count,current_user=current_user, db=db)
             results["coros"] = res
         except Exception as e:
             results["coros"] = {"status": "error", "detail": str(e)}
 
+    generate_sync_task(total_count,current_user=current_user, db=db)
+
     return {"status": "success", "results": results}
-
-
-@router.get("/downloadActivity")
-def download_activity(
-    id: int,
-    platform: str = "coros",
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    通用运动记录下载接口。
-    根据 platform 参数分发到对应的平台下载逻辑。
-    """
-    if platform.lower() == "coros":
-        return download_coros(id=id, current_user=current_user, db=db)
-    return download_garmin(id=id, current_user=current_user, db=db)
-
-@router.get("/downloadUploadActivity")
-def download_upload_activity(
-    id: int,
-    platform: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    通用运动记录下载接口。
-    根据 platform 参数分发到对应的平台下载逻辑。
-    """
-    if platform.lower() == "coros":
-        return download_coros(id=id, current_user=current_user, db=db)
-    return download_garmin(id=id, current_user=current_user, db=db)
-
 
 @router.get("/generateSyncTask")
 def generate_sync_task(
@@ -370,188 +343,16 @@ def generate_sync_task(
     智能生成并执行跨平台同步任务。
     
     逻辑流程：
-    1. 分别从 Garmin Global、Garmin CN 和 Coros 捞取最近的活动记录。
-    2. 使用 SyncTemp 临时表进行多平台数据比对（基于时间和距离）。
-    3. 识别出在某个平台存在但在其他平台缺失的记录。
-    4. 自动创建 SyncTask 并触发上传逻辑，实现多向同步。
+    1. 生成同步任务（基于最近活动的比对）。
+    2. 立即执行本次生成的上传任务。
     """
+    print("生成同步任务开始。")
+    # Step 1: Generate and store sync tasks (the "picking" part)
+    batchId = _create_and_store_sync_tasks(db, current_user.user_id, total_count)
 
-    # 1. 获取三个平台的数据
-    garmin_activities = []
-    garmin_cn_activities = []
-    coros_activities = []
-
-    garmin_activities = db.query(GarminActivity).filter(
-            GarminActivity.user_id == current_user.user_id,
-            GarminActivity.region == "GLOBAL",
-        ).limit(total_count).all()
-
-    garmin_cn_activities = db.query(GarminActivity).filter(
-            GarminActivity.user_id == current_user.user_id,
-            GarminActivity.region == "CN",
-        ).limit(total_count).all()
-
-    coros_activities = db.query(CorosActivity).filter(
-            CorosActivity.user_id == current_user.user_id
-        ).limit(total_count).all()
-
-    # 2. 生成唯一的批次 ID (batchId)
-    max_batch_row = (
-        db.query(SyncTemp.batch_id)
-        .filter(
-            SyncTemp.user_id == current_user.user_id,
-            SyncTemp.batch_id.isnot(None),
-        )
-        .order_by(desc(SyncTemp.batch_id))
-        .first()
-    )
-    batchId = 1 if not max_batch_row else max_batch_row[0] + 1
-
-    # 3. 往临时表插入 Garmin 国际版的数据作为基础记录
-    if len(garmin_activities) > 0:
-        for activity in garmin_activities:
-            db.add(
-                SyncTemp(
-                    user_id=current_user.user_id,
-                    batch_id=batchId,
-                    ga_id=activity.id,
-                    start_time=activity.start_time,
-                    distance=activity.distance,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-            )
-    db.commit()            
-
-    # 4. 往临时表插入 佳明中国版的数据（执行比对，匹配则更新，不匹配则新增）
-    if len(garmin_cn_activities) > 0:
-        sync_temp_list = db.query(SyncTemp).filter(
-            SyncTemp.user_id == current_user.user_id,
-            SyncTemp.batch_id == batchId,
-        ).all()
-
-        for activity in garmin_cn_activities:
-            matched = False
-            for sync_temp in sync_temp_list:
-                if sync_temp.ga_id is not None:
-                    # 判断是否是同一个活动
-                    if is_same_activity(
-                        activity.start_time,
-                        activity.distance,
-                        sync_temp.start_time,
-                        sync_temp.distance,
-                    ):
-                        sync_temp.gac_id = activity.id
-                        sync_temp.updated_at = datetime.now(timezone.utc)
-                        matched = True
-                        break
-
-            if not matched:
-                db.add(
-                    SyncTemp(
-                        user_id=current_user.user_id,
-                        batch_id=batchId,
-                        gac_id=activity.id,
-                        start_time=activity.start_time,
-                        distance=activity.distance,
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc),
-                    )
-                )
-    db.commit()
-
-    # 5. 往临时表插入 高驰的数据（同上，执行跨平台匹配）
-    if len(coros_activities) > 0:
-        sync_temp_list = db.query(SyncTemp).filter(
-            SyncTemp.user_id == current_user.user_id,
-            SyncTemp.batch_id == batchId,
-        ).all()
-
-        for activity in coros_activities:
-            matched = False
-            for sync_temp in sync_temp_list:
-                if sync_temp.ga_id is not None:
-                    # 判断是否是同一个活动
-                    if is_same_activity(
-                        activity.start_time,
-                        activity.distance,
-                        sync_temp.start_time,
-                        sync_temp.distance,
-                    ):
-                        sync_temp.ca_id = activity.id
-                        sync_temp.updated_at = datetime.now(timezone.utc)
-                        matched = True
-                        break
-
-            if not matched:
-                db.add(
-                    SyncTemp(
-                        user_id=current_user.user_id,
-                        batch_id=batchId,
-                        ca_id=activity.id,
-                        start_time=activity.start_time,
-                        distance=activity.distance,
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc),
-                    )
-                )
-    db.commit()
-
-    # 6. 分析比对结果，根据缺失情况生成同步任务 (SyncTask)
-    sync_temp_list = db.query(SyncTemp).filter(
-        SyncTemp.user_id == current_user.user_id,
-        SyncTemp.batch_id == batchId,
-    ).all()
-    for sync_temp in sync_temp_list:
-        ga_id = sync_temp.ga_id
-        gac_id = sync_temp.gac_id
-        ca_id = sync_temp.ca_id
-
-        present_count = sum(x is not None for x in (ga_id, gac_id, ca_id))
-
-        # 全空 / 全满：不生成任务
-        if present_count == 0 or present_count == 3:
-            continue
-
-        # 两空一有：由唯一已有平台同步到另外两个平台
-        if present_count == 1:
-            if ga_id is not None:
-                add_sync_task(db, current_user.user_id, "GLOBAL", ga_id, "CN")
-                add_sync_task(db, current_user.user_id, "GLOBAL", ga_id, "Coros")
-            elif gac_id is not None:
-                add_sync_task(db, current_user.user_id, "CN", gac_id, "GLOBAL")
-                add_sync_task(db, current_user.user_id, "CN", gac_id, "Coros")
-            else:
-                add_sync_task(db, current_user.user_id, "Coros", ca_id, "GLOBAL")
-                add_sync_task(db, current_user.user_id, "Coros", ca_id, "CN")
-            continue
-
-        # 一空两有：补齐缺失平台
-        if ga_id is None:
-            # 优先使用国内平台作为源，其次 Coros
-            if gac_id is not None:
-                add_sync_task(db, current_user.user_id, "CN", gac_id, "GLOBAL")
-            else:
-                add_sync_task(db, current_user.user_id, "Coros", ca_id, "GLOBAL")
-        elif gac_id is None:
-            # 优先使用全球平台作为源，其次 Coros
-            if ga_id is not None:
-                add_sync_task(db, current_user.user_id, "GLOBAL", ga_id, "CN")
-            else:
-                add_sync_task(db, current_user.user_id, "Coros", ca_id, "CN")
-        else:
-            # ca_id is None：优先使用国内平台作为源，其次全球平台
-            if gac_id is not None:
-                add_sync_task(db, current_user.user_id, "CN", gac_id, "Coros")
-            else:
-                add_sync_task(db, current_user.user_id, "GLOBAL", ga_id, "Coros")
-
-    db.commit()
-
-    # 7. 立即执行本次生成的同步任务
+    # Step 2: Execute the generated tasks
     sync_task_list = db.query(SyncTask).filter(
-        SyncTask.user_id == current_user.user_id,
-        SyncTask.batch_id == batchId,
+        SyncTask.user_id == current_user.user_id
     ).all()
     for sync_task in sync_task_list:
         try:
@@ -570,25 +371,216 @@ def generate_sync_task(
 
     return {"status": "success", "batchId": batchId}
 
+
+def _create_and_store_sync_tasks(
+    db: Session, user_id: int, total_count: int
+) -> int:
+    """
+    Helper function to generate and store sync tasks based on recent activities.
+    Returns the batchId of the created tasks.
+    """
+    # 1. 获取三个平台的数据
+    garmin_activities = db.query(GarminActivity).join(GarminConnect).filter(
+            GarminActivity.user_id == user_id,
+            GarminConnect.region == "GLOBAL",
+        ).order_by(desc(GarminActivity.start_time_gmt)).limit(total_count).all()
+
+    garmin_cn_activities = db.query(GarminActivity).join(GarminConnect).filter(
+            GarminActivity.user_id == user_id,
+            GarminConnect.region == "CN",
+        ).order_by(desc(GarminActivity.start_time_gmt)).limit(total_count).all()
+
+    coros_activities = db.query(CorosActivity).filter(
+        ).order_by(desc(CorosActivity.start_time)).limit(total_count).all()
+
+    # 2. 生成唯一的批次 ID (batchId)
+    max_batch_row = (
+        db.query(SyncTemp.batch_id)
+        .filter(
+            SyncTemp.user_id == user_id,
+            SyncTemp.batch_id.isnot(None),
+        )
+        .order_by(desc(SyncTemp.batch_id))
+        .first()
+    )
+    batchId = 1 if not max_batch_row else max_batch_row[0] + 1
+
+    # 3. 往临时表插入 Garmin 国际版的数据作为基础记录
+    if len(garmin_activities) > 0:
+        for activity in garmin_activities:
+            db.add(
+                SyncTemp(
+                    user_id=user_id,
+                    batch_id=batchId,
+                    ga_id=activity.id,
+                    start_time=activity.start_time_local,
+                    distance=activity.distance_meters,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+
+    # 4. 往临时表插入 佳明中国版的数据（执行比对，匹配则更新，不匹配则新增）
+    if len(garmin_cn_activities) > 0:
+        sync_temp_list = db.query(SyncTemp).filter(
+            SyncTemp.user_id == user_id,
+            SyncTemp.batch_id == batchId,
+        ).all()
+
+        for activity in garmin_cn_activities:
+            matched = False
+            for sync_temp in sync_temp_list:
+                if sync_temp.ga_id is not None:
+                    # 判断是否是同一个活动
+                    if is_same_activity(
+                        activity.start_time_local,
+                        sync_temp.start_time,
+                    ):
+                        sync_temp.gac_id = activity.id
+                        sync_temp.updated_at = datetime.now(timezone.utc)
+                        matched = True
+                        break
+
+            if not matched:
+                db.add(
+                    SyncTemp(
+                        user_id=user_id,
+                        batch_id=batchId,
+                        gac_id=activity.id,
+                        start_time=activity.start_time_local,
+                        distance=activity.distance_meters,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+
+    # 5. 往临时表插入 高驰的数据（同上，执行跨平台匹配）
+    if len(coros_activities) > 0:
+        sync_temp_list = db.query(SyncTemp).filter(
+            SyncTemp.user_id == user_id,
+            SyncTemp.batch_id == batchId,
+        ).all()
+
+        for activity in coros_activities:
+            matched = False
+            for sync_temp in sync_temp_list:
+                if sync_temp.ga_id is not None or sync_temp.gac_id is not None: 
+                    # 判断是否是同一个活动
+                    if is_same_activity(
+                        activity.start_time,
+                        sync_temp.start_time,
+                    ):
+                        sync_temp.ca_id = activity.id
+                        sync_temp.updated_at = datetime.now(timezone.utc)
+                        matched = True
+                        break
+
+            if not matched:
+                db.add(
+                    SyncTemp(
+                        user_id=user_id,
+                        batch_id=batchId,
+                        ca_id=activity.id,
+                        start_time=activity.start_time,
+                        distance=activity.distance,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+    db.commit();
+    # 6. 分析比对结果，根据缺失情况生成同步任务 (SyncTask)
+    sync_temp_list = db.query(SyncTemp).filter(
+        SyncTemp.user_id == user_id,
+        SyncTemp.batch_id == batchId,
+    ).all()
+
+    add_sync_task_list = []
+    for sync_temp in sync_temp_list:
+        ga_id = sync_temp.ga_id
+        gac_id = sync_temp.gac_id
+        ca_id = sync_temp.ca_id
+
+        present_count = sum(x is not None for x in (ga_id, gac_id, ca_id))
+
+        # 全空 / 全满：不生成任务
+        if present_count == 0 or present_count == 3:
+            continue
+
+        # 两空一有：由唯一已有平台同步到另外两个平台
+        if present_count == 1:
+            if ga_id is not None:
+                add_sync_task_list.append(
+                  add_sync_task(db, user_id, "GLOBAL", ga_id, "CN")
+                )
+                add_sync_task_list.append(
+                  add_sync_task(db, user_id, "GLOBAL", ga_id, "Coros")
+                )
+            elif gac_id is not None:
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "CN", gac_id, "GLOBAL")
+                )
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "CN", gac_id, "Coros")
+                ) 
+            else: # ca_id is not None
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "Coros", ca_id, "GLOBAL")
+                )
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "Coros", ca_id, "CN")
+                )
+            continue
+
+        # 一空两有：补齐缺失平台
+        if ga_id is None:
+            # 优先使用国内平台作为源，其次 Coros
+            if gac_id is not None:
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "CN", gac_id, "GLOBAL")
+                )
+            else: # ca_id must be present
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "Coros", ca_id, "GLOBAL")
+                )
+        elif gac_id is None:
+            # 优先使用全球平台作为源，其次 Coros
+            if ga_id is not None:
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "GLOBAL", ga_id, "CN")
+                )
+            else: # ca_id must be present
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "Coros", ca_id, "CN")
+                )
+        else: # ca_id is None：优先使用国内平台作为源，其次全球平台
+            if gac_id is not None:
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "CN", gac_id, "Coros")
+                )
+            else: # ga_id must be present
+                add_sync_task_list.append(
+                    add_sync_task(db, user_id, "GLOBAL", ga_id, "Coros")
+                )
+    print(f"本次生成的同步任务数量: {len(add_sync_task_list)}")
+    db.add_all([t for t in add_sync_task_list if t is not None])    
+    db.commit() 
+    return batchId
+
+
 def is_same_activity(
     source_start_time: Optional[datetime],
-    source_distance: Optional[float],
     target_start_time: Optional[datetime],
-    target_distance: Optional[float],
 ) -> bool:
     """
     判断两条活动记录是否可视为同一条活动。
 
     判定规则：
-    1. 起始时间和距离任一为空时，直接返回 False。
+    1. 起始时间任一为空时，直接返回 False。
     2. 起始时间差超过 5 分钟，返回 False。
-    3. 距离差以目标距离为基准，允许 5% 误差；在误差范围内返回 True。
 
     Args:
         source_start_time: 源平台活动开始时间。
-        source_distance: 源平台活动距离。
         target_start_time: 目标平台活动开始时间。
-        target_distance: 目标平台活动距离（用于计算容差基准）。
 
     Returns:
         bool: True 表示两条记录可判定为同一活动，False 表示不是。
@@ -596,20 +588,13 @@ def is_same_activity(
     if (
         source_start_time is None
         or target_start_time is None
-        or source_distance is None
-        or target_distance is None
     ):
         return False
 
     time_diff_seconds = abs((source_start_time - target_start_time).total_seconds())
     if time_diff_seconds > 5 * 60:
         return False
-
-    # 以目标距离为基准，允许 5% 误差
-    distance_tolerance = abs(target_distance) * 0.05
-    distance_diff = abs(source_distance - target_distance)
-    return distance_diff <= distance_tolerance
-
+    return True
 
 def add_sync_task(
     db: Session,
@@ -644,8 +629,7 @@ def add_sync_task(
     if exists:
         return
 
-    db.add(
-        SyncTask(
+    return SyncTask(
             user_id=user_id,
             source_platform=source_platform,
             source_id=source_id,
@@ -654,8 +638,22 @@ def add_sync_task(
             sync_status=-1,
             created_at=datetime.now(timezone.utc),
         )
-    )
+    
 
+@router.get("/downloadActivity")
+def download_activity(
+    id: int,
+    platform: str = "coros",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    通用运动记录下载接口。
+    根据 platform 参数分发到对应的平台下载逻辑。
+    """
+    if platform.lower() == "coros":
+        return download_coros(id=id, current_user=current_user, db=db)
+    return download_garmin(id=id, current_user=current_user, db=db)
 
 @router.delete("/deleteTemp")
 def delete_temp(
