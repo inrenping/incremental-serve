@@ -2,8 +2,8 @@ import json
 import base64
 import requests
 from datetime import datetime, timezone
-from typing import Optional, Any
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, Optional, Tuple
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -13,7 +13,10 @@ from app.db.session import get_db
 from app.models.user import User
 from app.models.garmin_connect import GarminConnect
 from app.models.garmin_activity import GarminActivity
+from app.models.coros_connect import CorosConnect
+from app.models.coros_activity import CorosActivity
 from app.core.security import get_current_user
+from app.utils.coros_region_config import REGIONCONFIG
 
 router = APIRouter()
 
@@ -68,18 +71,7 @@ def get_garmin_config(
         ]
     }
 
-@router.get("/refreshToken")
-def refresh_token(
-    region: str = "CN",
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-  ):
-    """
-    调用 GarminConnect 模拟登录 获取相关数据存入数据库
-
-    """
-    # TODO
-    return '';
+# TODO 实现一个自动登录的装饰器
 
 @router.post("/saveConfig")
 def save_garmin_config(
@@ -376,10 +368,287 @@ def download_garmin_activity(
         print(f"未知错误: {str(e)}")
         raise HTTPException(status_code=400, detail=f"佳明文件下载失败: {str(e)}")
 
-@router.get("/uploadActivity")
-def upload_garmin_activity(
+# FIT / GPX / TCX 等与佳明上传服务支持的格式一致（此处仅下载 .fit 后上传）
+_GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
+
+
+def _coros_team_api_base(region_id: str) -> str:
+    try:
+        rid = int(region_id)
+        if rid in REGIONCONFIG:
+            return REGIONCONFIG[rid]["teamapi"]
+    except (ValueError, TypeError):
+        pass
+    return REGIONCONFIG.get(1, {}).get("teamapi", "https://teamapi.coros.com")
+
+
+def _parse_garmin_upload_response(
+    response: requests.Response,
+) -> Tuple[str, Optional[dict]]:
+    """
+    解析佳明上传接口响应，返回 (业务状态, 原始 JSON 或 None)。
+    逻辑参考 python-garminconnect-enhanced 的上传处理。
+    """
+    status = "UPLOAD_EXCEPTION"
+    result: Optional[dict] = None
+    try:
+        result = response.json()
+    except Exception:
+        pass
+
+    res_code = response.status_code
+    if res_code == 202 and result:
+        detailed = result.get("detailedImportResult") or {}
+        upload_id = detailed.get("uploadId")
+        is_duplicate_upload = upload_id is None or upload_id == ""
+        if not is_duplicate_upload:
+            return "SUCCESS", result
+        return "UPLOAD_REJECTED", result
+
+    if res_code == 409 and result:
+        try:
+            msg = (
+                result.get("detailedImportResult", {})
+                .get("failures", [{}])[0]
+                .get("messages", [{}])[0]
+                .get("content")
+            )
+            if msg == "Duplicate Activity.":
+                return "DUPLICATE_ACTIVITY", result
+        except (IndexError, KeyError, TypeError):
+            pass
+        return "UPLOAD_CONFLICT", result
+
+    if result:
+        return "UPLOAD_FAILED", result
+    return status, None
+
+
+@router.post("/uploadGarminActivity2Garmin/{id}")
+def upload_garmin_activity_to_garmin(
     id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    return None;
+    """
+    从活动所属区域下载 FIT，上传到另一区域佳明账号（国际↔中国）。
+    需在两个区域分别完成绑定并持有有效 token。
+    """
+    garmin_activity = db.query(GarminActivity).filter(
+        GarminActivity.user_id == current_user.user_id,
+        GarminActivity.id == id,
+    ).first()
+
+    if not garmin_activity:
+        raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
+
+    garmin_auth = garmin_activity.garmin_connect
+
+    if not garmin_auth or not garmin_auth.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权配置，请检查账号绑定状态")
+
+    source_region = garmin_activity.region or "CN"
+    target_region = "GLOBAL" if source_region == "CN" else "CN"
+
+    upload_config = db.query(GarminConnect).filter(
+        GarminConnect.user_id == current_user.user_id,
+        GarminConnect.region == target_region,
+    ).first()
+
+    if not upload_config or not upload_config.access_token:
+        hint = "国际区" if target_region == "GLOBAL" else "中国区"
+        raise HTTPException(
+            status_code=404,
+            detail=f"未找到可上传目标（{hint}）的有效佳明授权，请先绑定对应区域账号",
+        )
+
+    base_domain = "connect.garmin.cn" if source_region == "CN" else "connect.garmin.com"
+    download_url = f"https://{base_domain}/download-service/files/activity/{garmin_activity.activity_id}"
+
+    download_headers = {
+        "di-backend": base_domain,
+        "Authorization": f"Bearer {garmin_auth.access_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    try:
+        file_response = requests.get(download_url, headers=download_headers, timeout=60)
+        if file_response.status_code != 200:
+            raise HTTPException(
+                status_code=file_response.status_code,
+                detail=f"无法下载活动原文件，HTTP {file_response.status_code}",
+            )
+        file_data = file_response.content
+    except HTTPException:
+        raise
+    except requests.exceptions.ConnectionError as conn_err:
+        print(f"网络连接错误: {str(conn_err)}")
+        raise HTTPException(status_code=502, detail="网络连接错误，请检查网络或代理")
+
+    file_base_name = f"activity_{garmin_activity.activity_id}.fit"
+    file_extension = file_base_name.split(".")[-1]
+    if file_extension.upper() != "FIT":
+        raise HTTPException(status_code=400, detail=f"不支持的文件类型: .{file_extension}")
+
+    upload_base_domain = "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"
+    api_domain = _GARMIN_UPLOAD_API_DOMAIN.get(
+        target_region, "connectapi.garmin.com"
+    )
+    upload_url = f"https://{api_domain}/upload-service/upload"
+
+    upload_headers = {
+        "Authorization": f"Bearer {upload_config.access_token}",
+        "User-Agent": download_headers["User-Agent"],
+        "di-backend": upload_base_domain,
+    }
+    fields = {"file": (file_base_name, file_data, "application/octet-stream")}
+
+    try:
+        upload_response = requests.post(
+            upload_url, headers=upload_headers, files=fields, timeout=60
+        )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"上传请求失败: {str(e)}")
+
+    upload_status, garmin_json = _parse_garmin_upload_response(upload_response)
+
+    return {
+        "status": "success",
+        "upload_status": upload_status,
+        "source_region": source_region,
+        "target_region": target_region,
+        "http_status": upload_response.status_code,
+        "garmin_response": garmin_json,
+    }
+
+
+@router.post("/uploadCorosActivity2Garmin/{id}")
+def upload_coros_activity_to_garmin(
+    id: int,
+    region: str = Query("CN", description="上传目标佳明账号区域: CN 或 GLOBAL"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    按 /coros/downloadActivity 同源流程从高驰获取 FIT，再上传到当前用户绑定的佳明账号。
+    """
+    if region not in ("CN", "GLOBAL"):
+        raise HTTPException(status_code=400, detail="region 必须为 CN 或 GLOBAL")
+
+    coros_auth = db.query(CorosConnect).filter(
+        CorosConnect.user_id == current_user.user_id,
+        CorosConnect.is_active == True,
+    ).first()
+
+    if not coros_auth or not coros_auth.access_token:
+        raise HTTPException(
+            status_code=404,
+            detail="未找到有效的高驰授权配置，请先绑定账号",
+        )
+
+    coros_activity = db.query(CorosActivity).filter(
+        CorosActivity.user_id == current_user.user_id,
+        CorosActivity.id == id,
+    ).first()
+
+    if not coros_activity:
+        raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
+
+    if coros_activity.sport_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail="活动缺少运动类型，请重新从高驰同步后再试",
+        )
+
+    upload_config = db.query(GarminConnect).filter(
+        GarminConnect.user_id == current_user.user_id,
+        GarminConnect.region == region,
+    ).first()
+
+    if not upload_config or not upload_config.access_token:
+        hint = "国际区" if region == "GLOBAL" else "中国区"
+        raise HTTPException(
+            status_code=404,
+            detail=f"未找到有效的佳明授权（{hint}），请先绑定对应区域账号",
+        )
+
+    base_url = _coros_team_api_base(str(coros_auth.region))
+    download_meta_url = (
+        f"{base_url}/activity/detail/download?"
+        f"labelId={coros_activity.label_id}&sportType={coros_activity.sport_type}&fileType=4"
+    )
+    coros_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "accesstoken": coros_auth.access_token,
+    }
+    ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    try:
+        meta_response = requests.post(
+            download_meta_url, headers=coros_headers, timeout=15
+        )
+        meta_response.raise_for_status()
+        meta_result = meta_response.json()
+
+        if meta_result.get("result") != "0000":
+            raise HTTPException(
+                status_code=400,
+                detail=f"获取下载链接失败: {meta_result.get('message')}",
+            )
+
+        download_url = meta_result.get("data", {}).get("fileUrl")
+        if not download_url:
+            raise HTTPException(status_code=404, detail="未找到文件下载地址")
+
+        file_response = requests.get(
+            download_url, headers=coros_headers, timeout=60
+        )
+        file_response.raise_for_status()
+        file_data = file_response.content
+    except HTTPException:
+        raise
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"从高驰下载文件失败: {str(e)}",
+        )
+
+    file_base_name = f"coros_activity_{coros_activity.label_id}.fit"
+    file_extension = file_base_name.split(".")[-1]
+    if file_extension.upper() != "FIT":
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型: .{file_extension}",
+        )
+
+    upload_base_domain = "connect.garmin.cn" if region == "CN" else "connect.garmin.com"
+    api_domain = _GARMIN_UPLOAD_API_DOMAIN.get(region, "connectapi.garmin.com")
+    upload_url = f"https://{api_domain}/upload-service/upload"
+
+    upload_headers = {
+        "Authorization": f"Bearer {upload_config.access_token}",
+        "User-Agent": ua,
+        "di-backend": upload_base_domain,
+    }
+    fields = {"file": (file_base_name, file_data, "application/octet-stream")}
+
+    try:
+        upload_response = requests.post(
+            upload_url, headers=upload_headers, files=fields, timeout=60
+        )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"上传请求失败: {str(e)}")
+
+    upload_status, garmin_json = _parse_garmin_upload_response(upload_response)
+
+    return {
+        "status": "success",
+        "upload_status": upload_status,
+        "target_region": region,
+        "coros_label_id": coros_activity.label_id,
+        "http_status": upload_response.status_code,
+        "garmin_response": garmin_json,
+    }

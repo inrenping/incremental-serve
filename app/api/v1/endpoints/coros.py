@@ -1,3 +1,4 @@
+import json
 import hashlib
 import requests
 from datetime import datetime, timezone
@@ -10,8 +11,10 @@ from app.db.session import get_db
 from app.models.user import User
 from app.models.coros_connect import CorosConnect
 from app.models.coros_activity import CorosActivity
+from app.models.garmin_activity import GarminActivity
 from app.core.security import get_current_user
 from app.utils.coros_region_config import REGIONCONFIG
+from app.utils.coros_sts_config import STS_CONFIG
 
 router = APIRouter()
 
@@ -439,3 +442,100 @@ def download_coros_activity(
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"文件下载失败: {str(e)}")
+
+@router.post("/uploadGarminActivity2Coros/{id}")
+def upload_garmin_activity_to_coros(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    从佳明下载 FIT 原文件，并上传到高驰账号。
+    """
+    # 1. 查找佳明运动记录
+    garmin_activity = db.query(GarminActivity).filter(
+        GarminActivity.user_id == current_user.user_id,
+        GarminActivity.id == id
+    ).first()
+
+    if not garmin_activity:
+        raise HTTPException(status_code=404, detail="未找到佳明同步记录，请刷新后重试")
+
+    garmin_auth = garmin_activity.garmin_connect
+    if not garmin_auth or not garmin_auth.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权配置")
+
+    # 2. 获取高驰授权配置
+    coros_auth = db.query(CorosConnect).filter(
+        CorosConnect.user_id == current_user.user_id,
+        CorosConnect.is_active == True
+    ).first()
+
+    if not coros_auth or not coros_auth.access_token:
+        raise HTTPException(status_code=404, detail="未找到有效的高驰授权，请先绑定账号")
+
+    # 3. 从佳明下载原文件 (FIT)
+    base_domain = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
+    download_url = f"https://{base_domain}/download-service/files/activity/{garmin_activity.activity_id}"
+    
+    download_headers = {
+        "di-backend": base_domain,
+        "Authorization": f"Bearer {garmin_auth.access_token}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+        file_response = requests.get(download_url, headers=download_headers, timeout=30)
+        file_response.raise_for_status()
+        file_data = file_response.content
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"从佳明下载文件失败: {str(e)}")
+
+    # 4. 准备高驰上传逻辑
+    team_api = get_team_api_base(str(coros_auth.region))
+    upload_url = f"{team_api}/activity/fit/import"
+    
+    file_name = f"garmin_sync_{garmin_activity.activity_id}.fit"
+    file_md5 = hashlib.md5(file_data).hexdigest()
+    file_size = len(file_data)
+
+    # 根据区域获取 STS 配置（用于填充接口要求的 bucket 等字段）
+    region_id = int(coros_auth.region) if coros_auth.region else 1
+    sts = STS_CONFIG.get(region_id, STS_CONFIG[1])
+
+    upload_params = {
+        "source": 1,
+        "timezone": 32,
+        "bucket": sts["bucket"],
+        "md5": file_md5,
+        "size": file_size,
+        "object": file_name, # 直接使用文件名作为标识
+        "serviceName": sts["service"],
+        "oriFileName": file_name
+    }
+
+    coros_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "accesstoken": coros_auth.access_token,
+    }
+
+    try:
+        # 使用 multipart/form-data 形式发送文件和参数
+        files = {"file": (file_name, file_data, "application/octet-stream")}
+        data = {"jsonParameter": json.dumps(upload_params)}
+        
+        response = requests.post(upload_url, headers=coros_headers, files=files, data=data, timeout=60)
+        response.raise_for_status()
+        upload_result = response.json()
+        
+        # 参考你提供的校验逻辑
+        if upload_result.get("result") == "0000" and upload_result.get("data", {}).get("status") == 2:
+            return {"status": "success", "message": "已成功同步到高驰", "data": upload_result}
+        else:
+            return {
+                "status": "error", 
+                "message": f"高驰导入失败: {upload_result.get('message', '未知错误')}",
+                "details": upload_result
+            }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"上传到高驰失败: {str(e)}")
