@@ -17,11 +17,14 @@ from app.api.v1.endpoints.garmin import (
     save_all_activities as sync_garmin,
     save_new_activities as sync_new_garmin,
     download_garmin_activity as download_garmin,
+    upload_garmin_activity_to_garmin,
+    upload_coros_activity_to_garmin,
 )
 from app.api.v1.endpoints.coros import (
     save_all_activities as sync_coros,
     save_new_coros_activities as sync_new_coros,
     download_coros_activity as download_coros,
+    upload_garmin_activity_to_coros,
 )
 
 router = APIRouter()
@@ -357,7 +360,7 @@ def download_upload_activity(
 
 
 @router.get("/generateSyncTask")
-def download_activity(
+def generate_sync_task(
     total_count: int = 10,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -539,8 +542,17 @@ def download_activity(
         SyncTask.user_id == current_user.user_id,
         SyncTask.batch_id == batchId,
     ).all()
-    # for sync_task in sync_task_list:
-            
+    for sync_task in sync_task_list:
+        try:
+            if sync_task.source_platform in ["GLOBAL", "CN"] and sync_task.target_platform in ["GLOBAL", "CN"]:
+                upload_garmin_activity_to_garmin(id=sync_task.source_id, current_user=current_user, db=db)
+            elif sync_task.source_platform in ["GLOBAL", "CN"] and sync_task.target_platform == "Coros":
+                upload_garmin_activity_to_coros(id=sync_task.source_id, current_user=current_user, db=db)
+            elif sync_task.source_platform == "Coros" and sync_task.target_platform in ["GLOBAL", "CN"]:
+                upload_coros_activity_to_garmin(id=sync_task.source_id, region=sync_task.target_platform, current_user=current_user, db=db)
+        except Exception as e:
+            # Log the error but continue processing other tasks
+            print(f"Failed to execute sync task {sync_task.id}: {str(e)}")
 
     return {"status": "success", "batchId": batchId}
 
