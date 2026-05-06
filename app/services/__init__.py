@@ -6,4 +6,6 @@ Services 层 - 包含所有业务逻辑
 - auth_service: 认证相关服务（登录、注册、Token生成）
 - oauth_service: OAuth 提供商集成（Google、GitHub）
 - captcha_service: 验证码相关服务
+- coros_service: 高驰运动平台相关服务
+- garmin_service: 佳明运动平台相关服务
 """
