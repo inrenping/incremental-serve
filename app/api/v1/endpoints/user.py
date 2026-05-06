@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -53,4 +54,11 @@ def delete_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-  return {"status": "success"}
+    """
+    逻辑删除当前用户。将 active 字段置为 false。
+    执行后，该用户将无法通过 token 校验。
+    """
+    current_user.active = False
+    current_user.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"status": "success", "message": "User account has been deactivated"}

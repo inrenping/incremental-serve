@@ -30,12 +30,14 @@ from app.api.v1.endpoints.coros import (
 router = APIRouter()
 
 def format_datetime(dt: Optional[datetime]) -> str:
+    """将 datetime 对象转换为 ISO 格式字符串。如果输入为空，则返回空字符串。"""
     if not dt:
         return ""
     return dt.isoformat()
 
 
 def format_duration(seconds: Optional[float]) -> str:
+    """将秒数格式化为友好的时长字符串（H:MM:SS 或 MM:SS）。"""
     if seconds is None:
         return None
     total_seconds = int(seconds)
@@ -346,7 +348,6 @@ def download_activity(
 def download_upload_activity(
     id: int,
     platform: str,
-    target_platform: str ,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -365,8 +366,17 @@ def generate_sync_task(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    智能生成并执行跨平台同步任务。
+    
+    逻辑流程：
+    1. 分别从 Garmin Global、Garmin CN 和 Coros 捞取最近的活动记录。
+    2. 使用 SyncTemp 临时表进行多平台数据比对（基于时间和距离）。
+    3. 识别出在某个平台存在但在其他平台缺失的记录。
+    4. 自动创建 SyncTask 并触发上传逻辑，实现多向同步。
+    """
 
-    # 获取三个平台的数据
+    # 1. 获取三个平台的数据
     garmin_activities = []
     garmin_cn_activities = []
     coros_activities = []
@@ -385,7 +395,7 @@ def generate_sync_task(
             CorosActivity.user_id == current_user.user_id
         ).limit(total_count).all()
 
-    # 获取 batchId,生成 batchId
+    # 2. 生成唯一的批次 ID (batchId)
     max_batch_row = (
         db.query(SyncTemp.batch_id)
         .filter(
@@ -397,7 +407,7 @@ def generate_sync_task(
     )
     batchId = 1 if not max_batch_row else max_batch_row[0] + 1
 
-    # 往临时表插入 Garmin 国际版的数据
+    # 3. 往临时表插入 Garmin 国际版的数据作为基础记录
     if len(garmin_activities) > 0:
         for activity in garmin_activities:
             db.add(
@@ -413,7 +423,7 @@ def generate_sync_task(
             )
     db.commit()            
 
-    # 往临时表插入 佳明中国版的数据（比对数据后插入）
+    # 4. 往临时表插入 佳明中国版的数据（执行比对，匹配则更新，不匹配则新增）
     if len(garmin_cn_activities) > 0:
         sync_temp_list = db.query(SyncTemp).filter(
             SyncTemp.user_id == current_user.user_id,
@@ -450,7 +460,7 @@ def generate_sync_task(
                 )
     db.commit()
 
-    # 往临时表插入 高驰的数据
+    # 5. 往临时表插入 高驰的数据（同上，执行跨平台匹配）
     if len(coros_activities) > 0:
         sync_temp_list = db.query(SyncTemp).filter(
             SyncTemp.user_id == current_user.user_id,
@@ -487,7 +497,7 @@ def generate_sync_task(
                 )
     db.commit()
 
-    # 根据临时表生成同步任务
+    # 6. 分析比对结果，根据缺失情况生成同步任务 (SyncTask)
     sync_temp_list = db.query(SyncTemp).filter(
         SyncTemp.user_id == current_user.user_id,
         SyncTemp.batch_id == batchId,
@@ -538,6 +548,7 @@ def generate_sync_task(
 
     db.commit()
 
+    # 7. 立即执行本次生成的同步任务
     sync_task_list = db.query(SyncTask).filter(
         SyncTask.user_id == current_user.user_id,
         SyncTask.batch_id == batchId,
@@ -545,11 +556,14 @@ def generate_sync_task(
     for sync_task in sync_task_list:
         try:
             if sync_task.source_platform in ["GLOBAL", "CN"] and sync_task.target_platform in ["GLOBAL", "CN"]:
-                upload_garmin_activity_to_garmin(id=sync_task.source_id, current_user=current_user, db=db)
+                upload_garmin_activity_to_garmin(id=sync_task.source_id, current_user=current_user, db=db)               
             elif sync_task.source_platform in ["GLOBAL", "CN"] and sync_task.target_platform == "Coros":
                 upload_garmin_activity_to_coros(id=sync_task.source_id, current_user=current_user, db=db)
             elif sync_task.source_platform == "Coros" and sync_task.target_platform in ["GLOBAL", "CN"]:
                 upload_coros_activity_to_garmin(id=sync_task.source_id, region=sync_task.target_platform, current_user=current_user, db=db)
+            sync_task.sync_status = 1
+            sync_task.synced_at = datetime.now(timezone.utc)
+            db.commit()
         except Exception as e:
             # Log the error but continue processing other tasks
             print(f"Failed to execute sync task {sync_task.id}: {str(e)}")
@@ -644,10 +658,13 @@ def add_sync_task(
 
 
 @router.delete("/deleteTemp")
-def delete_activity(
+def delete_temp(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    # 删除当前用户 24 小时之前的临时同步数据
+    """
+    清理过期的临时比对数据。
+    为了节省数据库空间，定期删除 24 小时之前的 SyncTemp 记录。
+    """
     cutoff_time = datetime.now(timezone.utc) - timedelta(days=1)
     deleted_count = (
         db.query(SyncTemp)
