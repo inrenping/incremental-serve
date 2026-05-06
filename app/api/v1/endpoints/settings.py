@@ -49,6 +49,64 @@ def format_duration(seconds: Optional[float]) -> str:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
 
+def _format_garmin_activity_dict(activity: GarminActivity, region: str) -> dict:
+    """将 Garmin 活动模型转换为前端使用的统一字典格式。"""
+    return {
+        "id": activity.id,
+        "title": activity.activity_name,
+        "startTime": activity.start_time_local,
+        "type": activity.activity_type_key,
+        "workoutTime": format_duration(activity.moving_duration_seconds),
+        "totalTime": format_duration(activity.duration_seconds),
+        "distance": f"{float(activity.distance_meters or 0) / 1000:.2f} km",
+        "elevation": f"{int(activity.elevation_gain or 0)} m",
+        "platform": region,
+        "platformId": str(activity.activity_id),
+        "syncTime": format_datetime(activity.updated_at),
+    }
+
+def _format_coros_activity_dict(activity: CorosActivity) -> dict:
+    """将 Coros 活动模型转换为前端使用的统一字典格式。"""
+    return {
+        "id": activity.id,
+        "title": activity.name,
+        "startTime": activity.start_time,
+        "type": str(activity.sport_type),
+        "workoutTime": format_duration(activity.workout_time),
+        "totalTime": format_duration(activity.total_time),
+        "distance": f"{float(activity.distance or 0) / 1000:.2f} km",
+        "elevation": f"{(activity.ascent or 0)} m",
+        "platform": "Coros",
+        "platformId": activity.label_id,
+        "syncTime": format_datetime(activity.updated_at),
+    }
+
+def _build_app_config_item(
+    app_id: str, 
+    label: str, 
+    description: str, 
+    config: Optional[Annotated[GarminConnect, CorosConnect]], 
+    region_label: Optional[str] = None
+) -> dict:
+    """统一构建第三方应用授权状态的响应字典。"""
+    is_connected = config.is_active if config else False
+    item = {
+        "id": app_id,
+        "label": label,
+        "description": description,
+        "isConnected": is_connected,
+        "total_count": config.total_count if config else 0,
+    }
+    if config:
+        item.update({
+            "email": getattr(config, "garmin_account", None) or getattr(config, "coros_account", None),
+            "addedAt": format_datetime(config.created_at),
+            "status": "验证通过" if is_connected else "已失效",
+            "region": region_label or getattr(config, "region", ""),
+            "lastUpdate": format_datetime(config.updated_at),
+        })
+    return item
+
 
 @router.get("/getAppsConfigs")
 def get_apps_config(
@@ -76,69 +134,12 @@ def get_apps_config(
 
     results = []
 
-    # --- Garmin Connect (Global) ---
-    garmin_item = {
-        "id": "garmin",
-        "label": "Garmin Connect",
-        "description": "连接您的 Garmin Connect 账号",
-        "isConnected": garmin_global.is_active if garmin_global else False,
-        "total_count": garmin_global.total_count if garmin_global else 0,
-    }
-    if garmin_global:
-        garmin_item.update(
-            {
-                "email": garmin_global.garmin_account,
-                "addedAt": format_datetime(garmin_global.created_at),
-                "status": "验证通过" if garmin_global.is_active else "已失效",
-                "region": "国际区",
-                "lastUpdate": format_datetime(garmin_global.updated_at),
-            }
-        )
-    results.append(garmin_item)
-
-    # --- Garmin Connect (CN) ---
-    garmin_cn_item = {
-        "id": "garmin_cn",
-        "label": "Garmin Connect (CN)",
-        "description": "连接您的 Garmin Connect (中国) 账号",
-        "isConnected": garmin_cn.is_active if garmin_cn else False,
-        "total_count": garmin_cn.total_count if garmin_cn else 0,
-    }
-    if garmin_cn:
-        garmin_cn_item.update(
-            {
-                "email": garmin_cn.garmin_account,
-                "addedAt": format_datetime(garmin_cn.created_at),
-                "status": "验证通过" if garmin_cn.is_active else "已失效",
-                "region": "中国区",
-                "lastUpdate": format_datetime(garmin_cn.updated_at),
-            }
-        )
-    results.append(garmin_cn_item)
-
-    # --- Coros ---
-    coros_item = {
-        "id": "coros",
-        "label": "Coros",
-        "description": "连接您的 Coros 账号",
-        "isConnected": coros_config.is_active if coros_config else False,
-        "total_count": coros_config.total_count if coros_config else 0,
-    }
-    if coros_config:
-        coros_item.update(
-            {
-                "email": coros_config.coros_account,
-                "addedAt": format_datetime(coros_config.created_at),
-                "status": "验证通过" if coros_config.is_active else "已失效",
-                "region": coros_config.region,
-                "lastUpdate": format_datetime(coros_config.updated_at),
-                "total_count": coros_config.total_count,
-            }
-        )
-    results.append(coros_item)
+    # 依次构建各平台配置
+    results.append(_build_app_config_item("garmin", "Garmin Connect", "连接您的 Garmin Connect 账号", garmin_global, "国际区"))
+    results.append(_build_app_config_item("garmin_cn", "Garmin Connect (CN)", "连接您的 Garmin Connect (中国) 账号", garmin_cn, "中国区"))
+    results.append(_build_app_config_item("coros", "Coros", "连接您的 Coros 账号", coros_config))
 
     return results
-
 
 @router.get("/getActivitiesWithPlatformByPage")
 def get_activities_with_platform_by_page(
@@ -185,24 +186,8 @@ def get_activities_with_platform_by_page(
             .offset((pageCount - 1) * pageSize)
             .all()
         )
-
-        data = []
-        for activity in garminActivities:
-            data.append(
-                {
-                    "id": activity.id,
-                    "title": activity.activity_name,
-                    "startTime": activity.start_time_local,
-                    "type": activity.activity_type_key,
-                    "workoutTime": format_duration(activity.moving_duration_seconds),
-                    "totalTime": format_duration(activity.duration_seconds),
-                    "distance": f"{float(activity.distance_meters or 0) / 1000:.2f} km",
-                    "elevation": f"{int(activity.elevation_gain or 0)} m",
-                    "platform": region_filter,
-                    "platformId": str(activity.activity_id),
-                    "syncTime": format_datetime(activity.updated_at),
-                }
-            )
+        
+        data = [_format_garmin_activity_dict(a, region_filter) for a in garminActivities]
 
         return {"status": "success", "data": data, "total": total}
     elif platform == "coros":
@@ -223,29 +208,43 @@ def get_activities_with_platform_by_page(
             .offset((pageCount - 1) * pageSize)
             .all()
         )
-
-        data = []
-        for activity in corosActivities:
-            data.append(
-                {
-                    "id": activity.id,
-                    "title": activity.name,
-                    "startTime": activity.start_time,
-                    "type": str(activity.sport_type),
-                    "workoutTime": format_duration(activity.workout_time),
-                    "totalTime": format_duration(activity.total_time),
-                    "distance": f"{float(activity.distance or 0) / 1000:.2f} km",
-                    "elevation": f"{(activity.ascent or 0)} m",
-                    "platform": "Coros",
-                    "platformId": activity.label_id,
-                    "syncTime": activity.updated_at,
-                }
-            )
+        
+        data = [_format_coros_activity_dict(a) for a in corosActivities]
 
         return {"status": "success", "data": data, "total": total}
     else:
         raise HTTPException(status_code=400, detail="不支持的平台类型")
 
+@router.get("/getActivity")
+def get_activity(
+    id: int,
+    platform: str = "coros",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取单条运动记录详情，支持不同平台查询。"""
+
+    if platform.lower() == "coros":
+        activity = (
+            db.query(CorosActivity)
+            .filter(
+                CorosActivity.user_id == current_user.user_id,
+                CorosActivity.id == id,
+            )
+            .first()
+        )
+        if not activity:
+            raise HTTPException(status_code=404, detail="未找到对应的 Coros 活动记录")
+        return {"status": "success", "data": activity}
+    else:
+        activity = (
+            db.query(GarminActivity)
+            .filter(GarminActivity.id == id)
+            .first()
+        )
+        if not activity:
+            raise HTTPException(status_code=404, detail="未找到对应的 Garmin 活动记录")
+        return {"status": "success", "data": activity}
 
 @router.post("/syncAllActivities")
 def sync_all_activities(
@@ -372,6 +371,41 @@ def generate_sync_task(
     return {"status": "success", "batchId": batchId}
 
 
+def _match_and_update_sync_temp(
+    db: Session,
+    user_id: int,
+    batch_id: int,
+    activities: list,
+    id_field: str,
+):
+    """
+    内部辅助方法：将给定活动列表与现有的临时同步记录进行比对并更新或新增。
+    支持 Garmin (start_time_local) 和 Coros (start_time) 活动模型。
+    """
+    sync_temp_list = db.query(SyncTemp).filter(
+        SyncTemp.user_id == user_id,
+        SyncTemp.batch_id == batch_id,
+    ).all()
+
+    for activity in activities:
+        matched = False
+        # 适配不同模型的字段名
+        start_time = getattr(activity, "start_time_local", None) or getattr(activity, "start_time", None)
+        distance = getattr(activity, "distance_meters", None) or getattr(activity, "distance", 0)
+
+        for sync_temp in sync_temp_list:
+            if is_same_activity(start_time, sync_temp.start_time):
+                setattr(sync_temp, id_field, activity.id)
+                sync_temp.updated_at = datetime.now(timezone.utc)
+                matched = True
+                break
+
+        if not matched:
+            new_temp = SyncTemp(user_id=user_id, batch_id=batch_id, start_time=start_time, distance=distance)
+            setattr(new_temp, id_field, activity.id)
+            db.add(new_temp)
+
+
 def _create_and_store_sync_tasks(
     db: Session, user_id: int, total_count: int
 ) -> int:
@@ -391,6 +425,7 @@ def _create_and_store_sync_tasks(
         ).order_by(desc(GarminActivity.start_time_gmt)).limit(total_count).all()
 
     coros_activities = db.query(CorosActivity).filter(
+            CorosActivity.user_id == user_id
         ).order_by(desc(CorosActivity.start_time)).limit(total_count).all()
 
     # 2. 生成唯一的批次 ID (batchId)
@@ -421,73 +456,14 @@ def _create_and_store_sync_tasks(
             )
 
     # 4. 往临时表插入 佳明中国版的数据（执行比对，匹配则更新，不匹配则新增）
-    if len(garmin_cn_activities) > 0:
-        sync_temp_list = db.query(SyncTemp).filter(
-            SyncTemp.user_id == user_id,
-            SyncTemp.batch_id == batchId,
-        ).all()
-
-        for activity in garmin_cn_activities:
-            matched = False
-            for sync_temp in sync_temp_list:
-                if sync_temp.ga_id is not None:
-                    # 判断是否是同一个活动
-                    if is_same_activity(
-                        activity.start_time_local,
-                        sync_temp.start_time,
-                    ):
-                        sync_temp.gac_id = activity.id
-                        sync_temp.updated_at = datetime.now(timezone.utc)
-                        matched = True
-                        break
-
-            if not matched:
-                db.add(
-                    SyncTemp(
-                        user_id=user_id,
-                        batch_id=batchId,
-                        gac_id=activity.id,
-                        start_time=activity.start_time_local,
-                        distance=activity.distance_meters,
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc),
-                    )
-                )
+    if garmin_cn_activities:
+        _match_and_update_sync_temp(db, user_id, batchId, garmin_cn_activities, "gac_id")
 
     # 5. 往临时表插入 高驰的数据（同上，执行跨平台匹配）
-    if len(coros_activities) > 0:
-        sync_temp_list = db.query(SyncTemp).filter(
-            SyncTemp.user_id == user_id,
-            SyncTemp.batch_id == batchId,
-        ).all()
+    if coros_activities:
+        _match_and_update_sync_temp(db, user_id, batchId, coros_activities, "ca_id")
 
-        for activity in coros_activities:
-            matched = False
-            for sync_temp in sync_temp_list:
-                if sync_temp.ga_id is not None or sync_temp.gac_id is not None: 
-                    # 判断是否是同一个活动
-                    if is_same_activity(
-                        activity.start_time,
-                        sync_temp.start_time,
-                    ):
-                        sync_temp.ca_id = activity.id
-                        sync_temp.updated_at = datetime.now(timezone.utc)
-                        matched = True
-                        break
-
-            if not matched:
-                db.add(
-                    SyncTemp(
-                        user_id=user_id,
-                        batch_id=batchId,
-                        ca_id=activity.id,
-                        start_time=activity.start_time,
-                        distance=activity.distance,
-                        created_at=datetime.now(timezone.utc),
-                        updated_at=datetime.now(timezone.utc),
-                    )
-                )
-    db.commit();
+    db.commit()
     # 6. 分析比对结果，根据缺失情况生成同步任务 (SyncTask)
     sync_temp_list = db.query(SyncTemp).filter(
         SyncTemp.user_id == user_id,
