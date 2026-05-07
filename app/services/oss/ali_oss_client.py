@@ -76,7 +76,7 @@ class AliOssClient:
         # headers["x-oss-object-acl"] = oss2.OBJECT_ACL_PRIVATE
         r = self.client.complete_multipart_upload(key, upload_id, parts, headers=headers)
         if r.status == 200:
-            print(f"上传成功，文件Key: {key}")
+            # print(f"上传成功，文件Key: {key}")
             return key
         else:
             raise AliOssError(f"完成分片上传失败, status={r.status}")

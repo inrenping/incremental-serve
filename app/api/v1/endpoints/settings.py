@@ -278,7 +278,7 @@ def sync_new_activities(
     同步所有已连接平台的最新运动记录。
     此接口会尝试为用户绑定的所有活跃平台（Garmin Global, Garmin CN, Coros）触发增量同步。
     """
-    print("一键同步开始。")
+    # print("一键同步开始。")
     results = {}
 
     # 1. 获取并处理 Garmin 配置 (可能包含多个区域)
@@ -347,7 +347,7 @@ def generate_sync_task(
     1. 生成同步任务（基于最近活动的比对）。
     2. 立即执行本次生成的上传任务。
     """
-    print("生成同步任务开始。")
+    # print("生成同步任务开始。")
     # Step 1: Generate and store sync tasks (the "picking" part)
     batchId = _create_and_store_sync_tasks(db, current_user.user_id, total_count)
 
@@ -554,7 +554,7 @@ def _create_and_store_sync_tasks(
                 add_sync_task_list.append(
                     add_sync_task(db, user_id, "GLOBAL", ga_id, "Coros")
                 )
-    print(f"本次生成的同步任务数量: {len(add_sync_task_list)}")
+    # print(f"本次生成的同步任务数量: {len(add_sync_task_list)}")
     db.add_all([t for t in add_sync_task_list if t is not None])    
     db.commit() 
     return batchId

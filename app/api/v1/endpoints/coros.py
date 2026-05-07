@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import coros_service
+from app.models.coros_connect import CorosConnect
 
 router = APIRouter()
 
@@ -30,8 +31,37 @@ def login_coros(
         user_id=current_user.user_id,
         account=payload.email,
         password_encrypted=payload.password
+    )    
+    return {
+        "status": "success",
+        "data": {
+            "coros_user_id": coros_auth.coros_user_id,
+            "region_id": coros_auth.region
+        }
+    }
+
+@router.post("/relogin")
+def relogin_coros(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    模拟高驰 (Coros) 登录并将认证信息存入数据库。
+    成功后将保存 accessToken 到 coros_connect 表。
+    """
+    coros_config = (
+        db.query(CorosConnect)
+        .filter(CorosConnect.user_id == current_user.user_id)
+        .first()
     )
-    
+    if not coros_config:
+        return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
+    coros_auth = coros_service.perform_coros_login(
+        db=db,
+        user_id=current_user.user_id,
+        account=coros_config.coros_account,
+        password_encrypted=coros_config.coros_password_encrypted
+    )    
     return {
         "status": "success",
         "data": {

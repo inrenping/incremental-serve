@@ -88,6 +88,29 @@ def save_garmin_config(
         "data": data
     }
 
+@router.post("/login")
+def login_garmin(    
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    给前端返回用户名密码，让前端去刷新认证
+    """
+    configs = garmin_service.get_garmin_configs(db, current_user.user_id)
+    if not configs:
+        raise HTTPException(status_code=404, detail="No Garmin configuration found for the user.")
+    return {
+        "status": "success",
+        "data": [
+            {
+                "username": config.garmin_account,
+                "password": config.garmin_password,
+                "platform": config.region
+            }
+            for config in configs
+        ]
+    }
+
 @router.get("/saveAllActivities")
 def save_all_activities(
     region: str = "CN",
@@ -133,7 +156,6 @@ def download_garmin_activity(
         media_type=file_response.headers.get("Content-Type", "application/octet-stream"),
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
-
 
 @router.post("/uploadGarminActivity2Garmin/{id}")
 def upload_garmin_activity_to_garmin(
