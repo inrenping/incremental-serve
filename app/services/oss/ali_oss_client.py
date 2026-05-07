@@ -6,6 +6,7 @@ import certifi
 
 from oss2 import SizedFileAdapter, determine_part_size
 from oss2.models import PartInfo
+from app.services.oss.sts_token_error import StsTokenError
 from app.utils.coros_oss_credients_utils import decode
 
 
@@ -31,23 +32,20 @@ class AliOssClient:
         sts_token_response = json.loads(response.data)
         if sts_token_response["code"] != 200:
             raise StsTokenError("获取阿里云OSS STS Token异常")
+            
         credentials = sts_token_response["data"]["credentials"]
-        credients_json = decode(credentials)
+        self.v = sts_token_response["data"].get("v", self.v)
+        credentials_json = decode(credentials)
 
-
-        SecurityToken = credients_json["SecurityToken"]
-        AccessKeyId = credients_json["AccessKeyId"]
-        AccessKeySecret = credients_json["AccessKeySecret"]
-        self.security_token = SecurityToken
-        self.access_key_id = AccessKeyId
-        self.access_key_secret = AccessKeySecret
+        self.security_token = credentials_json["SecurityToken"]
+        self.access_key_id = credentials_json["AccessKeyId"]
+        self.access_key_secret = credentials_json["AccessKeySecret"]
 
         auth = oss2.StsAuth(self.access_key_id, self.access_key_secret, self.security_token)
         self.client = oss2.Bucket(auth, "https://oss-cn-beijing.aliyuncs.com", self.bucket)
     
     def multipart_upload(self, filePath, fileName):
-        key = f"fit_zip/{fileName}"
-        print(key)
+        key = f"{fileName}"
         init_multipart_upload_result = self.client.init_multipart_upload(key)
         if init_multipart_upload_result.status != 200:
             raise AliOssError("初始化阿里云分片上传异常")
@@ -77,20 +75,14 @@ class AliOssClient:
         # 设置文件访问权限ACL。此处设置为OBJECT_ACL_PRIVATE，表示私有权限。
         # headers["x-oss-object-acl"] = oss2.OBJECT_ACL_PRIVATE
         r = self.client.complete_multipart_upload(key, upload_id, parts, headers=headers)
-        return key
-    
-
-
-
-class StsTokenError(Exception):
-
-    def __init__(self, status):
-        """Initialize."""
-        super(StsTokenError, self).__init__(status)
-        self.status = status
+        if r.status == 200:
+            print(f"上传成功，文件Key: {key}")
+            return key
+        else:
+            raise AliOssError(f"完成分片上传失败, status={r.status}")
 
 class AliOssError(Exception):
     def __init__(self, status):
-      """Initialize."""
-      super(AliOssError, self).__init__(status)
-      self.status = status
+        """Initialize."""
+        super(AliOssError, self).__init__(status)
+        self.status = status
