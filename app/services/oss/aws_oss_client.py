@@ -56,13 +56,13 @@ class AwsOssClient:
 
       # 执行上传
       try:
-          print(f"Uploading {fileName} to AWS S3...")
+          # print(f"Uploading {fileName} to AWS S3...")
           self.client.upload_file(
               filePath,
               Bucket=self.bucket,
               Key=f"{fileName}",
               Config=config
           )
-          print(f"File {fileName} uploaded successfully!")
+          # print(f"File {fileName} uploaded successfully!")
       except Exception as e:
           print(f"Upload failed: {e}")

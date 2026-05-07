@@ -106,7 +106,7 @@ def sync_coros_activities(db: Session, user_id: int, limit: Optional[int] = None
 
     while True:
         query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
-        print(f"请求高驰活动列表，URL: {query_url}, Headers: {headers}")
+        # print(f"请求高驰活动列表，URL: {query_url}, Headers: {headers}")
         try:
             response = requests.get(query_url, headers=headers, timeout=10)
             response.raise_for_status()
@@ -217,11 +217,11 @@ def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_i
     
     filesize = os.path.getsize(zip_path)
     md5_hash = calculate_md5_file(zip_path)
-    print(f"生成 ZIP 文件: {zip_path}，大小: {filesize}, MD5: {md5_hash}")
+    # print(f"生成 ZIP 文件: {zip_path}，大小: {filesize}, MD5: {md5_hash}")
 
     # 2. 上传到 OSS
     oss_path = f"fit_zip/{coros_auth.coros_user_id}/{md5_hash}.zip"
-    print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_auth.region}")
+    # print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_auth.region}")
     
     if coros_auth.region == 2:  # 中国区
         oss_client = AliOssClient()
@@ -262,9 +262,9 @@ def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_i
             data={"jsonParameter": json.dumps(params)},
             timeout=60
         ).json()
-        print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
+        # print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
     except Exception as e:
-        print("上传异常:", e)
+        # print("上传异常:", e)
         return {"status": "error", "message": f"上传异常: {str(e)}"}
         
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:        
@@ -294,10 +294,10 @@ def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> 
     # 下载 Garmin 文件
     base = "connect.garmin.cn" if ga.garmin_connect.region == "CN" else "connect.garmin.com"
     down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
-    print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
+    # print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
     headers = {"di-backend": base, "Authorization": f"Bearer {ga.garmin_connect.access_token}"}
     resp = requests.get(down_url, headers=headers, timeout=30)
-    print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
+    # print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
     file_data = resp.content
     # 校验下载文件大小
     if len(file_data) < 10000:  
