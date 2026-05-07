@@ -204,51 +204,6 @@ def get_coros_activity_download_info(db: Session, user_id: int, activity_id: int
     
     return file_response, f"coros_activity_{activity.label_id}.fit"
 
-def _upload_fit_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_id: str) -> dict:
-    """
-    直接将 FIT 文件上传到高驰服务器，不经过 ZIP 和 OSS。
-    参考用户提供的直接上传逻辑实现。
-    """
-    team_api = get_team_api_base(str(coros_auth.region))
-    upload_url = f"{team_api}/activity/fit/import"
-
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.39 Safari/537.36",
-        "referer": "https://trainingcn.coros.com/",
-        "origin": "https://trainingcn.coros.com/",
-        "accesstoken": coros_auth.access_token,
-    }
-
-    # 构造 multipart/form-data 请求
-    # sportData 对应文件，jsonParameter 对应同步参数
-    files = {
-        'sportData': (f"{source_id}.zip", fit_data, 'application/octet-stream')
-    }
-    data = {
-        'jsonParameter': json.dumps({"source": 1, "timezone": 32})
-    }
-    print(f"准备直接上传 FIT 文件到高驰，URL: {upload_url}, Headers: {headers}, Data: {data}")
-    try:
-        response = requests.post(
-            upload_url,
-            headers=headers,
-            files=files,
-            data=data,
-            timeout=60
-        )
-        res = response.json()
-        print(f"高驰直接上传响应: {json.dumps(res)}")
-        
-        if res.get("result") == "0000":
-            return {"status": "success", "message": "已成功同步到高驰", "data": res}
-        
-        return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}
-    except Exception as e:
-        print("上传异常:", e)
-        return {"status": "error", "message": f"上传异常: {str(e)}"}
-
-
 def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_id: str) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
