@@ -162,7 +162,7 @@ def sync_new_garmin_activities(db: Session, user_id: int, region: str, limit: in
     return {"status": "success", "fetched_count": fetched, "saved_count": saved}
 
 def get_garmin_activity_download_info(db: Session, user_id: int, activity_id: int) -> Tuple[requests.Response, str]:
-    """获取佳明 FIT 文件下载流。"""
+    """获取佳明 FIT 文件下载。"""
     ga = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.id == activity_id).first()
     if not ga:
         raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
@@ -181,14 +181,16 @@ def get_garmin_activity_download_info(db: Session, user_id: int, activity_id: in
     }
 
     try:
+        print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
         resp = requests.get(url, headers=headers, stream=True, timeout=30)
         print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
         if len(resp.content) < 10000:  
                print(f"下载到的 Garmin 文件可能不完整，大小: {len(resp.content)} 字节")        
         if resp.status_code != 200:
+            print(f"下载 Garmin 活动 {ga.activity_id} 失败，HTTP 状态码: {resp.status_code}，响应内容: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="文件下载失败，服务器返回错误")
             
-        return resp, f"activity_{ga.activity_id}.fit"
+        return resp, f"activity_{ga.activity_id}.zip"
     except HTTPException:
         raise
     except requests.exceptions.ConnectionError:

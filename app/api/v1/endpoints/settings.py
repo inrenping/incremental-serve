@@ -309,6 +309,8 @@ def sync_new_activities(
             detail="请先前往设置页面绑定 Garmin 或 Coros 账号，再进行同步。",
         )
 
+    # TODO 自动刷新认证  
+
     for config in garmin_configs:
         platform_key = f"garmin_{config.region.lower()}"
         try:
@@ -386,24 +388,37 @@ def _match_and_update_sync_temp(
         SyncTemp.user_id == user_id,
         SyncTemp.batch_id == batch_id,
     ).all()
-
+   
     for activity in activities:
         matched = False
-        # 适配不同模型的字段名
-        start_time = getattr(activity, "start_time_local", None) or getattr(activity, "start_time", None)
+        # 先尝试获取时间字段，如果都没有则赋值 None
+        start_time = getattr(activity, "start_time_local", None)
+        if start_time is None:
+            start_time = getattr(activity, "start_time", None)
+        
         distance = getattr(activity, "distance_meters", None) or getattr(activity, "distance", 0)
 
+        # 只有在 start_time 不为 None 的情况下才加时区
+        if start_time is not None and start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+
         for sync_temp in sync_temp_list:
-            if is_same_activity(start_time, sync_temp.start_time):
+            sync_time = sync_temp.start_time
+            if sync_time is not None and sync_time.tzinfo is None:
+                sync_time = sync_time.replace(tzinfo=timezone.utc)
+            
+            # print(f"比对时间: {start_time},{sync_time}")
+            # print(f"比对活动: {activity.id} 与临时记录: {sync_temp.id}，是否相同: {is_same_activity(start_time, sync_time)}")
+            if is_same_activity(start_time, sync_time):
                 setattr(sync_temp, id_field, activity.id)
                 sync_temp.updated_at = datetime.now(timezone.utc)
                 matched = True
                 break
 
-        if not matched:
-            new_temp = SyncTemp(user_id=user_id, batch_id=batch_id, start_time=start_time, distance=distance)
-            setattr(new_temp, id_field, activity.id)
-            db.add(new_temp)
+    if not matched:
+        new_temp = SyncTemp(user_id=user_id, batch_id=batch_id, start_time=start_time, distance=distance)
+        setattr(new_temp, id_field, activity.id)
+        db.add(new_temp)
 
 
 def _create_and_store_sync_tasks(
@@ -454,16 +469,18 @@ def _create_and_store_sync_tasks(
                     updated_at=datetime.now(timezone.utc),
                 )
             )
+    db.commit()
 
     # 4. 往临时表插入 佳明中国版的数据（执行比对，匹配则更新，不匹配则新增）
     if garmin_cn_activities:
         _match_and_update_sync_temp(db, user_id, batchId, garmin_cn_activities, "gac_id")
+    db.commit()
 
     # 5. 往临时表插入 高驰的数据（同上，执行跨平台匹配）
     if coros_activities:
         _match_and_update_sync_temp(db, user_id, batchId, coros_activities, "ca_id")
-
     db.commit()
+
     # 6. 分析比对结果，根据缺失情况生成同步任务 (SyncTask)
     sync_temp_list = db.query(SyncTemp).filter(
         SyncTemp.user_id == user_id,
