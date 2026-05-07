@@ -42,6 +42,7 @@ def login_coros(
 
 @router.post("/saveAllActivities")
 def save_all_activities(
+    total_count: int = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -49,7 +50,7 @@ def save_all_activities(
     全量获取高驰运动记录并保存到本地数据库。
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
-    return coros_service.sync_coros_activities(db, current_user.user_id)
+    return coros_service.sync_coros_activities(db, current_user.user_id, limit=total_count)
 
 @router.post("/saveNewActivities")
 def save_new_coros_activities(
