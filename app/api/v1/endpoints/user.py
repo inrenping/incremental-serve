@@ -40,7 +40,6 @@ def read_users_me(current_user: User = Depends(get_current_user)):
         }
     }
 
-
 @router.get("/socials")
 def get_user_socials(
     current_user: User = Depends(get_current_user),

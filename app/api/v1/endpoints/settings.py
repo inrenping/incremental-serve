@@ -338,8 +338,8 @@ def sync_new_activities(
         platform_key = f"garmin_{config.region.lower()}"
         try:
             # 调用 Garmin 增量同步
-            res = sync_new_garmin(
-                total_count,region=config.region, current_user=current_user, db=db
+            res = pull_new_garmin(
+                region=config.region, current_user=current_user, db=db
             )
             results[platform_key] = res
         except Exception as e:
@@ -348,7 +348,7 @@ def sync_new_activities(
     if coros_auth:
         try:
             # 调用 Coros 增量同步
-            res = sync_new_coros(total_count,current_user=current_user, db=db)
+            res = sync_new_coros(current_user=current_user, db=db)
             results["coros"] = res
         except Exception as e:
             results["coros"] = {"status": "error", "detail": str(e)}

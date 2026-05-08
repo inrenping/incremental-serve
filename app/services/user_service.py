@@ -105,7 +105,6 @@ def get_user_info(db: Session, username: str = None, email: str = None) -> Dict[
         "updated_at": user.updated_at,
     }
 
-
 def get_user_social_info(db: Session, user: User) -> list[dict]:
     """根据当前用户获取该用户的社交登录信息"""
     socials = db.query(UserSocial).filter(UserSocial.user_id == user.user_id).all()
