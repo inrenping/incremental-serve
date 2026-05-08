@@ -93,7 +93,8 @@ def refresh_garmin_activity_count(
     db: Session = Depends(get_db)
 ):
     """刷新数字"""
-    return garmin_service.refresh_garmin_activity_count(db)
+    garmin_service.refresh_garmin_activity_count(db)
+    return {"status": "success"}
 
 @router.post("/login")
 def login_garmin(    
