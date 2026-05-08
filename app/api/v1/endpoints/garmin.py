@@ -90,11 +90,10 @@ def save_garmin_config(
 
 @router.get("/refreshGarminActivityCount")
 def refresh_garmin_activity_count(
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """刷新数字"""
-    return garmin_service.refresh_garmin_activity_count(db, current_user.user_id)
+    return garmin_service.refresh_garmin_activity_count(db)
 
 @router.post("/login")
 def login_garmin(    
