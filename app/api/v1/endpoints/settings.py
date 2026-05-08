@@ -15,14 +15,15 @@ from app.models.sync_temp import SyncTemp
 from app.models.sync_task import SyncTask
 from app.core.security import get_current_user
 from app.api.v1.endpoints.garmin import (
-    save_all_activities as sync_garmin,
-    save_new_activities as sync_new_garmin,
+    pull_full_activities as pull_full_garmin,
+    pull_new_activities as pull_new_garmin,
     download_garmin_activity as download_garmin,
     upload_garmin_activity_to_garmin,
     upload_coros_activity_to_garmin,
 )
 from app.api.v1.endpoints.coros import (
-    save_all_activities as sync_coros,
+    pull_full_activities as pull_full_coros,
+    pull_new_activities as pull_new_coros,
     save_new_coros_activities as sync_new_coros,
     download_coros_activity as download_coros,
     upload_garmin_activity_to_coros,
@@ -246,8 +247,8 @@ def get_activity(
             raise HTTPException(status_code=404, detail="未找到对应的 Garmin 活动记录")
         return {"status": "success", "data": activity}
 
-@router.post("/syncAllActivities")
-def sync_all_activities(
+@router.post("/pullFullActivities")
+def pull_full_activities(
     platform: str = "garmin",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -258,13 +259,35 @@ def sync_all_activities(
     """
     if platform == "garmin":
         # 调用 Garmin 国际区同步接口
-        return sync_garmin(region="GLOBAL", current_user=current_user, db=db)
+        return pull_full_garmin(region="GLOBAL", current_user=current_user, db=db)
     elif platform == "garmin_cn":
         # 调用 Garmin 中国区同步接口
-        return sync_garmin(region="CN", current_user=current_user, db=db)
+        return pull_full_garmin(region="CN", current_user=current_user, db=db)
     elif platform == "coros":
         # 调用 Coros 同步接口
-        return sync_coros(current_user=current_user, db=db)
+        return pull_full_coros(current_user=current_user, db=db)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的平台类型")
+
+@router.post("/pullActivities")
+def pull_activities(
+    platform: str = "garmin",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    同步下载指定平台的运动记录。(增量同步，如果遇到已有数据停止同步)
+    根据 platform 参数分别调用 Garmin (Global/CN) 或 Coros 的同步逻辑。
+    """
+    if platform == "garmin":
+        # 调用 Garmin 国际区同步接口
+        return pull_new_garmin(region="GLOBAL", current_user=current_user, db=db)
+    elif platform == "garmin_cn":
+        # 调用 Garmin 中国区同步接口
+        return pull_new_garmin(region="CN", current_user=current_user, db=db)
+    elif platform == "coros":
+        # 调用 Coros 同步接口
+        return pull_new_coros(current_user=current_user, db=db)
     else:
         raise HTTPException(status_code=400, detail="不支持的平台类型")
 
@@ -315,8 +338,8 @@ def sync_new_activities(
         platform_key = f"garmin_{config.region.lower()}"
         try:
             # 调用 Garmin 增量同步
-            res = sync_new_garmin(
-                total_count,region=config.region, current_user=current_user, db=db
+            res = pull_new_garmin(
+                region=config.region, current_user=current_user, db=db
             )
             results[platform_key] = res
         except Exception as e:
@@ -325,7 +348,7 @@ def sync_new_activities(
     if coros_auth:
         try:
             # 调用 Coros 增量同步
-            res = sync_new_coros(total_count,current_user=current_user, db=db)
+            res = sync_new_coros(current_user=current_user, db=db)
             results["coros"] = res
         except Exception as e:
             results["coros"] = {"status": "error", "detail": str(e)}

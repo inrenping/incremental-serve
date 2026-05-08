@@ -82,7 +82,8 @@ def _sync_garmin_activities_internal(
     config: GarminConnect,
     user_id: int,
     start: int = 0,
-    limit: int = 100
+    limit: int = 100,
+    incremental: bool = True
 ) -> Tuple[int, int]:
     """辅助方法：抓取并保存活动。"""
     base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
@@ -110,7 +111,11 @@ def _sync_garmin_activities_internal(
     saved_count = 0
     for item in activities_data:
         activity_id = item.get("activityId")
-        if activity_id in existing_ids: continue
+        if activity_id in existing_ids:
+            if incremental:
+                # 增量同步模式下，遇到已存在记录即停止本批次后续处理
+                break
+            continue
 
         new_activity = GarminActivity(
             user_id=user_id, garmin_connect_id=config.id, activity_id=activity_id,
@@ -131,18 +136,22 @@ def _sync_garmin_activities_internal(
 
     return len(activities_data), saved_count
 
-def sync_all_garmin_activities(db: Session, user_id: int, region: str) -> dict:
-    """全量同步佳明活动。"""
+def pull_full_garmin_activities(db: Session, user_id: int, region: str,incremental : bool =True) -> dict:
+    """全量或者增量同步佳明活动。"""
     config = db.query(GarminConnect).filter(GarminConnect.user_id == user_id, GarminConnect.region == region).first()
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
     start, limit, total_saved, total_fetched = 0, 100, 0, 0
     while True:
-        fetched, saved = _sync_garmin_activities_internal(db, config, user_id, start, limit)
+        fetched, saved = _sync_garmin_activities_internal(db, config, user_id, start, limit,incremental)
         total_fetched += fetched
         total_saved += saved
         if fetched < limit: break
+        
+        # 如果是增量同步且本页保存数量小于获取数量，说明遇到了重复数据，停止分页获取
+        if incremental and saved < fetched:
+            break
         start += limit
 
     if total_fetched: update_garmin_count(db, config.id, total_fetched)
@@ -255,3 +264,12 @@ def sync_coros_to_garmin(db: Session, user_id: int, coros_activity_id: int, targ
     status, json_res = parse_garmin_upload_response(resp)
     # print(f"佳明上传活动 {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
+
+
+def refresh_garmin_activity_count(db: Session, user_id: int) -> dict:
+     garmin_auths = db.query(GarminConnect).filter(
+        GarminConnect.user_id == user_id,
+    )
+     for garmin_auth in garmin_auths:
+        activity_count = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.garmin_connect_id == garmin_auth.id).count()
+        update_garmin_count(db, garmin_auth.id, activity_count)

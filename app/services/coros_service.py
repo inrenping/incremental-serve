@@ -85,8 +85,8 @@ def perform_coros_login(
     db.commit()
     return coros_auth
 
-def sync_coros_activities(db: Session, user_id: int, limit: Optional[int] = None) -> dict:
-    """同步高驰运动记录。如果 limit 为 None 则全量同步，否则增量拉取。"""
+def pull_full_coros_activities(db: Session, user_id: int, incremental: bool = True) -> dict:
+    """同步高驰运动记录。incremental 表示是否增量拉取。"""
     coros_auth = db.query(CorosConnect).filter(
         CorosConnect.user_id == user_id,
         CorosConnect.is_active == True
@@ -98,11 +98,12 @@ def sync_coros_activities(db: Session, user_id: int, limit: Optional[int] = None
     base_url = get_team_api_base(str(coros_auth.region))
     headers = {"Accept": "application/json, text/plain, */*", "accesstoken": coros_auth.access_token}
 
-    page_size = limit if limit else 100
+    page_size = 50
     page_number = 1
     total_count = 0
     total_fetched = 0
     new_saved_count = 0
+    stop_fetching = False
 
     while True:
         query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
@@ -139,6 +140,10 @@ def sync_coros_activities(db: Session, user_id: int, limit: Optional[int] = None
         for item in activities_list:
             label_id = str(item.get("labelId"))
             if label_id in existing_ids:
+                # 如果是增量拉取则停止
+                if incremental:
+                    stop_fetching = True
+                    break
                 continue
 
             start_dt = datetime.fromtimestamp(item.get("startTime", 0), tz=timezone.utc) if item.get("startTime") else None
@@ -166,7 +171,7 @@ def sync_coros_activities(db: Session, user_id: int, limit: Optional[int] = None
             new_saved_count += 1
 
         total_fetched += len(activities_list)
-        if limit or total_fetched >= total_count or len(activities_list) < page_size:
+        if stop_fetching or total_fetched >= total_count or len(activities_list) < page_size:
             break
         page_number += 1
 
