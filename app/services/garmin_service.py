@@ -266,10 +266,12 @@ def sync_coros_to_garmin(db: Session, user_id: int, coros_activity_id: int, targ
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
 
-def refresh_garmin_activity_count(db: Session, user_id: int) -> dict:
-     garmin_auths = db.query(GarminConnect).filter(
-        GarminConnect.user_id == user_id,
-    )
-     for garmin_auth in garmin_auths:
+def refresh_garmin_activity_count(db: Session) -> dict:
+    """刷新所有用户的佳明活动总数统计。"""     
+    users = db.query(GarminConnect.user_id).distinct().all()
+    for (user_id,) in users:
+      garmin_auths = db.query(GarminConnect).filter(GarminConnect.user_id == user_id)
+      for garmin_auth in garmin_auths:
         activity_count = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.garmin_connect_id == garmin_auth.id).count()
         update_garmin_count(db, garmin_auth.id, activity_count)
+     
