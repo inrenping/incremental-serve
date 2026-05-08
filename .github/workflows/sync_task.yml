@@ -14,6 +14,5 @@ jobs:
       - name: 调用接口
         run: |
           echo "开始调用接口..."
-          RESPONSE=$(curl -s -X POST "https://i.incremental.icu/api/v1/garmin/refreshGarminActivityCount" \
-            -H "Content-Type: application/json" \
+          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/refreshGarminActivityCount" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
