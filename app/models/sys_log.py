@@ -3,7 +3,6 @@ from sqlalchemy.dialects.postgresql import JSONB, INET
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
-# 假设你使用的是项目中统一的 Base
 from app.db.session import Base
 
 class SysLog(Base):

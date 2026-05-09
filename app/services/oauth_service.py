@@ -3,6 +3,7 @@ import requests
 from typing import Dict, Any
 from fastapi import HTTPException
 from app.core.config import settings
+from app.utils.logger_utils import log_request
 
 
 # ============ Google OAuth =============
@@ -27,7 +28,9 @@ def verify_google_token(token: str, google_id: str, email: str) -> None:
         headers = {}
 
     try:
+        
         response = requests.get(verify_url, params=params, headers=headers, timeout=5)
+        
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
@@ -81,14 +84,16 @@ def exchange_github_code(code: str) -> str:
         raise HTTPException(status_code=500, detail="GitHub 客户端配置未配置")
 
     try:
+        login_url= "https://github.com/login/oauth/access_token"
+        login_data = {
+                  "client_id": settings.GIT_HUB_CLIENT_ID,
+                  "client_secret": settings.GIT_HUB_CLIENT_SECRET,
+                  "code": code,
+              }
         response = requests.post(
-            "https://github.com/login/oauth/access_token",
+            login_url,
             headers={"Accept": "application/json"},
-            data={
-                "client_id": settings.GIT_HUB_CLIENT_ID,
-                "client_secret": settings.GIT_HUB_CLIENT_SECRET,
-                "code": code,
-            },
+            data=login_data,
             timeout=5,
         )
         response.raise_for_status()

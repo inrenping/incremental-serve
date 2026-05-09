@@ -4,13 +4,18 @@ import requests
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
+from resend import api_url
 from sqlalchemy.orm import Session
 
+from app.api.v1.endpoints import user
+from app.models import user
 from app.models.garmin_connect import GarminConnect
 from app.models.garmin_activity import GarminActivity
 from app.models.coros_connect import CorosConnect
 from app.models.coros_activity import CorosActivity
+from app.models.user import User
 from app.services import coros_service
+from app.utils.logger_utils import log_operation_async, log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
@@ -94,9 +99,19 @@ def _sync_garmin_activities_internal(
         "di-backend": base_url,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-
+    api_params = {"start": start, "limit": limit}
     try:
-        response = requests.get(api_url, params={"start": start, "limit": limit}, headers=headers, timeout=10)
+        with log_request(
+          current_user=user,
+          req_url=api_url,
+          req_method="GET",
+          req_params=api_params,
+          log_type="fileUrl",
+          module_name="garmin",
+          op_desc="佳明获取运动记录)"
+        ) as ctx:
+          response = requests.get(api_url, params=api_params, headers=headers, timeout=10)
+          ctx["response"] = response          
         response.raise_for_status()
         activities_data = response.json()
     except Exception as e:
@@ -116,7 +131,7 @@ def _sync_garmin_activities_internal(
                 # 增量同步模式下，遇到已存在记录即停止本批次后续处理
                 break
             continue
-
+        
         new_activity = GarminActivity(
             user_id=user_id, garmin_connect_id=config.id, activity_id=activity_id,
             activity_name=item.get("activityName"), activity_type_key=item.get("activityType", {}).get("typeKey"),
@@ -170,9 +185,9 @@ def sync_new_garmin_activities(db: Session, user_id: int, region: str, limit: in
     db.commit()
     return {"status": "success", "fetched_count": fetched, "saved_count": saved}
 
-def get_garmin_activity_download_info(db: Session, user_id: int, activity_id: int) -> Tuple[requests.Response, str]:
+def get_garmin_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
     """获取佳明 FIT 文件下载。"""
-    ga = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.id == activity_id).first()
+    ga = db.query(GarminActivity).filter(GarminActivity.user_id == user.user_id, GarminActivity.id == activity_id).first()
     if not ga:
         raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
 
@@ -191,7 +206,18 @@ def get_garmin_activity_download_info(db: Session, user_id: int, activity_id: in
 
     try:
         print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
-        resp = requests.get(url, headers=headers, stream=True, timeout=30)
+        with log_request(
+          current_user=user,
+          req_url=url,
+          req_method="GET",
+          req_params=None,
+          log_type="fileUrl",
+          module_name="garmin",
+          op_desc="下载佳明活动文件zip)"
+        ) as ctx:
+          resp = requests.get(url, headers=headers, stream=True, timeout=30)
+          ctx["response"] = None
+
         print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
         # if len(resp.content) < 10000:  
         #        print(f"下载到的 Garmin 文件可能不完整，大小: {len(resp.content)} 字节")        
@@ -229,41 +255,68 @@ def parse_garmin_upload_response(response: requests.Response) -> Tuple[str, Opti
 
     return "UPLOAD_FAILED" if result else "UPLOAD_EXCEPTION", result
 
-def sync_garmin_to_garmin(db: Session, user_id: int, activity_id: int) -> dict:
+def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
     """佳明跨区同步逻辑。"""
-    ga = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.id == activity_id).first()
+    ga = db.query(GarminActivity).filter(GarminActivity.user_id == user.user_id, GarminActivity.id == activity_id).first()
     if not ga: raise HTTPException(status_code=404, detail="记录不存在")
 
     source_region = ga.garmin_connect.region or "CN"
     target_region = "GLOBAL" if source_region == "CN" else "CN"
 
-    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user_id, GarminConnect.region == target_region).first()
+    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == target_region).first()
     if not target_config: raise HTTPException(status_code=404, detail="目标区域未授权")
 
-    file_resp, filename = get_garmin_activity_download_info(db, user_id, activity_id)
+    file_resp, filename = get_garmin_activity_download_info(db, user, activity_id)
     file_data = file_resp.content
 
     api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
     headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
     url = f"https://{api_domain}/upload-service/upload"
-    resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+    with log_request(
+          current_user=user,
+          req_url=url,
+          req_method="POST",
+          req_params=None,
+          log_type="upload",
+          module_name="garmin",
+          op_desc="佳明上传运动"
+      ) as ctx:
+      resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+      ctx["response"] = resp
+
     status, json_res = parse_garmin_upload_response(resp)
     # print(f"佳明上传活动 {url} | {ga.activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
-def sync_coros_to_garmin(db: Session, user_id: int, coros_activity_id: int, target_region: str) -> dict:
+def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target_region: str) -> dict:
     """高驰同步到佳明逻辑。"""
-    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user_id, GarminConnect.region == target_region).first()
+    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == target_region).first()
     if not target_config: raise HTTPException(status_code=404, detail="目标佳明区域未授权")
 
-    file_resp, filename = coros_service.get_coros_activity_download_info(db, user_id, coros_activity_id)
+    file_resp, filename = coros_service.get_coros_activity_download_info(db, user, coros_activity_id)
     file_data = file_resp.content
 
     api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
     headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
     url = f"https://{api_domain}/upload-service/upload"
-    resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+    with log_request(
+        current_user=user,
+        req_url=url,
+        req_method="POST",
+        req_params=None,
+        log_type="upload",
+        module_name="garmin",
+        op_desc="上传佳明活动"
+    ) as ctx:
+      resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+      ctx["response"] = resp
     status, json_res = parse_garmin_upload_response(resp)
+    log_operation_async(
+        user_id=user.user_id,
+        log_type="UPLOAD",
+        module_name="garmin",
+        op_desc="上传活动到佳明"
+    )
     # print(f"佳明上传活动{url} | {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 

@@ -28,7 +28,7 @@ def login_coros(
     """
     coros_auth = coros_service.perform_coros_login(
         db=db,
-        user_id=current_user.user_id,
+        user=current_user,
         account=payload.email,
         password_encrypted=payload.password
     )    
@@ -58,7 +58,7 @@ def relogin_coros(
         return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
     coros_auth = coros_service.perform_coros_login(
         db=db,
-        user_id=current_user.user_id,
+        user=current_user,
         account=coros_config.coros_account,
         password_encrypted=coros_config.coros_password_encrypted
     )    
@@ -79,7 +79,7 @@ def pull_full_activities(
     全量获取高驰运动记录并保存到本地数据库。
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id,incremental=False)
+    return coros_service.pull_full_coros_activities(db, current_user,incremental=False)
 
 @router.post("/pullNewActivities")
 def pull_new_activities(
@@ -90,7 +90,7 @@ def pull_new_activities(
     全量获取高驰运动记录并保存到本地数据库。
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id,incremental=True)
+    return coros_service.pull_full_coros_activities(db, current_user,incremental=True)
 
 @router.post("/saveNewActivities")
 def save_new_coros_activities(
@@ -101,7 +101,7 @@ def save_new_coros_activities(
     增量获取最新的高驰运动记录。
     默认获取最近 10 条，适用于手动点击“同步最新”或定时任务触发。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id, incremental=True)
+    return coros_service.pull_full_coros_activities(db, current_user, incremental=True)
 
 @router.get("/downloadActivity/{id}")
 def download_coros_activity(
@@ -113,7 +113,7 @@ def download_coros_activity(
     下载高驰运动记录的 FIT 文件。
     流程：1. 请求元数据获取下载 URL -> 2. 执行 StreamingResponse 流式下载文件。
     """
-    file_response, filename = coros_service.get_coros_activity_download_info(db, current_user.user_id, id)
+    file_response, filename = coros_service.get_coros_activity_download_info(db, current_user, id)
     return StreamingResponse(
         file_response.iter_content(chunk_size=8192),
         media_type="application/octet-stream",
@@ -130,4 +130,4 @@ def upload_garmin_activity_to_coros(
     跨平台同步：将佳明的活动记录同步至高驰。
     流程：从佳明下载 FIT 原文件 -> 调用高驰 import 接口上传。
     """
-    return coros_service.sync_garmin_to_coros(db, current_user.user_id, id)
+    return coros_service.sync_garmin_to_coros(db, current_user, id)
