@@ -199,4 +199,5 @@ def upload_coros_activity_to_garmin(
     """
     按 /coros/downloadActivity 同源流程从高驰获取 FIT，再上传到当前用户绑定的佳明账号。
     """
+    region = region.upper();
     return garmin_service.sync_coros_to_garmin(db, current_user.user_id, id, target_region=region)
