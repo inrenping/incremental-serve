@@ -4,7 +4,6 @@ from sqlalchemy.orm import relationship
 
 from app.db.session import Base
 
-
 class SyncTask(Base):
     """
     数据同步任务实体，对应数据库表 `t_sync_task`。

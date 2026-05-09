@@ -1,7 +1,12 @@
 from contextlib import contextmanager
+import threading
 import time
+from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 from fastapi import Request
+from app.db.session import SessionLocal
+from app.models.operation_log import OperationLog
 from app.logger import logger
 
 @contextmanager
@@ -61,7 +66,7 @@ def log_request(
         resp_data = None
         if response is not None:
             try:
-                resp_data = response.text[:1000]  # 截取前 1000 字符
+                resp_data = response.text[:1000] if response else None
             except Exception:
                 resp_data = str(response)
 
@@ -80,3 +85,32 @@ def log_request(
             duration_ms=duration_ms,
             resp_data=resp_data,
         )
+
+def log_operation_async(
+    user_id: str,
+    log_type: str,
+    module_name: str = "",
+    op_desc: str = ""
+):
+    """
+    异步记录用户操作日志，独立线程执行，不阻塞主线程
+    """
+    def _write_log():
+        db = SessionLocal()
+        try:
+            log = OperationLog(
+                user_id=user_id,
+                log_type=log_type,
+                module_name=module_name,
+                op_desc=op_desc,
+                created_at=datetime.now(timezone.utc)
+            )
+            db.add(log)
+            db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+    threading.Thread(target=_write_log, daemon=True).start()
+

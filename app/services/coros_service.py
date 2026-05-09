@@ -17,7 +17,7 @@ from app.utils.coros_region_config import REGIONCONFIG
 from app.utils.coros_sts_config import STS_CONFIG
 from app.utils.md5_utils import calculate_md5_file
 from app.utils.config import GARMIN_FIT_DIR
-from app.utils.logger_utils import log_request
+from app.utils.logger_utils import log_operation_async, log_request
 
 def get_team_api_base(region_id: str) -> str:
     """根据区域 ID 获取高驰 Team API 的基准 URL。"""
@@ -324,7 +324,13 @@ def _upload_fit_zip_to_coros(user:User,coros_auth: CorosConnect, fit_data: bytes
     except Exception as e:
         # print("上传异常:", e)
         return {"status": "error", "message": f"上传异常: {str(e)}"}        
-    if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:        
+    if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
+        log_operation_async(
+            user_id=user.user_id,
+            log_type="UPLOAD",
+            module_name="coros",
+            op_desc="上传活动到高驰"
+        )
         return {"status": "success", "message": "已成功同步到高驰", "data": res}        
     return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}
 

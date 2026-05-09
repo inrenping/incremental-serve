@@ -130,4 +130,4 @@ def upload_garmin_activity_to_coros(
     跨平台同步：将佳明的活动记录同步至高驰。
     流程：从佳明下载 FIT 原文件 -> 调用高驰 import 接口上传。
     """
-    return coros_service.sync_garmin_to_coros(db, current_user.user_id, id)
+    return coros_service.sync_garmin_to_coros(db, current_user, id)

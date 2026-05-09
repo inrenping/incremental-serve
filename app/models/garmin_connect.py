@@ -15,7 +15,6 @@ from sqlalchemy.orm import relationship
 
 from app.db.session import Base
 
-
 class GarminConnect(Base):
     """
     Garmin 连接授权信息实体，对应数据库表 `t_garmin_connect`。

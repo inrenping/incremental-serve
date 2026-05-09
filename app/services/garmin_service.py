@@ -15,7 +15,7 @@ from app.models.coros_connect import CorosConnect
 from app.models.coros_activity import CorosActivity
 from app.models.user import User
 from app.services import coros_service
-from app.utils.logger_utils import log_request
+from app.utils.logger_utils import log_operation_async, log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
@@ -311,6 +311,12 @@ def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target
       resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
       ctx["response"] = resp
     status, json_res = parse_garmin_upload_response(resp)
+    log_operation_async(
+        user_id=user.user_id,
+        log_type="UPLOAD",
+        module_name="garmin",
+        op_desc="上传活动到佳明"
+    )
     # print(f"佳明上传活动{url} | {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
