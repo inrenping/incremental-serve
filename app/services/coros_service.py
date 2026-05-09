@@ -6,15 +6,18 @@ from typing import Optional, List, Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.models import user
 from app.models.coros_connect import CorosConnect
 from app.models.coros_activity import CorosActivity
 from app.models.garmin_activity import GarminActivity
+from app.models.user import User
 from app.services.oss.ali_oss_client import AliOssClient
 from app.services.oss.aws_oss_client import AwsOssClient
 from app.utils.coros_region_config import REGIONCONFIG
 from app.utils.coros_sts_config import STS_CONFIG
 from app.utils.md5_utils import calculate_md5_file
 from app.utils.config import GARMIN_FIT_DIR
+from app.utils.logger_utils import log_request
 
 def get_team_api_base(region_id: str) -> str:
     """根据区域 ID 获取高驰 Team API 的基准 URL。"""
@@ -37,13 +40,13 @@ def update_coros_count(db: Session, coros_connect_id: int, total_count: int) -> 
 
 def perform_coros_login(
     db: Session, 
-    user_id: int, 
+    user: User, 
     account: str, 
     password_encrypted: str, 
     is_refresh: bool = False
 ) -> CorosConnect:
     """执行高驰登录逻辑并更新授权信息。"""
-    coros_auth = db.query(CorosConnect).filter(CorosConnect.user_id == user_id).first()
+    coros_auth = db.query(CorosConnect).filter(CorosConnect.user_id == user.user_id).first()
     
     login_url = "https://teamcnapi.coros.com/account/login"
     login_data = {
@@ -58,9 +61,19 @@ def perform_coros_login(
     }
 
     try:
+      with log_request(
+          current_user=user,
+          req_url=login_url,
+          req_method="POST",
+          req_params=login_data,
+          log_type="login",
+          module_name="coros",
+          op_desc="高驰模拟登录"
+      ) as ctx:
         response = requests.post(login_url, json=login_data, headers=headers, timeout=10)
-        response.raise_for_status()
-        login_response = response.json()
+        ctx["response"] = response
+      response.raise_for_status()
+      login_response = response.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"{'刷新' if is_refresh else '登录'}失败: {str(e)}")
 
@@ -72,7 +85,7 @@ def perform_coros_login(
 
     data = login_response.get("data", {})
     if not coros_auth:
-        coros_auth = CorosConnect(user_id=user_id)
+        coros_auth = CorosConnect(user_id=user.user_id)
         db.add(coros_auth)
 
     coros_auth.coros_account = account
@@ -85,10 +98,10 @@ def perform_coros_login(
     db.commit()
     return coros_auth
 
-def pull_full_coros_activities(db: Session, user_id: int, incremental: bool = True) -> dict:
+def pull_full_coros_activities(db: Session, user: User, incremental: bool = True) -> dict:
     """同步高驰运动记录。incremental 表示是否增量拉取。"""
     coros_auth = db.query(CorosConnect).filter(
-        CorosConnect.user_id == user_id,
+        CorosConnect.user_id == user.user_id,
         CorosConnect.is_active == True
     ).first()
 
@@ -107,9 +120,19 @@ def pull_full_coros_activities(db: Session, user_id: int, incremental: bool = Tr
 
     while True:
         query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
-        # print(f"请求高驰活动列表，URL: {query_url}, Headers: {headers}")
         try:
-            response = requests.get(query_url, headers=headers, timeout=10)
+            with log_request(
+                current_user=user,
+                req_url=query_url,
+                req_method="GET",
+                req_params=None,
+                log_type="query",
+                module_name="coros",
+                op_desc="获取高驰运动记录"
+            ) as ctx:
+              response = requests.get(query_url, headers=headers, timeout=10)
+              ctx["response"] = response
+
             response.raise_for_status()
             result = response.json()
         except Exception as e:
@@ -185,13 +208,13 @@ def pull_full_coros_activities(db: Session, user_id: int, incremental: bool = Tr
         "new_saved_count": new_saved_count
     }
 
-def get_coros_activity_download_info(db: Session, user_id: int, activity_id: int) -> Tuple[requests.Response, str]:
+def get_coros_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
     """获取高驰运动记录的文件流及建议的文件名。"""
-    coros_auth = db.query(CorosConnect).filter(user_id == user_id, CorosConnect.is_active == True).first()
+    coros_auth = db.query(CorosConnect).filter(CorosConnect.user_id == user.user_id, CorosConnect.is_active == True).first()
     if not coros_auth:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权配置")
 
-    activity = db.query(CorosActivity).filter(user_id == user_id, CorosActivity.id == activity_id).first()
+    activity = db.query(CorosActivity).filter(CorosActivity.user_id == user.user_id, CorosActivity.id == activity_id).first()
     if not activity:
         raise HTTPException(status_code=404, detail="未找到运动记录")
 
@@ -199,17 +222,38 @@ def get_coros_activity_download_info(db: Session, user_id: int, activity_id: int
     meta_url = f"{base_url}/activity/detail/download?labelId={activity.label_id}&sportType={activity.sport_type}&fileType=4"
     headers = {"accesstoken": coros_auth.access_token}
 
-    meta_res = requests.post(meta_url, headers=headers, timeout=10).json()
+    with log_request(
+        current_user=user,
+        req_url=meta_url,
+        req_method="POST",
+        req_params=None,
+        log_type="download",
+        module_name="coros",
+        op_desc="高驰o获取下载运动链接"
+    ) as ctx:
+      meta_res = requests.post(meta_url, headers=headers, timeout=10).json()
+      ctx["response"] = meta_res
+
     if meta_res.get("result") != "0000":
         raise HTTPException(status_code=400, detail=f"获取下载链接失败: {meta_res.get('message')}")
 
     download_url = meta_res.get("data", {}).get("fileUrl")
-    file_response = requests.get(download_url, stream=True, timeout=30)
-    file_response.raise_for_status()
-    
+    with log_request(
+        current_user=user,
+        req_url=download_url,
+        req_method="GET",
+        req_params=None,
+        log_type="fileUrl",
+        module_name="coros",
+        op_desc="高驰下载运动文件)"
+    ) as ctx:
+      file_response = requests.get(download_url, stream=True, timeout=30)
+      ctx["response"] = None
+
+    file_response.raise_for_status()    
     return file_response, f"coros_activity_{activity.label_id}.fit"
 
-def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_id: str) -> dict:
+def _upload_fit_zip_to_coros(user:User,coros_auth: CorosConnect, fit_data: bytes, source_id: str) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
@@ -254,10 +298,18 @@ def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_i
         "object": f"{oss_path}",
         "serviceName": sts["service"],
         "oriFileName": f"{source_id}.zip"
-    }
-    
+    }    
     try:
-        res = requests.post(
+        with log_request(
+          current_user=user,
+          req_url=upload_url,
+          req_method="POST",
+          req_params=params,
+          log_type="upload",
+          module_name="coros",
+          op_desc="高驰上传运动文件"
+        ) as ctx:
+          res = requests.post(
             upload_url,
             headers={
                 "accesstoken": coros_auth.access_token,
@@ -266,23 +318,22 @@ def _upload_fit_zip_to_coros(coros_auth: CorosConnect, fit_data: bytes, source_i
             },
             data={"jsonParameter": json.dumps(params)},
             timeout=60
-        ).json()
+          ).json()
+          ctx["response"] = res
         # print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
     except Exception as e:
         # print("上传异常:", e)
-        return {"status": "error", "message": f"上传异常: {str(e)}"}
-        
+        return {"status": "error", "message": f"上传异常: {str(e)}"}        
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:        
-        return {"status": "success", "message": "已成功同步到高驰", "data": res}
-        
+        return {"status": "success", "message": "已成功同步到高驰", "data": res}        
     return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}
 
 
-def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> dict:
+def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int) -> dict:
     """将佳明活动上传到高驰，支持 OSS + uploadActivity 流程"""
     # 查询 Garmin 活动
     ga = db.query(GarminActivity).filter(
-        GarminActivity.user_id == user_id,
+        GarminActivity.user_id == user.user_id,
         GarminActivity.id == garmin_activity_id
     ).first()
     if not ga or not ga.garmin_connect:
@@ -290,7 +341,7 @@ def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> 
 
     # 查询 Coros 授权
     ca = db.query(CorosConnect).filter(
-        CorosConnect.user_id == user_id,
+        CorosConnect.user_id == user.user_id,
         CorosConnect.is_active == True
     ).first()
     if not ca:
@@ -301,7 +352,18 @@ def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> 
     down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
     # print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
     headers = {"di-backend": base, "Authorization": f"Bearer {ga.garmin_connect.access_token}"}
-    resp = requests.get(down_url, headers=headers, timeout=30)
+    with log_request(
+        current_user=user,
+        req_url=down_url,
+        req_method="GET",
+        req_params=None,
+        log_type="fileUrl",
+        module_name="garmin",
+        op_desc="佳明下载运动文件zip)"
+    ) as ctx:
+      resp = requests.get(down_url, headers=headers, timeout=30)
+      ctx["response"] = None
+
     # print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
     file_data = resp.content
     # 校验下载文件大小
@@ -312,4 +374,4 @@ def sync_garmin_to_coros(db: Session, user_id: int, garmin_activity_id: int) -> 
         )
     print(f"成功下载 Garmin 活动 {ga.activity_id}，文件大小: {len(file_data)} 字节")
 
-    return _upload_fit_zip_to_coros(ca, file_data, str(ga.activity_id))
+    return _upload_fit_zip_to_coros(user,ca, file_data, str(ga.activity_id))

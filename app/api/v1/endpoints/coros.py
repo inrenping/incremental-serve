@@ -28,7 +28,7 @@ def login_coros(
     """
     coros_auth = coros_service.perform_coros_login(
         db=db,
-        user_id=current_user.user_id,
+        user=current_user,
         account=payload.email,
         password_encrypted=payload.password
     )    
@@ -58,7 +58,7 @@ def relogin_coros(
         return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
     coros_auth = coros_service.perform_coros_login(
         db=db,
-        user_id=current_user.user_id,
+        user=current_user,
         account=coros_config.coros_account,
         password_encrypted=coros_config.coros_password_encrypted
     )    
@@ -113,7 +113,7 @@ def download_coros_activity(
     下载高驰运动记录的 FIT 文件。
     流程：1. 请求元数据获取下载 URL -> 2. 执行 StreamingResponse 流式下载文件。
     """
-    file_response, filename = coros_service.get_coros_activity_download_info(db, current_user.user_id, id)
+    file_response, filename = coros_service.get_coros_activity_download_info(db, current_user, id)
     return StreamingResponse(
         file_response.iter_content(chunk_size=8192),
         media_type="application/octet-stream",

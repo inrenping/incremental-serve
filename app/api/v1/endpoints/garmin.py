@@ -170,7 +170,7 @@ def download_garmin_activity(
     """
     下载佳明运动记录的原文件 (FIT)。
     """
-    file_response, filename = garmin_service.get_garmin_activity_download_info(db, current_user.user_id, id)
+    file_response, filename = garmin_service.get_garmin_activity_download_info(db, current_user, id)
     return StreamingResponse(
         file_response.iter_content(chunk_size=8192),
         media_type=file_response.headers.get("Content-Type", "application/octet-stream"),
@@ -187,7 +187,7 @@ def upload_garmin_activity_to_garmin(
     从活动所属区域下载 FIT，上传到另一区域佳明账号（国际↔中国）。
     需在两个区域分别完成绑定并持有有效 token。
     """
-    return garmin_service.sync_garmin_to_garmin(db, current_user.user_id, id)
+    return garmin_service.sync_garmin_to_garmin(db, current_user, id)
 
 @router.post("/uploadCorosActivity2Garmin/{id}")
 def upload_coros_activity_to_garmin(
@@ -200,4 +200,4 @@ def upload_coros_activity_to_garmin(
     按 /coros/downloadActivity 同源流程从高驰获取 FIT，再上传到当前用户绑定的佳明账号。
     """
     region = region.upper();
-    return garmin_service.sync_coros_to_garmin(db, current_user.user_id, id, target_region=region)
+    return garmin_service.sync_coros_to_garmin(db, current_user, id, target_region=region)
