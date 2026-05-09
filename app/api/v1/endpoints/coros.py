@@ -79,7 +79,7 @@ def pull_full_activities(
     全量获取高驰运动记录并保存到本地数据库。
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id,incremental=False)
+    return coros_service.pull_full_coros_activities(db, current_user,incremental=False)
 
 @router.post("/pullNewActivities")
 def pull_new_activities(
@@ -90,7 +90,7 @@ def pull_new_activities(
     全量获取高驰运动记录并保存到本地数据库。
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id,incremental=True)
+    return coros_service.pull_full_coros_activities(db, current_user,incremental=True)
 
 @router.post("/saveNewActivities")
 def save_new_coros_activities(
@@ -101,7 +101,7 @@ def save_new_coros_activities(
     增量获取最新的高驰运动记录。
     默认获取最近 10 条，适用于手动点击“同步最新”或定时任务触发。
     """
-    return coros_service.pull_full_coros_activities(db, current_user.user_id, incremental=True)
+    return coros_service.pull_full_coros_activities(db, current_user, incremental=True)
 
 @router.get("/downloadActivity/{id}")
 def download_coros_activity(

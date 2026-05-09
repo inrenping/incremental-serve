@@ -229,7 +229,7 @@ def get_coros_activity_download_info(db: Session, user: User, activity_id: int) 
         req_params=None,
         log_type="download",
         module_name="coros",
-        op_desc="高驰o获取下载运动链接"
+        op_desc="高驰获取下载运动链接"
     ) as ctx:
       meta_res = requests.post(meta_url, headers=headers, timeout=10).json()
       ctx["response"] = meta_res
@@ -249,7 +249,11 @@ def get_coros_activity_download_info(db: Session, user: User, activity_id: int) 
     ) as ctx:
       file_response = requests.get(download_url, stream=True, timeout=30)
       ctx["response"] = None
-
+    log_operation_async(
+        user_id=user.user_id,
+        log_type="DOWNLOAD",
+        module_name="coros",
+        op_desc="下载高驰运动文件")
     file_response.raise_for_status()    
     return file_response, f"coros_activity_{activity.label_id}.fit"
 
@@ -373,11 +377,11 @@ def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int) -> di
     # print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
     file_data = resp.content
     # 校验下载文件大小
-    if len(file_data) < 10000:  
-        raise HTTPException(
-            status_code=400,
-            detail=f"下载到的 Garmin 文件可能不完整，大小: {len(file_data)} 字节"
-        )
+    # if len(file_data) < 10000:  
+    #     raise HTTPException(
+    #         status_code=400,
+    #         detail=f"下载到的 Garmin 文件可能不完整，大小: {len(file_data)} 字节"
+    #     )
     print(f"成功下载 Garmin 活动 {ga.activity_id}，文件大小: {len(file_data)} 字节")
 
     return _upload_fit_zip_to_coros(user,ca, file_data, str(ga.activity_id))
