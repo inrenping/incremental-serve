@@ -245,9 +245,10 @@ def sync_garmin_to_garmin(db: Session, user_id: int, activity_id: int) -> dict:
 
     api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
     headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
-    resp = requests.post(f"https://{api_domain}/upload-service/upload", headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+    url = f"https://{api_domain}/upload-service/upload"
+    resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
     status, json_res = parse_garmin_upload_response(resp)
-    # print(f"佳明上传活动 {ga.activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
+    # print(f"佳明上传活动 {url} | {ga.activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
 def sync_coros_to_garmin(db: Session, user_id: int, coros_activity_id: int, target_region: str) -> dict:
@@ -260,9 +261,10 @@ def sync_coros_to_garmin(db: Session, user_id: int, coros_activity_id: int, targ
 
     api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
     headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
-    resp = requests.post(f"https://{api_domain}/upload-service/upload", headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
+    url = f"https://{api_domain}/upload-service/upload"
+    resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
     status, json_res = parse_garmin_upload_response(resp)
-    # print(f"佳明上传活动 {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
+    # print(f"佳明上传活动{url} | {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
 
