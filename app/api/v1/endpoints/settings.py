@@ -701,6 +701,14 @@ def delete_temp(
 
     return {"status": "success", "deletedCount": deleted_count}
 
+def to_aware_utc(dt):
+    """把 datetime 转成 UTC aware，如果是 naive 则假设是 UTC"""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
 @router.post("/oneclickSyncActivities")
 def one_click_sync_activities(
     payload: OneClickSyncRequest,
@@ -745,9 +753,32 @@ def one_click_sync_activities(
 
     # 2. 执行双向推送：p1 -> p2 和 p2 -> p1
     p1, p2 = payload.source, payload.target
+    # 预先获取两个平台的活动列表，减少数据库查询次数
+    activities_p1 = _get_activities(p1)
+    activities_p2 = _get_activities(p2)
+    platform_map = {p1: activities_p1, p2: activities_p2}
+
     for src, dst in [(p1, p2), (p2, p1)]:
-        activities = _get_activities(src)
-        for act in activities:
+        src_list = platform_map[src]
+        dst_list = platform_map[dst]
+
+        for act in src_list:
+            # 获取源活动开始时间（适配不同模型的字段名）
+            src_start = getattr(act, "start_time_local", None) or getattr(act, "start_time", None)
+            src_start = to_aware_utc(src_start)
+
+            # 检查目标平台列表中是否已存在相同的活动
+            exists = False
+            for target_act in dst_list:
+                target_start = getattr(target_act, "start_time_local", None) or getattr(target_act, "start_time", None)
+                target_start = to_aware_utc(target_start)
+                if is_same_activity(src_start, target_start):
+                    exists = True
+                    break
+
+            if exists:
+                continue
+
             try:
                 # 佳明内部跨区同步 (CN <-> GLOBAL)
                 if src.startswith("garmin") and dst.startswith("garmin"):
