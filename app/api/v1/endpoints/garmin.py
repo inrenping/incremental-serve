@@ -129,7 +129,7 @@ def pull_full_activities(
     从佳明接口获取全部运动数据并保存到本地数据库。
     使用分页参数 (start, limit) 循环拉取，直到数据取完。
     """
-    return garmin_service.pull_full_garmin_activities(db, current_user.user_id, region,True)
+    return garmin_service.pull_full_garmin_activities(db, current_user, region,True)
 
 @router.get("/pullNewActivities")
 def pull_new_activities(
@@ -141,7 +141,7 @@ def pull_new_activities(
     从佳明接口获取全部运动数据并保存到本地数据库。
     使用分页参数 (start, limit) 循环拉取，直到数据取完。
     """
-    return garmin_service.pull_full_garmin_activities(db, current_user.user_id, region,False)
+    return garmin_service.pull_full_garmin_activities(db, current_user, region,False)
 
 @router.get("/saveNewActivities")
 def save_new_activities(
