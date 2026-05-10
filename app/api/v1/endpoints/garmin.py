@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.models.user import User
-from app.models.garmin_connect import GarminConnect
 from app.core.security import get_current_user
 from app.services import garmin_service
 
