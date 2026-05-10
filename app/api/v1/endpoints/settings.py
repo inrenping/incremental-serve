@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
@@ -29,7 +30,14 @@ from app.api.v1.endpoints.coros import (
     upload_garmin_activity_to_coros,
 )
 
+from app.services import garmin_service,coros_service
+
 router = APIRouter()
+
+class OneClickSyncRequest(BaseModel):
+    """一键同步请求模型"""
+    source: str
+    target: str
 
 def format_datetime(dt: Optional[datetime]) -> str:
     """将 datetime 对象转换为 ISO 格式字符串。如果输入为空，则返回空字符串。"""
@@ -692,3 +700,69 @@ def delete_temp(
     db.commit()
 
     return {"status": "success", "deletedCount": deleted_count}
+
+@router.post("/oneclickSyncActivities")
+def one_click_sync_activities(
+    payload: OneClickSyncRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    一键同步指定源平台到目标平台。
+    由前端传入 source (源平台) 和 target (目标平台) 标识。
+    """
+    if payload.source == payload.target:
+        raise HTTPException(status_code=400, detail="源平台和目标平台不能相同")
+
+    # 1. 刷新相关平台数据
+    requested_platforms = {payload.source, payload.target}
+    if "garmin" in requested_platforms:
+        pull_new_garmin(region="GLOBAL", current_user=current_user, db=db)
+    if "garmin_cn" in requested_platforms:
+        pull_new_garmin(region="CN", current_user=current_user, db=db)
+    if "coros" in requested_platforms:
+        pull_new_coros(current_user=current_user, db=db)
+    
+    total_count = 10
+
+    def _get_activities(platform: str):
+        """辅助获取指定平台的最近运动记录"""
+        if platform == "garmin":
+            return db.query(GarminActivity).join(GarminConnect).filter(
+                GarminActivity.user_id == current_user.user_id,
+                GarminConnect.region == "GLOBAL",
+            ).order_by(desc(GarminActivity.start_time_gmt)).limit(total_count).all()
+        elif platform == "garmin_cn":
+            return db.query(GarminActivity).join(GarminConnect).filter(
+                GarminActivity.user_id == current_user.user_id,
+                GarminConnect.region == "CN",
+            ).order_by(desc(GarminActivity.start_time_gmt)).limit(total_count).all()
+        elif platform == "coros":
+            return db.query(CorosActivity).filter(
+                CorosActivity.user_id == current_user.user_id
+            ).order_by(desc(CorosActivity.start_time)).limit(total_count).all()
+        return []
+
+    # 2. 执行双向推送：p1 -> p2 和 p2 -> p1
+    p1, p2 = payload.source, payload.target
+    for src, dst in [(p1, p2), (p2, p1)]:
+        activities = _get_activities(src)
+        for act in activities:
+            try:
+                # 佳明内部跨区同步 (CN <-> GLOBAL)
+                if src.startswith("garmin") and dst.startswith("garmin"):
+                    garmin_service.sync_garmin_to_garmin(db, current_user, act.id)
+                
+                # 佳明 -> 高驰
+                elif src.startswith("garmin") and dst == "coros":
+                    coros_service.sync_garmin_to_coros(db, current_user, act.id)
+                
+                # 高驰 -> 佳明
+                elif src == "coros" and dst.startswith("garmin"):
+                    target_region = "CN" if dst == "garmin_cn" else "GLOBAL"
+                    garmin_service.sync_coros_to_garmin(db, current_user, act.id, target_region)
+            except Exception:
+                # 即使单个同步失败也继续处理后续记录
+                continue
+
+    return {"status": "success"}

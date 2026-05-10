@@ -17,5 +17,5 @@ def get_logs(
     db: Session = Depends(get_db)
 ):
     """获取最新的20条操作日志"""
-    logs = db.query(OperationLog).filter(OperationLog.user_id == current_user.user_id).order_by(desc(OperationLog.created_at)).limit(20).all()
+    logs = db.query(OperationLog).filter(OperationLog.user_id == current_user.user_id).order_by(desc(OperationLog.created_at)).limit(5).all()
     return {"status": "success", "data": logs}
