@@ -173,7 +173,7 @@ def pull_full_coros_activities(db: Session, user: User, incremental: bool = True
             end_dt = datetime.fromtimestamp(item.get("endTime", 0), tz=timezone.utc) if item.get("endTime") else None
 
             new_activity = CorosActivity(
-                user_id=user_id,
+                user_id=user.user_id,
                 coros_connect_id=coros_auth.id,
                 label_id=label_id,
                 name=item.get("name"),
@@ -369,7 +369,7 @@ def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int) -> di
         req_params=None,
         log_type="fileUrl",
         module_name="garmin",
-        op_desc="佳明下载运动文件zip)"
+        op_desc="佳明下载运动文件zip"
     ) as ctx:
       resp = requests.get(down_url, headers=headers, timeout=30)
       ctx["response"] = None

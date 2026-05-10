@@ -85,7 +85,7 @@ def save_garmin_auth_config(
 def _sync_garmin_activities_internal(
     db: Session,
     config: GarminConnect,
-    user_id: int,
+    user: User,
     start: int = 0,
     limit: int = 100,
     incremental: bool = True
@@ -108,7 +108,7 @@ def _sync_garmin_activities_internal(
           req_params=api_params,
           log_type="fileUrl",
           module_name="garmin",
-          op_desc="佳明获取运动记录)"
+          op_desc="佳明获取运动记录"
         ) as ctx:
           response = requests.get(api_url, params=api_params, headers=headers, timeout=10)
           ctx["response"] = response          
@@ -151,15 +151,15 @@ def _sync_garmin_activities_internal(
 
     return len(activities_data), saved_count
 
-def pull_full_garmin_activities(db: Session, user_id: int, region: str,incremental : bool =True) -> dict:
+def pull_full_garmin_activities(db: Session, user: User, region: str,incremental : bool =True) -> dict:
     """全量或者增量同步佳明活动。"""
-    config = db.query(GarminConnect).filter(GarminConnect.user_id == user_id, GarminConnect.region == region).first()
+    config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == region).first()
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
     start, limit, total_saved, total_fetched = 0, 100, 0, 0
     while True:
-        fetched, saved = _sync_garmin_activities_internal(db, config, user_id, start, limit,incremental)
+        fetched, saved = _sync_garmin_activities_internal(db, config, user, start, limit,incremental)
         total_fetched += fetched
         total_saved += saved
         if fetched < limit: break
@@ -174,13 +174,13 @@ def pull_full_garmin_activities(db: Session, user_id: int, region: str,increment
     db.commit()
     return {"status": "success", "fetched_count": total_fetched, "saved_count": total_saved}
 
-def sync_new_garmin_activities(db: Session, user_id: int, region: str, limit: int = 10) -> dict:
+def sync_new_garmin_activities(db: Session, user: User, region: str, limit: int = 10) -> dict:
     """增量同步最新佳明活动。"""
-    config = db.query(GarminConnect).filter(GarminConnect.user_id == user_id, GarminConnect.region == region).first()
+    config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == region).first()
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
-    fetched, saved = _sync_garmin_activities_internal(db, config, user_id, 0, limit)
+    fetched, saved = _sync_garmin_activities_internal(db, config, user, 0, limit)
     config.last_synced_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "success", "fetched_count": fetched, "saved_count": saved}
