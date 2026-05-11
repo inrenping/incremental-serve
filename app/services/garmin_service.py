@@ -133,7 +133,7 @@ def _sync_garmin_activities_internal(
             continue
         
         new_activity = GarminActivity(
-            user_id=user_id, garmin_connect_id=config.id, activity_id=activity_id,
+            user_id=user.user_id, garmin_connect_id=config.id, activity_id=activity_id,
             activity_name=item.get("activityName"), activity_type_key=item.get("activityType", {}).get("typeKey"),
             start_time_local=item.get("startTimeLocal"), start_time_gmt=item.get("startTimeGMT"),
             distance_meters=item.get("distance"), duration_seconds=item.get("duration"),
