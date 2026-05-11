@@ -1,7 +1,7 @@
 Incremental Serv
 ==========
 
-这是[Incremental](https://github.com/inrenping/incremental.icu)的后端接口，代码基本通过 Google Gemini Assist 和 Cursor 生成。
+这是[Incremental](https://github.com/inrenping/incremental.icu)的后端接口，代码基本通过 Google Gemini Assist 生成。
 
 快速开始
 --------
@@ -11,8 +11,7 @@ Incremental Serv
 
 .. code-block:: bash
 
-    apt update
-    D
+    apt update    
 
     python3 -m venv venv
     source venv/bin/activate
@@ -117,44 +116,3 @@ Incremental Serv
     sudo systemctl daemon-reload
     sudo systemctl start incremental-serve.service
     sudo systemctl status incremental-serve.service
-
-Github Actions 部署
-~~~~~~~~~~~~~~~~~~
-
-需要在 secrets 中添加以下环境变量：
-
-.. code-block:: bash
-
-    REMOTE_HOST=服务器IP
-    REMOTE_USER=服务器用户名
-    SSH_PRIVATE_KEY=远程登录用到
-    DATABASE_URL=postgresql://user:password@localhost:5432/db_name
-    # SCHEMA=your_schema_name
-    SECRET_KEY=your_secret_key_here
-    RESEND_API_KEY=re_your_secret_key_here
-    RESEND_EMAIL_FROM=Your App <noreply@yourdomain.com>
-    GOOGLE_CLIENT_ID=你的_CLIENT_ID
-    GOOGLE_CLIENT_SECRET=你的_CLIENT_SECRET
-    # GITHUB 不允许 GITHUB_ 开头的环境变量，所以改成 GIT_HUB_ 开头
-    GIT_HUB_CLIENT_ID=你的_CLIENT_ID
-    GIT_HUB_CLIENT_SECRET=你的_CLIENT_SECRET
-
-
-佳明相关 API
-~~~~~~~~~~~~~~~~~~
-
-.. code-block:: json
-
-GARMIN_URL_DICT = {
-  "garmin_connect_activities" : "/activitylist-service/activities/search/activities",
-  "garmin_connect_fit_download": "/download-service/files/activity",
-  "garmin_connect_upload": "/upload-service/upload"
-}
-
-
-[Garmin API SDK](https://github.com/cyberjunky/python-garminconnect.git)
-
-
-上传接口 
-
-https://connectapi.garmin.com/upload-service/upload/
