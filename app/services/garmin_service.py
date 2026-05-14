@@ -197,6 +197,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
 
     base = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
     url = f"https://{base}/download-service/export/fit/activity/{ga.activity_id}"
+    # url = f"https://{base}/download-service/files/activity/{ga.activity_id}"    
     
     headers = {
         "di-backend": base,
@@ -205,7 +206,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
     }
 
     try:
-        # print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
+        print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
         with log_request(
           current_user=user,
           req_url=url,
@@ -222,7 +223,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
         # if len(resp.content) < 10000:  
         #        print(f"下载到的 Garmin 文件可能不完整，大小: {len(resp.content)} 字节")        
         if resp.status_code != 200:
-            # print(f"下载 Garmin 活动 {ga.activity_id} 失败，HTTP 状态码: {resp.status_code}，响应内容: {resp.text}")
+            print(f"下载 Garmin 活动 {ga.activity_id} 失败，HTTP 状态码: {resp.status_code}，响应内容: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="文件下载失败，服务器返回错误")
             
         return resp, f"activity_{ga.activity_id}.fit"
