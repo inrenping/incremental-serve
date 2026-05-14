@@ -1,3 +1,5 @@
+import io
+import zipfile
 import json
 import base64
 import requests
@@ -186,55 +188,36 @@ def sync_new_garmin_activities(db: Session, user: User, region: str, limit: int 
     return {"status": "success", "fetched_count": fetched, "saved_count": saved}
 
 def get_garmin_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
-    """获取佳明 FIT 文件下载。"""
+    """获取佳明文件下载响应对象（不直接读取内容）。"""
     ga = db.query(GarminActivity).filter(
         GarminActivity.user_id == user.user_id,
         GarminActivity.id == activity_id
     ).first()
-
+    
     if not ga or not ga.garmin_connect:
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权或活动记录")
-
-    garmin_auth = ga.garmin_connect
     
-    base = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
-    url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
-    
+    base = "connect.garmin.cn" if ga.garmin_connect.region == "CN" else "connect.garmin.com"
+    down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
     headers = {
-        "di-backend": base,
-        "Authorization": f"Bearer {garmin_auth.access_token}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "di-backend": base, 
+        "Authorization": f"Bearer {ga.garmin_connect.access_token}",
+        "User-Agent": "Mozilla/5.0"
     }
 
     try:
-        resp = requests.get(url, headers=headers, timeout=60, stream=True)
-
-        # 记录日志（保持你的业务逻辑）
-        with log_request(
-            current_user=user,
-            req_url=url,
-            req_method="GET",
-            log_type="garmin_download",
-            module_name="garmin",
-            op_desc="流式下载佳明原始ZIP文件"
-        ) as ctx:
-            ctx["response"] = None 
-
-        if resp.status_code == 200:
-            filename = f"activity_{ga.activity_id}.zip"
-            # 返回原始 Response 对象供接口层迭代
-            return resp, filename
+        # 注意：这里不使用 with 语句，也不手动读取 .content
+        # stream=True 允许我们后续分块读取
+        resp = requests.get(down_url, headers=headers, timeout=30, stream=True)
         
-        elif resp.status_code == 404:
-            resp.close() # 显式关闭连接
-            raise HTTPException(status_code=404, detail="佳明文件不存在")
-        else:
-            error_text = resp.text
-            resp.close()
-            raise HTTPException(status_code=resp.status_code, detail=f"佳明接口错误: {error_text}")
+        if resp.status_code != 200:
+            resp.close() # 只有在失败时立即关闭
+            raise HTTPException(status_code=resp.status_code, detail="佳明文件下载失败")
+            
+        return resp, f"{ga.activity_id}.zip"
 
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"网络请求错误: {str(e)}")
 
 def parse_garmin_upload_response(response: requests.Response) -> Tuple[str, Optional[dict]]:
     """解析佳明上传接口响应。"""
@@ -257,6 +240,71 @@ def parse_garmin_upload_response(response: requests.Response) -> Tuple[str, Opti
 
     return "UPLOAD_FAILED" if result else "UPLOAD_EXCEPTION", result
 
+def _upload_file_to_garmin(
+    user: User, 
+    target_config: GarminConnect, 
+    file_data: bytes, 
+    filename: str, 
+    op_desc: str
+) -> dict:
+    """内部辅助方法：执行将文件上传到佳明服务器的通用逻辑。支持自动解压 zip 中的 fit 文件。"""
+    
+    # --- 新增逻辑：处理 ZIP 文件 ---
+    upload_data = file_data
+    upload_filename = filename
+
+    if filename.lower().endswith('.zip'):
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_data)) as z:
+                # 获取 zip 中所有后缀为 .fit 的文件列表
+                fit_files = [f for f in z.namelist() if f.lower().endswith('.fit')]
+                
+                if not fit_files:
+                    return {"status": "error", "message": "Zip 压缩包中未找到 .fit 文件"}
+                
+                # 提取第一个 fit 文件的内容
+                upload_filename = fit_files[0]
+                upload_data = z.read(upload_filename)
+        except zipfile.BadZipFile:
+            return {"status": "error", "message": "无效的 Zip 文件"}
+    # ----------------------------
+
+    target_region = target_config.region
+    api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
+    headers = {
+        "Authorization": f"Bearer {target_config.access_token}", 
+        "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"
+    }
+    url = f"https://{api_domain}/upload-service/upload"
+    
+    with log_request(
+        current_user=user,
+        req_url=url,
+        req_method="POST",
+        req_params=None,
+        log_type="upload",
+        module_name="garmin",
+        op_desc=op_desc
+    ) as ctx:
+        # 使用处理后的 upload_filename 和 upload_data
+        resp = requests.post(
+            url, 
+            headers=headers, 
+            files={"file": (upload_filename, upload_data, "application/octet-stream")}, 
+            timeout=60
+        )
+        ctx["response"] = resp
+        
+    status, json_res = parse_garmin_upload_response(resp)
+    return {
+        "status": "success", 
+        "upload_status": status, 
+        "target_region": target_region, 
+        "http_status": resp.status_code, 
+        "garmin_response": json_res,
+        "actual_filename": upload_filename  # 可选：记录实际上传的文件名
+    }
+
 def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
     """佳明跨区同步逻辑。"""
     ga = db.query(GarminActivity).filter(GarminActivity.user_id == user.user_id, GarminActivity.id == activity_id).first()
@@ -269,25 +317,7 @@ def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
     if not target_config: raise HTTPException(status_code=404, detail="目标区域未授权")
 
     file_resp, filename = get_garmin_activity_download_info(db, user, activity_id)
-    file_data = file_resp.content
-
-    api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
-    headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
-    url = f"https://{api_domain}/upload-service/upload"
-    with log_request(
-          current_user=user,
-          req_url=url,
-          req_method="POST",
-          req_params=None,
-          log_type="upload",
-          module_name="garmin",
-          op_desc="佳明上传运动"
-      ) as ctx:
-      resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
-      ctx["response"] = resp
-    status, json_res = parse_garmin_upload_response(resp)
-    # print(f"佳明上传活动 {url} | {ga.activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
-    return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
+    return _upload_file_to_garmin(user, target_config, file_resp.content, filename, "佳明上传运动")
 
 def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target_region: str) -> dict:
     """高驰同步到佳明逻辑。"""
@@ -295,26 +325,8 @@ def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target
     if not target_config: raise HTTPException(status_code=404, detail="目标佳明区域未授权")
 
     file_resp, filename = coros_service.get_coros_activity_download_info(db, user, coros_activity_id)
-    file_data = file_resp.content
-
-    api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
-    headers = {"Authorization": f"Bearer {target_config.access_token}", "di-backend": "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"}
-    url = f"https://{api_domain}/upload-service/upload"
-    with log_request(
-        current_user=user,
-        req_url=url,
-        req_method="POST",
-        req_params=None,
-        log_type="upload",
-        module_name="garmin",
-        op_desc="上传佳明活动"
-    ) as ctx:
-      resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
-      ctx["response"] = resp
-    status, json_res = parse_garmin_upload_response(resp)
-    # print(f"佳明上传活动{url} | {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
-    return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
-
+    
+    return _upload_file_to_garmin(user, target_config, file_resp.content, filename, "上传佳明活动")
 
 def refresh_garmin_activity_count(db: Session) -> dict:
     """刷新所有用户的佳明活动总数统计。"""     

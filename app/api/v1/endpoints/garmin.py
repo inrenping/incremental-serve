@@ -167,12 +167,24 @@ def download_garmin_activity(
     db: Session = Depends(get_db)
 ):
     """
-    下载佳明运动记录的原文件 (FIT)。
+    下载佳明运动记录的原文件，支持流式传输。
     """
+    # 1. 获取 Response 对象（此时连接仍处于 open 状态）
     file_response, filename = garmin_service.get_garmin_activity_download_info(db, current_user, id)
+    
+    # 2. 定义生成器，确保在传输完成后关闭连接
+    def stream_contents():
+        try:
+            # 这里的 .iter_content 是 requests 对象的方法
+            for chunk in file_response.iter_content(chunk_size=8192):
+                yield chunk
+        finally:
+            # 无论传输成功还是客户端断开，都关闭与佳明的连接
+            file_response.close()
+
     return StreamingResponse(
-        file_response.iter_content(chunk_size=8192),
-        media_type=file_response.headers.get("Content-Type", "application/octet-stream"),
+        stream_contents(),
+        media_type="application/zip", # 佳明原始文件通常是压缩包
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
 
