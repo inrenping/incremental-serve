@@ -198,7 +198,6 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
     garmin_auth = ga.garmin_connect
     
     base = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
-    
     url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
     
     headers = {
@@ -208,43 +207,31 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
     }
 
     try:
-        print(f"正在下载佳明活动: {ga.activity_id} (来源: {base})")
-        
+        resp = requests.get(url, headers=headers, timeout=60, stream=True)
+
+        # 记录日志（保持你的业务逻辑）
         with log_request(
             current_user=user,
             req_url=url,
             req_method="GET",
             log_type="garmin_download",
             module_name="garmin",
-            op_desc="下载佳明原始ZIP文件"
+            op_desc="流式下载佳明原始ZIP文件"
         ) as ctx:
-            # 增加超时时间以应对大文件
-            resp = requests.get(url, headers=headers, timeout=60)
-            ctx["response"] = None  # 防止大二进制数据存入日志
+            ctx["response"] = None 
 
         if resp.status_code == 200:
-            # 获取字节内容
-            file_data = resp.content
-            if not file_data:
-                raise HTTPException(status_code=500, detail="下载的文件为空")
-                
-            print(f"下载成功！文件大小: {len(file_data)} 字节")
-            
-            # 关键修复：确保返回的是 bytes 对象
-            return file_data, f"activity_{ga.activity_id}.zip"
+            filename = f"activity_{ga.activity_id}.zip"
+            # 返回原始 Response 对象供接口层迭代
+            return resp, filename
         
         elif resp.status_code == 404:
-            raise HTTPException(
-                status_code=404, 
-                detail=f"佳明文件不存在。请确认 ID {ga.activity_id} 是否属于 {garmin_auth.region} 区。"
-            )
+            resp.close() # 显式关闭连接
+            raise HTTPException(status_code=404, detail="佳明文件不存在")
         else:
-            # 打印错误详情便于排查
-            print(f"佳明接口返回错误: {resp.status_code} - {resp.text}")
-            raise HTTPException(
-                status_code=resp.status_code, 
-                detail=f"佳明接口返回错误"
-            )
+            error_text = resp.text
+            resp.close()
+            raise HTTPException(status_code=resp.status_code, detail=f"佳明接口错误: {error_text}")
 
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
