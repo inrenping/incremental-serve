@@ -188,59 +188,60 @@ def sync_new_garmin_activities(db: Session, user: User, region: str, limit: int 
 def get_garmin_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
     """获取佳明 FIT 文件下载。"""
     ga = db.query(GarminActivity).filter(
-        GarminActivity.user_id == user.user_id, 
+        GarminActivity.user_id == user.user_id,
         GarminActivity.id == activity_id
     ).first()
-    
-    if not ga:
-        raise HTTPException(status_code=404, detail="未找到同步记录，请刷新后重试")
+
+    if not ga or not ga.garmin_connect:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权或活动记录")
 
     garmin_auth = ga.garmin_connect
-    if not garmin_auth or not garmin_auth.access_token:
-        raise HTTPException(status_code=404, detail="未找到有效的佳明授权配置")
-
+    
+    # 国际区使用 .com，国内区使用 .cn
     base = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
-    # 建议统一使用 export/fit 接口，如果不确定，请使用 files 接口
-    url = f"https://{base}/download-service/export/fit/activity/{ga.activity_id}"
+    
+    url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
     
     headers = {
         "di-backend": base,
         "Authorization": f"Bearer {garmin_auth.access_token}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
 
     try:
+        print(f"正在下载佳明活动: {ga.activity_id} (来源: {base})")
+        
+        # 使用自定义日志记录请求（保持你的代码风格）
         with log_request(
             current_user=user,
             req_url=url,
             req_method="GET",
-            log_type="fileUrl",
+            log_type="garmin_download",
             module_name="garmin",
-            op_desc="下载佳明活动文件(fit)"
+            op_desc="下载佳明原始ZIP文件"
         ) as ctx:
-            # 不建议对小文件使用 stream=True，除非文件非常大
-            resp = requests.get(url, headers=headers, timeout=30)
-            ctx["response"] = None # 避免日志记录大量二进制数据
-        if resp.status_code != 200:
-            print(f"下载失败: {resp.status_code}, 内容: {resp.text}")
-            raise HTTPException(status_code=resp.status_code, detail="佳明服务器返回错误")
+            # 这里的 timeout 设为 60s，防止下载大文件时挂起
+            resp = requests.get(url, headers=headers, timeout=60)
+            ctx["response"] = None  # 避免日志存储二进制内容
 
-        # 4. 获取文件内容
-        file_data = resp.content
-        if not file_data:
-            raise HTTPException(status_code=500, detail="下载的文件内容为空")
-
-        # 根据 URL 确定文件名后缀
-        file_name = f"activity_{ga.activity_id}.fit"
+        if resp.status_code == 200:
+            file_data = resp.content
+            print(f"下载成功！文件大小: {len(file_data)} 字节")
+            return file_data, f"activity_{ga.activity_id}.zip"
         
-        return file_data, file_name
+        elif resp.status_code == 404:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"佳明文件不存在。请检查 ID {ga.activity_id} 是否属于 {garmin_auth.region} 区。"
+            )
+        else:
+            raise HTTPException(
+                status_code=resp.status_code, 
+                detail=f"佳明接口返回错误: {resp.text}"
+            )
 
-    except requests.exceptions.Timeout:
-        raise HTTPException(status_code=504, detail="佳明服务器响应超时，请稍后重试")
-    except requests.exceptions.ConnectionError:
-        raise HTTPException(status_code=502, detail="网络连接失败，请检查服务器网络环境")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"文件下载过程中发生异常: {str(e)}")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"网络请求失败: {str(e)}")
 
 def parse_garmin_upload_response(response: requests.Response) -> Tuple[str, Optional[dict]]:
     """解析佳明上传接口响应。"""
