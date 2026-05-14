@@ -226,7 +226,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
             print(f"下载 Garmin 活动 {ga.activity_id} 失败，HTTP 状态码: {resp.status_code}，响应内容: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="文件下载失败，服务器返回错误")
             
-        return resp, f"activity_{ga.activity_id}.fit"
+        return resp, f"activity_{ga.activity_id}.zip"
     except HTTPException:
         raise
     except requests.exceptions.ConnectionError:
