@@ -196,7 +196,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权配置，请检查账号绑定状态")
 
     base = "connect.garmin.cn" if garmin_auth.region == "CN" else "connect.garmin.com"
-    url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
+    url = f"https://{base}/download-service/export/fit/activity/{ga.activity_id}"
     
     headers = {
         "di-backend": base,
@@ -205,7 +205,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
     }
 
     try:
-        print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
+        # print(f"正在下载 Garmin 活动 {ga.activity_id}，URL: {url}")
         with log_request(
           current_user=user,
           req_url=url,
@@ -213,7 +213,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
           req_params=None,
           log_type="fileUrl",
           module_name="garmin",
-          op_desc="下载佳明活动文件zip)"
+          op_desc="下载佳明活动文件(fit)"
         ) as ctx:
           resp = requests.get(url, headers=headers, stream=True, timeout=30)
           ctx["response"] = None
@@ -225,7 +225,7 @@ def get_garmin_activity_download_info(db: Session, user: User, activity_id: int)
             # print(f"下载 Garmin 活动 {ga.activity_id} 失败，HTTP 状态码: {resp.status_code}，响应内容: {resp.text}")
             raise HTTPException(status_code=resp.status_code, detail="文件下载失败，服务器返回错误")
             
-        return resp, f"activity_{ga.activity_id}.zip"
+        return resp, f"activity_{ga.activity_id}.fit"
     except HTTPException:
         raise
     except requests.exceptions.ConnectionError:
@@ -283,7 +283,6 @@ def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
       ) as ctx:
       resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
       ctx["response"] = resp
-
     status, json_res = parse_garmin_upload_response(resp)
     # print(f"佳明上传活动 {url} | {ga.activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
@@ -311,12 +310,6 @@ def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target
       resp = requests.post(url, headers=headers, files={"file": (filename, file_data, "application/octet-stream")}, timeout=60)
       ctx["response"] = resp
     status, json_res = parse_garmin_upload_response(resp)
-    log_operation_async(
-        user_id=user.user_id,
-        log_type="UPLOAD",
-        module_name="garmin",
-        op_desc="上传活动到佳明"
-    )
     # print(f"佳明上传活动{url} | {coros_activity_id} 到 {target_region}，HTTP 状态码: {resp.status_code}，解析结果: {json.dumps(json_res)}")
     return {"status": "success", "upload_status": status, "target_region": target_region, "http_status": resp.status_code, "garmin_response": json_res}
 
