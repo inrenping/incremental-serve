@@ -1,3 +1,4 @@
+import datetime
 from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
@@ -8,6 +9,10 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
+import garth
+import base64
+import json
+from getpass import getpass
 
 router = APIRouter()
 
@@ -36,6 +41,82 @@ class GarminSaveRequest(BaseModel):
     tokenData: TokenData
     username: Optional[str] = None # 对应 garmin_account
     password: Optional[str] = None # 对应 garmin_password
+
+class GarminLoginRequest(BaseModel):
+    """高驰登录请求模型"""
+    email: str
+    password: str
+
+@router.post("/login")
+def login_garmin(
+    payload: GarminLoginRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    模拟 garmin 登录并将认证信息存入数据库。
+    成功后将保存 accessToken 到 garmin_connect 表。
+    """
+    garth.login(payload.email, payload.password);
+    secret_string = garth.client.dumps()
+    print("_" *50)
+    print(secret_string)
+    print("_" *50)
+    print(f"当前登录的用户: {garth.client.username}")
+    decoded_bytes = base64.b64decode(secret_string)
+    decoded_str = decoded_bytes.decode('utf-8')
+
+    # 2. 将字符串解析为 Python 的 list/dict 结构
+    token_data_list = json.loads(decoded_str)
+
+    # 3. 因为 garth 导出的是一个列表，我们取第一个元素（字典）
+    token_data = token_data_list[0]
+
+    # 4. 自由提取你需要的字段
+    print("="*40)
+    print(token_data)
+    print("="*40)
+
+    # # 1. 基础及客户端信息
+    # print(f"【客户端 ID】: {token_data['client_id']}")
+    # print(f"【令牌类型】: {token_data['token_type']}")
+    # print(f"【唯一流水号 (JTI)】: {token_data['jti']}")
+
+    # print("-" * 40)
+    # # 2. 生命周期与时间
+    # print(f"【Access Token 有效期】: {token_data['expires_in']} 秒 (约 {round(token_data['expires_in']/3600, 1)} 小时)")
+    # print(f"【Access Token 过期时间】: {(token_data['expires_at'])}")
+
+    # print(f"【Refresh Token 有效期】: {token_data['refresh_token_expires_in']} 秒 (约 {round(token_data['refresh_token_expires_in']/86400, 1)} 天)")
+    # print(f"【Refresh Token 过期时间】: {(token_data['refresh_token_expires_at'])}")
+
+    # print("-" * 40)
+    # # 3. 多因素认证 (MFA) 状态
+    # print(f"【MFA 状态令牌 (mfa_token)】: {token_data['mfa_token']} (Null 表示未触发或已通过多因素认证)")
+    # print(f"【MFA 过期时间戳】: {token_data['mfa_expiration_timestamp']}")
+
+    # print("-" * 40)
+    # # 4. 权限范围 (Scope) 拆解
+    # print("【当前 Token 拥有的具体权限范围 (Scope)】:")
+    # scopes = token_data['scope'].split(" ")
+    # for i, scope in enumerate(scopes, 1):
+    #     print(f"  [{i:02d}] {scope}")
+
+    # print("="*40)
+
+    garmin_auth = garmin_service.perform_garmin_login(
+        db=db,
+        user=current_user,
+        account=payload.email,
+        password_encrypted=payload.password
+    )
+    return {
+        "status": "success",
+        "data": {
+            "garmin_user_id": garmin_auth.user_id,
+            "region_id": garmin_auth.region
+        }
+    }
 
 @router.get("/getConfig")
 def get_garmin_config(

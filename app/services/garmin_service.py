@@ -13,18 +13,15 @@ from app.api.v1.endpoints import user
 from app.models import user
 from app.models.garmin_connect import GarminConnect
 from app.models.garmin_activity import GarminActivity
-from app.models.coros_connect import CorosConnect
-from app.models.coros_activity import CorosActivity
 from app.models.user import User
 from app.services import coros_service
-from app.utils.logger_utils import log_operation_async, log_request
+from app.utils.logger_utils import log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
 def get_garmin_configs(db: Session, user_id: int) -> List[GarminConnect]:
     """获取指定用户的所有佳明授权配置。"""
     return db.query(GarminConnect).filter(GarminConnect.user_id == user_id).all()
-
 
 def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -> bool:
     """更新 GarminConnect 中对应的 total_count 的值。"""
@@ -34,6 +31,17 @@ def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -
         db.commit()
         return True
     return False
+
+def perform_garmin_login(
+    db: Session, 
+    user: User, 
+    account: str, 
+    password_encrypted: str, 
+    is_refresh: bool = False
+) -> GarminConnect:
+    garmin_auth = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id).first()
+
+    return garmin_auth
 
 def save_garmin_auth_config(
     db: Session, 
