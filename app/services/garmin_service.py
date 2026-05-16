@@ -19,9 +19,13 @@ from app.utils.logger_utils import log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
-def get_garmin_configs(db: Session, user_id: int) -> List[GarminConnect]:
+def get_garmin_config(db: Session, current_user: User,config_id: Optional[int] = None) -> List[GarminConnect]:
+    """获取指定用户的指定的佳明授权配置。"""
+    return db.query(GarminConnect).filter(GarminConnect.user_id == current_user.user_id , GarminConnect.id == config_id).first()
+
+def get_garmin_configs(db: Session, current_user: User) -> List[GarminConnect]:
     """获取指定用户的所有佳明授权配置。"""
-    return db.query(GarminConnect).filter(GarminConnect.user_id == user_id).all()
+    return db.query(GarminConnect).filter(GarminConnect.user_id == current_user.user_id).all()
 
 def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -> bool:
     """更新 GarminConnect 中对应的 total_count 的值。"""

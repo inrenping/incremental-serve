@@ -1,20 +1,23 @@
-import datetime
+import os
 from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, config
 
 from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
 import garth
+from garth.http import Client
 import base64
 import json
-from getpass import getpass
+from app.utils.crypto_utils import CryptoUtils
 
 router = APIRouter()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # --- 定义前端请求的数据结构 ---
 
@@ -47,9 +50,9 @@ class GarminLoginRequest(BaseModel):
     email: str
     password: str
 
-@router.post("/login")
+@router.post("/relogin")
 def login_garmin(
-    payload: GarminLoginRequest,
+    configId: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -57,59 +60,109 @@ def login_garmin(
     模拟 garmin 登录并将认证信息存入数据库。
     成功后将保存 accessToken 到 garmin_connect 表。
     """
-    garth.login(payload.email, payload.password);
-    secret_string = garth.client.dumps()
-    print("_" *50)
-    print(secret_string)
-    print("_" *50)
-    print(f"当前登录的用户: {garth.client.username}")
-    decoded_bytes = base64.b64decode(secret_string)
-    decoded_str = decoded_bytes.decode('utf-8')
 
-    # 2. 将字符串解析为 Python 的 list/dict 结构
-    token_data_list = json.loads(decoded_str)
+    config = garmin_service.get_garmin_config(db, current_user, configId)
+    if not config:
+        raise HTTPException(status_code=404, detail="No Garmin configuration found for the user.")
+        
+    print(f"查询到的 Garmin 配置: {config.region}")    
+    
+    # 3. 解密密码
+    raw_password = CryptoUtils.decrypt(config.garmin_password, SECRET_KEY)
+    print(f"正在使用佳明 {config.region} 站点进行登录...{config.garmin_account},{raw_password}")
+    
+    # 1. 重置客户端
+    garth.client = Client()
+    
+    # 2. 配置域名
+    is_cn = config.region.upper() == "CN"
+    if is_cn:
+        garth.configure(domain="garmin.cn")
+    else:
+        garth.configure(domain="garmin.com")
 
-    # 3. 因为 garth 导出的是一个列表，我们取第一个元素（字典）
-    token_data = token_data_list[0]
+    # ==================== 【降维打击：全底层网络请求流净化补丁】 ====================
+    # 备份全局 client 最底层的普通 request 方法（无论是 GET/POST 都会走这里）
+    _original_request = garth.client.request
 
-    # 4. 自由提取你需要的字段
-    print("="*40)
-    print(token_data)
-    print("="*40)
+    def patched_request(method, url, **kwargs):
+        """
+        不论上层怎么重构，在流量真正流出服务器的最后一米，对中国区的请求进行脱敏和净化
+        """
+        if is_cn:
+            # 1. 精准清洗 Headers，干掉所有残留的国际区 SSO 跨域源
+            if "headers" in kwargs and isinstance(kwargs["headers"], dict):
+                headers = kwargs["headers"]
+                # 如果残留了国际区的 Origin 或 Referer，强行纠正或删除
+                if "Origin" in headers and "garmin.com" in headers["Origin"]:
+                    headers["Origin"] = "https://sso.garmin.cn"
+                if "Referer" in headers and "garmin.com" in headers["Referer"]:
+                    headers["Referer"] = "https://sso.garmin.cn"
+            else:
+                # 如果压根没传 headers，初始化一个，确保带上正确的国区环境
+                kwargs["headers"] = {
+                    "Origin": "https://sso.garmin.cn",
+                    "Referer": "https://sso.garmin.cn"
+                }
 
-    # # 1. 基础及客户端信息
-    # print(f"【客户端 ID】: {token_data['client_id']}")
-    # print(f"【令牌类型】: {token_data['token_type']}")
-    # print(f"【唯一流水号 (JTI)】: {token_data['jti']}")
+            # 2. 拦截并清洗请求体（Payload）中的 scope=all 隐患
+            if "data" in kwargs and isinstance(kwargs["data"], dict):
+                if kwargs["data"].get("scope") == "all":
+                    kwargs["data"].pop("scope", None)
+                    print("🚀 [Ultimate-Request-Patch] 成功剔除 data 中的 scope=all")
+            elif "json" in kwargs and isinstance(kwargs["json"], dict):
+                if kwargs["json"].get("scope") == "all":
+                    kwargs["json"].pop("scope", None)
+                    print("🚀 [Ultimate-Request-Patch] 成功剔除 json 中的 scope=all")
+            elif "params" in kwargs and isinstance(kwargs["params"], dict):
+                if kwargs["params"].get("scope") == "all":
+                    kwargs["params"].pop("scope", None)
+                    print("🚀 [Ultimate-Request-Patch] 成功剔除 params 中的 scope=all")
 
-    # print("-" * 40)
-    # # 2. 生命周期与时间
-    # print(f"【Access Token 有效期】: {token_data['expires_in']} 秒 (约 {round(token_data['expires_in']/3600, 1)} 小时)")
-    # print(f"【Access Token 过期时间】: {(token_data['expires_at'])}")
+        return _original_request(method, url, **kwargs)
 
-    # print(f"【Refresh Token 有效期】: {token_data['refresh_token_expires_in']} 秒 (约 {round(token_data['refresh_token_expires_in']/86400, 1)} 天)")
-    # print(f"【Refresh Token 过期时间】: {(token_data['refresh_token_expires_at'])}")
+    # 替换全局最底层的请求收口
+    garth.client.request = patched_request
+    # ==============================================================================
 
-    # print("-" * 40)
-    # # 3. 多因素认证 (MFA) 状态
-    # print(f"【MFA 状态令牌 (mfa_token)】: {token_data['mfa_token']} (Null 表示未触发或已通过多因素认证)")
-    # print(f"【MFA 过期时间戳】: {token_data['mfa_expiration_timestamp']}")
+    try:
+        # 执行登录
+        garth.login(config.garmin_account, raw_password)
+        
+        # 强制安全性二次校验
+        if not garth.client.oauth2_token:
+            raise ValueError("Garth 未能成功装载 OAuth2Token 凭证。")
+        
+        # 4. 确保拿到了 Token 再进行 dumps 和解析
+        secret_string = garth.client.dumps()
+        print("_" * 50)
+        print(secret_string)
+        print("_" * 50)
+        print(f"当前登录的用户: {garth.client.username}")
+        
+        # 保留你原有的 Base64 解码与 JSON 解析逻辑
+        decoded_bytes = base64.b64decode(secret_string)
+        decoded_str = decoded_bytes.decode('utf-8')
+        token_data_list = json.loads(decoded_str)
+        token_data = token_data_list[0]
 
-    # print("-" * 40)
-    # # 4. 权限范围 (Scope) 拆解
-    # print("【当前 Token 拥有的具体权限范围 (Scope)】:")
-    # scopes = token_data['scope'].split(" ")
-    # for i, scope in enumerate(scopes, 1):
-    #     print(f"  [{i:02d}] {scope}")
+        print("=" * 40)
+        print(token_data)
+        print("=" * 40)
+        
+    except Exception as e:
+        # 捕获异常，方便调试
+        print(f"❌ Garth login 实际捕获到的错误: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Garmin 认证失败: {str(e)}")
 
-    # print("="*40)
-
+    # 保持你原有的数据库存储和响应返回逻辑完全不动
     garmin_auth = garmin_service.perform_garmin_login(
         db=db,
         user=current_user,
-        account=payload.email,
-        password_encrypted=payload.password
+        account=config.garmin_account,
+        password_encrypted=config.garmin_password
     )
+    
     return {
         "status": "success",
         "data": {
