@@ -1,13 +1,14 @@
+================
 Incremental Serv
-==========
+================
 
-这是[Incremental](https://github.com/inrenping/incremental.icu)的后端接口，代码基本通过 Google Gemini Assist 生成。
+这是 `Incremental <https://github.com/inrenping/incremental.icu>`_ 的后端接口，代码基本通过 Google Gemini Assist 生成。
 
 快速开始
---------
+========
 
 安装服务
-~~~~~~~~~~
+--------
 
 .. code-block:: bash
 
@@ -17,13 +18,12 @@ Incremental Serv
     source venv/bin/activate
 
     pip install -r requirements.txt
-
     pip install gunicorn
 
-记得配置好环境变量
+*记得配置好环境变量*
 
 启动服务
-~~~~~~~~~~
+--------
 
 .. code-block:: bash
 
@@ -31,32 +31,32 @@ Incremental Serv
     python -m uvicorn app.main:app --reload
 
 更新 requirements.txt
-~~~~~~~~~~~~~~~~~~~~~
+---------------------
 
 .. code-block:: bash
 
     pip freeze > requirements.txt
 
 在服务器上查看日志
-~~~~~~~~~~~~~~~~~~~~~
+------------------
 
 .. code-block:: bash
 
     sudo journalctl -u incremental-serve.service -f
 
 部署说明
---------
+========
 
 直接运行
-~~~~~~~~
+--------
 
-1. 下载代码，进入目录
+1. 下载代码，进入目录：
 
    .. code-block:: bash
 
        git clone <repository-url> /path/to/directory
 
-   手动配置 .env 文件。
+   手动配置 ``.env`` 文件。
 
 2. 创建并激活虚拟环境：
 
@@ -65,27 +65,31 @@ Incremental Serv
        python3 -m venv venv
        source venv/bin/activate
 
-3. 安装依赖
+3. 安装依赖：
 
    .. code-block:: bash
 
        pip install --upgrade pip
        pip install -r requirements.txt
 
-4. 直接运行
+4. 直接运行：
 
    .. code-block:: bash
 
        uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 使用 Systemd 运行
-~~~~~~~~~~~~~~~~~~
+-----------------
 
 创建服务文件：
 
-.. code-block:: ini
+.. code-block:: bash
 
     sudo vi /etc/systemd/system/incremental-serve.service
+
+在文件中写入以下配置：
+
+.. code-block:: ini
 
     [Unit]
     Description=incremental-serve deploy
@@ -109,7 +113,7 @@ Incremental Serv
     WantedBy=multi-user.target
 
 启动测试
-~~~~~~~~
+--------
 
 .. code-block:: bash
 

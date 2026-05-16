@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app import db
 from app.db.session import get_db
 from app.models.coros_activity import CorosActivity
 from app.models.garmin_activity import GarminActivity
@@ -661,8 +660,7 @@ def add_sync_task(
             target_id=0,
             sync_status=-1,
             created_at=datetime.now(timezone.utc),
-        )
-    
+        )    
 
 @router.get("/downloadActivity")
 def download_activity(
