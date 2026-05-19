@@ -1,4 +1,5 @@
 import os
+os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 from typing import Any, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,6 +14,7 @@ import garth
 from garth.http import Client
 import base64
 import json
+import argparse
 from app.utils.crypto_utils import CryptoUtils
 
 router = APIRouter()
@@ -50,126 +52,171 @@ class GarminLoginRequest(BaseModel):
     email: str
     password: str
 
-@router.post("/relogin")
-def login_garmin(
+GARMIN_COM_URL_DICT = {
+    "SSO_URL_ORIGIN": "https://sso.garmin.com",
+    "SSO_URL": "https://sso.garmin.com/sso",
+    "MODERN_URL": "https://connectapi.garmin.com",
+    "SIGNIN_URL": "https://sso.garmin.com/sso/signin",
+    "UPLOAD_URL": "https://connectapi.garmin.com/upload-service/upload/",
+    "ACTIVITY_URL": "https://connectapi.garmin.com/activity-service/activity/{activity_id}",
+}
+
+GARMIN_CN_URL_DICT = {
+    "SSO_URL_ORIGIN": "https://sso.garmin.com",
+    "SSO_URL": "https://sso.garmin.cn/sso",
+    "MODERN_URL": "https://connectapi.garmin.cn",
+    "SIGNIN_URL": "https://sso.garmin.cn/sso/signin",
+    "UPLOAD_URL": "https://connectapi.garmin.cn/upload-service/upload/",
+    "ACTIVITY_URL": "https://connectapi.garmin.cn/activity-service/activity/{activity_id}",
+}
+
+@router.post("/saveGarminSecretString")
+def save_garmin_secret_string(
     configId: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    模拟 garmin 登录并将认证信息存入数据库。
+    模拟 Garmin 登录并将认证信息存入数据库。
     成功后将保存 accessToken 到 garmin_connect 表。
     """
 
-    config = garmin_service.get_garmin_config(db, current_user, configId)
-    if not config:
-        raise HTTPException(status_code=404, detail="No Garmin configuration found for the user.")
-        
-    print(f"查询到的 Garmin 配置: {config.region}")    
-    
-    # 3. 解密密码
-    raw_password = CryptoUtils.decrypt(config.garmin_password, SECRET_KEY)
-    print(f"正在使用佳明 {config.region} 站点进行登录...{config.garmin_account},{raw_password}")
-    
-    # 1. 重置客户端
-    garth.client = Client()
-    
-    # 2. 配置域名
-    is_cn = config.region.upper() == "CN"
-    if is_cn:
-        garth.configure(domain="garmin.cn")
-    else:
-        garth.configure(domain="garmin.com")
+    if not SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="SECRET_KEY not configured"
+        )
 
-    # ==================== 【降维打击：全底层网络请求流净化补丁】 ====================
-    # 备份全局 client 最底层的普通 request 方法（无论是 GET/POST 都会走这里）
-    _original_request = garth.client.request
-
-    def patched_request(method, url, **kwargs):
-        """
-        不论上层怎么重构，在流量真正流出服务器的最后一米，对中国区的请求进行脱敏和净化
-        """
-        if is_cn:
-            # 1. 精准清洗 Headers，干掉所有残留的国际区 SSO 跨域源
-            if "headers" in kwargs and isinstance(kwargs["headers"], dict):
-                headers = kwargs["headers"]
-                # 如果残留了国际区的 Origin 或 Referer，强行纠正或删除
-                if "Origin" in headers and "garmin.com" in headers["Origin"]:
-                    headers["Origin"] = "https://sso.garmin.cn"
-                if "Referer" in headers and "garmin.com" in headers["Referer"]:
-                    headers["Referer"] = "https://sso.garmin.cn"
-            else:
-                # 如果压根没传 headers，初始化一个，确保带上正确的国区环境
-                kwargs["headers"] = {
-                    "Origin": "https://sso.garmin.cn",
-                    "Referer": "https://sso.garmin.cn"
-                }
-
-            # 2. 拦截并清洗请求体（Payload）中的 scope=all 隐患
-            if "data" in kwargs and isinstance(kwargs["data"], dict):
-                if kwargs["data"].get("scope") == "all":
-                    kwargs["data"].pop("scope", None)
-                    print("🚀 [Ultimate-Request-Patch] 成功剔除 data 中的 scope=all")
-            elif "json" in kwargs and isinstance(kwargs["json"], dict):
-                if kwargs["json"].get("scope") == "all":
-                    kwargs["json"].pop("scope", None)
-                    print("🚀 [Ultimate-Request-Patch] 成功剔除 json 中的 scope=all")
-            elif "params" in kwargs and isinstance(kwargs["params"], dict):
-                if kwargs["params"].get("scope") == "all":
-                    kwargs["params"].pop("scope", None)
-                    print("🚀 [Ultimate-Request-Patch] 成功剔除 params 中的 scope=all")
-
-        return _original_request(method, url, **kwargs)
-
-    # 替换全局最底层的请求收口
-    garth.client.request = patched_request
-    # ==============================================================================
-
-    try:
-        # 执行登录
-        garth.login(config.garmin_account, raw_password)
-        
-        # 强制安全性二次校验
-        if not garth.client.oauth2_token:
-            raise ValueError("Garth 未能成功装载 OAuth2Token 凭证。")
-        
-        # 4. 确保拿到了 Token 再进行 dumps 和解析
-        secret_string = garth.client.dumps()
-        print("_" * 50)
-        print(secret_string)
-        print("_" * 50)
-        print(f"当前登录的用户: {garth.client.username}")
-        
-        # 保留你原有的 Base64 解码与 JSON 解析逻辑
-        decoded_bytes = base64.b64decode(secret_string)
-        decoded_str = decoded_bytes.decode('utf-8')
-        token_data_list = json.loads(decoded_str)
-        token_data = token_data_list[0]
-
-        print("=" * 40)
-        print(token_data)
-        print("=" * 40)
-        
-    except Exception as e:
-        # 捕获异常，方便调试
-        print(f"❌ Garth login 实际捕获到的错误: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Garmin 认证失败: {str(e)}")
-
-    # 保持你原有的数据库存储和响应返回逻辑完全不动
-    garmin_auth = garmin_service.perform_garmin_login(
-        db=db,
-        user=current_user,
-        account=config.garmin_account,
-        password_encrypted=config.garmin_password
+    garmin_config = garmin_service.get_garmin_config(
+        db,
+        current_user,
+        configId
     )
-    
+
+    if not garmin_config:
+        raise HTTPException(
+            status_code=404,
+            detail="No Garmin configuration found for the user."
+        )
+
+    print(f"查询到的 Garmin 配置: {garmin_config.region}")
+
+    # 解密密码
+    try:
+        raw_password = CryptoUtils.decrypt(
+            garmin_config.garmin_password,
+            SECRET_KEY
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"密码解密失败: {str(e)}"
+        )
+
+    print(f"正在使用佳明 {garmin_config.region} 站点进行登录...")
+    try:
+        if garmin_config.region and str(garmin_config.region).upper() == "CN":
+            garth.configure(domain="garmin.cn", ssl_verify=False)
+        else:
+            garth.configure(domain="garmin.com")
+
+        # 直接传入数据库里查到的账号和解密后的密码
+        garth.login(garmin_config.garmin_account, raw_password)
+        
+        # 导出凭证字符串
+        secret_string = garth.client.dumps()
+        print(f"成功获取到 secret_string {secret_string}")
+        
+    except garth.exc.GarthException as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"佳明登录认证失败: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"佳明连接异常: {str(e)}"
+        )
+    # =========================================================================
+
+    updated_auth = garmin_service.save_garmin_secret(
+        db=db,
+        connect_id=garmin_config.id, 
+        username=garmin_config.garmin_account,
+        password=garmin_config.garmin_password,
+        secret_string=secret_string
+    )
+
     return {
         "status": "success",
         "data": {
-            "garmin_user_id": garmin_auth.user_id,
-            "region_id": garmin_auth.region
+            "garmin_user_id": updated_auth.user_id,
+            "region_id": updated_auth.region
         }
     }
+
+@router.post("/saveGarminAccessToken") 
+def save_garmin_access_token(
+    configId: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):    
+    # 获取用户的佳明配置
+    garmin_config = garmin_service.get_garmin_config(
+        db,
+        current_user,
+        configId
+    )
+    
+    if not garmin_config or not garmin_config.secret_string:
+        raise HTTPException(
+            status_code=404,
+            detail="找不到有效的佳明配置或凭证字符串(secret_string)"
+        )
+
+    try:
+        # 1. 【核心修复】：直接注入全新的干净实例，彻底避免多用户串号，且不会触发只读属性报错
+        garth.client = Client()
+        
+        # 2. 动态配置对应的域名服务器（重新实例化后必须重新 configure）
+        if garmin_config.region and str(garmin_config.region).upper() == "CN":
+            garth.configure(domain="garmin.cn", ssl_verify=False)
+        else:
+            garth.configure(domain="garmin.com")
+            
+        # 3. 载入数据库中保存的凭证字符串
+        garth.client.loads(garmin_config.secret_string)
+        
+        # 4. 检查是否过期，过期则自动刷新
+        if garth.client.oauth2_token.expired:
+            print("OAuth2 token 已过期，自动刷新...")
+            garth.client.refresh_oauth2()
+            
+            # 将新刷新的凭证持久化回数据库
+            new_secret_string = garth.client.dumps()
+            # garmin_service.update_garmin_secret_string(
+            #     db=db, 
+            #     config_id=garmin_config.id, 
+            #     secret_string=new_secret_string
+            # )
+            print(f"已刷新 OAuth2 token 并更新 secret_string: {new_secret_string}")
+
+        # 5. 成功获取并返回最新的 access_token
+        oauth2_token = garth.client.oauth2_token
+        if not oauth2_token or not oauth2_token.access_token:
+            raise Exception("佳明 OAuth2 Token 或 access_token 字段为空")
+            
+        return {
+            "status": "success",
+            "access_token": oauth2_token.access_token
+        }
+
+    except Exception as e:
+        print(f"获取 access_token 失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"佳明 Token 处理失败: {str(e)}"
+        )
 
 @router.get("/getConfig")
 def get_garmin_config(

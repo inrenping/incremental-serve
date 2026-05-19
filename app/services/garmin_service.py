@@ -47,6 +47,29 @@ def perform_garmin_login(
 
     return garmin_auth
 
+def save_garmin_secret(
+    db: Session, 
+    connect_id: int, 
+    username: str, 
+    password: str,
+    secret_string: str  
+):
+    garmin_auth = db.query(GarminConnect).filter(
+        GarminConnect.id == connect_id
+    ).first()
+
+    if not garmin_auth:
+      raise HTTPException(status_code=404, detail="未找到对应的 Garmin 授权配置")
+    garmin_auth.is_active = True
+    garmin_auth.garmin_account = username
+    garmin_auth.garmin_password = password     
+    garmin_auth.updated_at = datetime.now(timezone.utc)
+    garmin_auth.secret_string = secret_string
+
+    db.commit()
+    return garmin_auth
+
+
 def save_garmin_auth_config(
     db: Session, 
     user_id: int, 
