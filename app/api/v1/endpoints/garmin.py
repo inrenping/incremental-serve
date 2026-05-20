@@ -1,20 +1,18 @@
 import os
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
-from typing import Any, Optional, Tuple
+import garth
+import json
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, config
+from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
-import garth
 from garth.http import Client
-import base64
-import json
-import argparse
 from app.utils.crypto_utils import CryptoUtils
 
 router = APIRouter()
@@ -44,34 +42,16 @@ class TokenData(BaseModel):
 class GarminSaveRequest(BaseModel):
     """保存 Garmin 授权配置的请求体"""
     tokenData: TokenData
-    username: Optional[str] = None # 对应 garmin_account
-    password: Optional[str] = None # 对应 garmin_password
+    username: Optional[str] = None
+    password: Optional[str] = None
 
 class GarminLoginRequest(BaseModel):
     """高驰登录请求模型"""
     email: str
     password: str
 
-GARMIN_COM_URL_DICT = {
-    "SSO_URL_ORIGIN": "https://sso.garmin.com",
-    "SSO_URL": "https://sso.garmin.com/sso",
-    "MODERN_URL": "https://connectapi.garmin.com",
-    "SIGNIN_URL": "https://sso.garmin.com/sso/signin",
-    "UPLOAD_URL": "https://connectapi.garmin.com/upload-service/upload/",
-    "ACTIVITY_URL": "https://connectapi.garmin.com/activity-service/activity/{activity_id}",
-}
-
-GARMIN_CN_URL_DICT = {
-    "SSO_URL_ORIGIN": "https://sso.garmin.com",
-    "SSO_URL": "https://sso.garmin.cn/sso",
-    "MODERN_URL": "https://connectapi.garmin.cn",
-    "SIGNIN_URL": "https://sso.garmin.cn/sso/signin",
-    "UPLOAD_URL": "https://connectapi.garmin.cn/upload-service/upload/",
-    "ACTIVITY_URL": "https://connectapi.garmin.cn/activity-service/activity/{activity_id}",
-}
-
-@router.post("/saveGarminSecretString")
-def save_garmin_secret_string(
+@router.post("/getGarminSecretString")
+def get_garmin_secret_string(
     configId: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -155,8 +135,8 @@ def save_garmin_secret_string(
         }
     }
 
-@router.post("/saveGarminAccessToken") 
-def save_garmin_access_token(
+@router.post("/getGarminAccessTokenBySecertString") 
+def get_garmin_access_token_by_secret_string(
     configId: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -175,31 +155,27 @@ def save_garmin_access_token(
         )
 
     try:
-        # 1. 【核心修复】：直接注入全新的干净实例，彻底避免多用户串号，且不会触发只读属性报错
-        garth.client = Client()
-        
-        # 2. 动态配置对应的域名服务器（重新实例化后必须重新 configure）
+        garth.client = Client()        
         if garmin_config.region and str(garmin_config.region).upper() == "CN":
             garth.configure(domain="garmin.cn", ssl_verify=False)
         else:
             garth.configure(domain="garmin.com")
-            
-        # 3. 载入数据库中保存的凭证字符串
-        garth.client.loads(garmin_config.secret_string)
-        
-        # 4. 检查是否过期，过期则自动刷新
+        garth.client.loads(garmin_config.secret_string)        
         if garth.client.oauth2_token.expired:
             print("OAuth2 token 已过期，自动刷新...")
-            garth.client.refresh_oauth2()
-            
+            garth.client.refresh_oauth2()            
             # 将新刷新的凭证持久化回数据库
             new_secret_string = garth.client.dumps()
-            # garmin_service.update_garmin_secret_string(
-            #     db=db, 
-            #     config_id=garmin_config.id, 
-            #     secret_string=new_secret_string
-            # )
-            print(f"已刷新 OAuth2 token 并更新 secret_string: {new_secret_string}")
+            secret_data = json.loads(new_secret_string)
+            garmin_service.save_garmin_auth_config(
+                db=db, 
+                config_id=garmin_config.id, 
+                user_id=current_user.user_id,
+                token_data=secret_data,
+                username=garmin_config.garmin_account,
+                password=garmin_config.garmin_password,
+                secret_string=new_secret_string
+            )
 
         # 5. 成功获取并返回最新的 access_token
         oauth2_token = garth.client.oauth2_token
