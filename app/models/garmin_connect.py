@@ -87,5 +87,6 @@ class GarminConnect(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         comment="记录更新时间",
     )
+    secret_string = Column(Text, comment="加密后的敏感信息存储字段")
 
     user = relationship("User")

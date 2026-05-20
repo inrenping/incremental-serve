@@ -15,7 +15,8 @@ curl_cffi==0.15.0
 ecdsa==0.19.2
 executing==2.2.1
 fastapi==0.135.1
-garth==0.5.21
+garmin-fit-sdk==21.202.0
+garth==0.5.17
 googleapis-common-protos==1.74.0
 greenlet==3.3.2
 h11==0.16.0

@@ -6,11 +6,8 @@ import requests
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
-from resend import api_url
 from sqlalchemy.orm import Session
 
-from app.api.v1.endpoints import user
-from app.models import user
 from app.models.garmin_connect import GarminConnect
 from app.models.garmin_activity import GarminActivity
 from app.models.user import User
@@ -36,16 +33,28 @@ def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -
         return True
     return False
 
-def perform_garmin_login(
+def save_garmin_secret(
     db: Session, 
-    user: User, 
-    account: str, 
-    password_encrypted: str, 
-    is_refresh: bool = False
-) -> GarminConnect:
-    garmin_auth = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id).first()
+    connect_id: int, 
+    username: str, 
+    password: str,
+    secret_string: str  
+):
+    garmin_auth = db.query(GarminConnect).filter(
+        GarminConnect.id == connect_id
+    ).first()
 
+    if not garmin_auth:
+      raise HTTPException(status_code=404, detail="未找到对应的 Garmin 授权配置")
+    garmin_auth.is_active = True
+    garmin_auth.garmin_account = username
+    garmin_auth.garmin_password = password     
+    garmin_auth.updated_at = datetime.now(timezone.utc)
+    garmin_auth.secret_string = secret_string
+
+    db.commit()
     return garmin_auth
+
 
 def save_garmin_auth_config(
     db: Session, 
