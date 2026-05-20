@@ -2,14 +2,12 @@ import os
 import json
 import requests
 from datetime import datetime, timezone
-from typing import Optional, List, Tuple
+from typing import Tuple
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models import user
-from app.models.coros_connect import CorosConnect
-from app.models.coros_activity import CorosActivity
-from app.models.garmin_activity import GarminActivity
+from app.models.base_connect import BaseConnect
+from app.models.base_activity import BaseActivity
 from app.models.user import User
 from app.services.oss.ali_oss_client import AliOssClient
 from app.services.oss.aws_oss_client import AwsOssClient
@@ -31,7 +29,7 @@ def get_team_api_base(region_id: str) -> str:
 
 def update_coros_count(db: Session, coros_connect_id: int, total_count: int) -> bool:
     """更新 CorosConnect 中对应的 total_count。"""
-    coros_auth = db.query(CorosConnect).filter(CorosConnect.id == coros_connect_id).first()
+    coros_auth = db.query(BaseConnect).filter(BaseConnect.id == coros_connect_id).first()
     if coros_auth:
         coros_auth.total_count = total_count
         db.commit()
@@ -41,12 +39,15 @@ def update_coros_count(db: Session, coros_connect_id: int, total_count: int) -> 
 def perform_coros_login(
     db: Session, 
     user: User, 
+    connect_id:int,
     account: str, 
     password_encrypted: str, 
     is_refresh: bool = False
-) -> CorosConnect:
+) -> BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
-    coros_auth = db.query(CorosConnect).filter(CorosConnect.user_id == user.user_id).first()
+    if not connect_id:
+        raise HTTPException(status_code=400, detail="缺少 connect_id 参数，无法登录。")
+    coros_auth = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.id == connect_id).first()
     
     login_url = "https://teamcnapi.coros.com/account/login"
     login_data = {
@@ -85,7 +86,7 @@ def perform_coros_login(
 
     data = login_response.get("data", {})
     if not coros_auth:
-        coros_auth = CorosConnect(user_id=user.user_id)
+        coros_auth = BaseConnect(user_id=user.user_id)
         db.add(coros_auth)
 
     coros_auth.coros_account = account
@@ -98,11 +99,12 @@ def perform_coros_login(
     db.commit()
     return coros_auth
 
-def pull_full_coros_activities(db: Session, user: User, incremental: bool = True) -> dict:
+def pull_full_coros_activities(db: Session, user: User,connect_id: int,incremental: bool = True) -> dict:
     """同步高驰运动记录。incremental 表示是否增量拉取。"""
-    coros_auth = db.query(CorosConnect).filter(
-        CorosConnect.user_id == user.user_id,
-        CorosConnect.is_active == True
+    coros_auth = db.query(BaseConnect).filter(
+        BaseConnect.user_id == user.user_id,
+        BaseConnect.is_active == True,
+        BaseConnect.id == connect_id
     ).first()
 
     if not coros_auth or not coros_auth.access_token:
@@ -155,8 +157,8 @@ def pull_full_coros_activities(db: Session, user: User, incremental: bool = True
         existing_ids = set()
         if label_ids:
             existing_ids = {
-                lid for (lid,) in db.query(CorosActivity.label_id)
-                .filter(CorosActivity.label_id.in_(label_ids))
+                lid for (lid,) in db.query(BaseActivity.label_id)
+                .filter(BaseActivity.activity_id.in_(label_ids))
                 .all()
             }
 
@@ -172,7 +174,7 @@ def pull_full_coros_activities(db: Session, user: User, incremental: bool = True
             start_dt = datetime.fromtimestamp(item.get("startTime", 0), tz=timezone.utc) if item.get("startTime") else None
             end_dt = datetime.fromtimestamp(item.get("endTime", 0), tz=timezone.utc) if item.get("endTime") else None
 
-            new_activity = CorosActivity(
+            new_activity = BaseActivity(
                 user_id=user.user_id,
                 coros_connect_id=coros_auth.id,
                 label_id=label_id,
@@ -208,13 +210,13 @@ def pull_full_coros_activities(db: Session, user: User, incremental: bool = True
         "new_saved_count": new_saved_count
     }
 
-def get_coros_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
+def get_coros_activity_download_info(db: Session, user: User,connect_id: int, activity_id: int) -> Tuple[requests.Response, str]:
     """获取高驰运动记录的文件流及建议的文件名。"""
-    coros_auth = db.query(CorosConnect).filter(CorosConnect.user_id == user.user_id, CorosConnect.is_active == True).first()
+    coros_auth = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.is_active == True, BaseConnect.id == connect_id).first()
     if not coros_auth:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权配置")
 
-    activity = db.query(CorosActivity).filter(CorosActivity.user_id == user.user_id, CorosActivity.id == activity_id).first()
+    activity = db.query(BaseActivity).filter(BaseActivity.user_id == user.user_id, BaseActivity.id == activity_id).first()
     if not activity:
         raise HTTPException(status_code=404, detail="未找到运动记录")
 
@@ -257,7 +259,7 @@ def get_coros_activity_download_info(db: Session, user: User, activity_id: int) 
     file_response.raise_for_status()    
     return file_response, f"coros_activity_{activity.label_id}.fit"
 
-def _upload_fit_zip_to_coros(user:User,coros_auth: CorosConnect, fit_data: bytes, source_id: str) -> dict:
+def _upload_fit_zip_to_coros(user:User,coros_auth: BaseConnect, fit_data: bytes, source_id: str) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
@@ -339,20 +341,21 @@ def _upload_fit_zip_to_coros(user:User,coros_auth: CorosConnect, fit_data: bytes
     return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}
 
 
-def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int) -> dict:
+def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int,connect_id: int) -> dict:
     """将佳明活动上传到高驰，支持 OSS + uploadActivity 流程"""
     # 查询 Garmin 活动
-    ga = db.query(GarminActivity).filter(
-        GarminActivity.user_id == user.user_id,
-        GarminActivity.id == garmin_activity_id
+    ga = db.query(BaseActivity).filter(
+        BaseActivity.user_id == user.user_id,
+        BaseActivity.id == garmin_activity_id
     ).first()
     if not ga or not ga.garmin_connect:
         raise HTTPException(status_code=404, detail="未找到有效的佳明记录或授权")
 
     # 查询 Coros 授权
-    ca = db.query(CorosConnect).filter(
-        CorosConnect.user_id == user.user_id,
-        CorosConnect.is_active == True
+    ca = db.query(BaseConnect).filter(
+        BaseConnect.user_id == user.user_id,
+        BaseConnect.is_active == True,
+        BaseConnect.id == connect_id
     ).first()
     if not ca:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")

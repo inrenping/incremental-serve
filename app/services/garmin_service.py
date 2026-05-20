@@ -8,25 +8,25 @@ from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app.models.garmin_connect import GarminConnect
-from app.models.garmin_activity import GarminActivity
+from app.models.base_connect import BaseConnect
+from app.models.base_activity import BaseActivity
 from app.models.user import User
 from app.services import coros_service
 from app.utils.logger_utils import log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
-def get_garmin_config(db: Session, current_user: User,config_id: Optional[int] = None) -> List[GarminConnect]:
+def get_garmin_config(db: Session, current_user: User,connect_id: Optional[int] = None) -> List[BaseConnect]:
     """获取指定用户的指定的佳明授权配置。"""
-    return db.query(GarminConnect).filter(GarminConnect.user_id == current_user.user_id , GarminConnect.id == config_id).first()
+    return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id , BaseConnect.id == connect_id).first()
 
-def get_garmin_configs(db: Session, current_user: User) -> List[GarminConnect]:
+def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
     """获取指定用户的所有佳明授权配置。"""
-    return db.query(GarminConnect).filter(GarminConnect.user_id == current_user.user_id).all()
+    return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
 
 def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -> bool:
-    """更新 GarminConnect 中对应的 total_count 的值。"""
-    garmin_auth = db.query(GarminConnect).filter(GarminConnect.id == garmin_connect_id).first()
+    """更新 BaseConnect 中对应的 total_count 的值。"""
+    garmin_auth = db.query(BaseConnect).filter(BaseConnect.id == garmin_connect_id).first()
     if garmin_auth:
         garmin_auth.total_count = total_count
         db.commit()
@@ -40,8 +40,8 @@ def save_garmin_secret(
     password: str,
     secret_string: str  
 ):
-    garmin_auth = db.query(GarminConnect).filter(
-        GarminConnect.id == connect_id
+    garmin_auth = db.query(BaseConnect).filter(
+        BaseConnect.id == connect_id
     ).first()
 
     if not garmin_auth:
@@ -59,6 +59,7 @@ def save_garmin_secret(
 def save_garmin_auth_config(
     db: Session, 
     user_id: int, 
+    connect_id: int,
     token_data: Any, 
     username: Optional[str] = None, 
     password: Optional[str] = None
@@ -81,13 +82,14 @@ def save_garmin_auth_config(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"解析 Garmin Token 失败: {str(e)}")
 
-    garmin_auth = db.query(GarminConnect).filter(
-        GarminConnect.user_id == user_id,
-        GarminConnect.region == region
+    garmin_auth = db.query(BaseConnect).filter(
+        BaseConnect.user_id == user_id,
+        BaseConnect.region == region,
+        BaseConnect.source_connect_id == connect_id
     ).first()
 
     if not garmin_auth:
-        garmin_auth = GarminConnect(user_id=user_id, region=region)
+        garmin_auth = BaseConnect(user_id=user_id, region=region, source_connect_id=connect_id)
         db.add(garmin_auth)
 
     garmin_auth.garmin_guid = garmin_guid
@@ -107,7 +109,7 @@ def save_garmin_auth_config(
 
 def _sync_garmin_activities_internal(
     db: Session,
-    config: GarminConnect,
+    config: BaseConnect,
     user: User,
     start: int = 0,
     limit: int = 100,
@@ -144,7 +146,7 @@ def _sync_garmin_activities_internal(
         return 0, 0
 
     activity_ids = [item.get("activityId") for item in activities_data if item.get("activityId")]
-    existing_ids = {aid for (aid,) in db.query(GarminActivity.activity_id).filter(GarminActivity.activity_id.in_(activity_ids)).all()} if activity_ids else set()
+    existing_ids = {aid for (aid,) in db.query(BaseActivity.activity_id).filter(BaseActivity.activity_id.in_(activity_ids)).all()} if activity_ids else set()
 
     saved_count = 0
     for item in activities_data:
@@ -155,7 +157,7 @@ def _sync_garmin_activities_internal(
                 break
             continue
         
-        new_activity = GarminActivity(
+        new_activity = BaseActivity(
             user_id=user.user_id, garmin_connect_id=config.id, activity_id=activity_id,
             activity_name=item.get("activityName"), activity_type_key=item.get("activityType", {}).get("typeKey"),
             start_time_local=item.get("startTimeLocal"), start_time_gmt=item.get("startTimeGMT"),
@@ -174,9 +176,9 @@ def _sync_garmin_activities_internal(
 
     return len(activities_data), saved_count
 
-def pull_full_garmin_activities(db: Session, user: User, region: str,incremental : bool =True) -> dict:
+def pull_full_garmin_activities(db: Session, user: User,connect_id:int,incremental : bool =True) -> dict:
     """全量或者增量同步佳明活动。"""
-    config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == region).first()
+    config = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.id == connect_id).first()
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
@@ -197,9 +199,9 @@ def pull_full_garmin_activities(db: Session, user: User, region: str,incremental
     db.commit()
     return {"status": "success", "fetched_count": total_fetched, "saved_count": total_saved}
 
-def sync_new_garmin_activities(db: Session, user: User, region: str, limit: int = 10) -> dict:
+def sync_new_garmin_activities(db: Session, user: User, connect_id: int,  limit: int = 10) -> dict:
     """增量同步最新佳明活动。"""
-    config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == region).first()
+    config = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.id == connect_id).first()
     if not config or not config.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的 Garmin 授权配置")
 
@@ -210,9 +212,9 @@ def sync_new_garmin_activities(db: Session, user: User, region: str, limit: int 
 
 def get_garmin_activity_download_info(db: Session, user: User, activity_id: int) -> Tuple[requests.Response, str]:
     """获取佳明文件下载响应对象（不直接读取内容）。"""
-    ga = db.query(GarminActivity).filter(
-        GarminActivity.user_id == user.user_id,
-        GarminActivity.id == activity_id
+    ga = db.query(BaseActivity).filter(
+        BaseActivity.user_id == user.user_id,
+        BaseActivity.id == activity_id
     ).first()
     
     if not ga or not ga.garmin_connect:
@@ -263,7 +265,7 @@ def parse_garmin_upload_response(response: requests.Response) -> Tuple[str, Opti
 
 def _upload_file_to_garmin(
     user: User, 
-    target_config: GarminConnect, 
+    target_config: BaseConnect, 
     file_data: bytes, 
     filename: str, 
     op_desc: str
@@ -326,23 +328,23 @@ def _upload_file_to_garmin(
         "actual_filename": upload_filename  # 可选：记录实际上传的文件名
     }
 
-def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
-    """佳明跨区同步逻辑。"""
-    ga = db.query(GarminActivity).filter(GarminActivity.user_id == user.user_id, GarminActivity.id == activity_id).first()
+def sync_garmin_to_garmin(db: Session, user: User,source_connect_id: int,target_connect_id: int, activity_id: int) -> dict:
+    """佳明之间同步逻辑。"""
+    ga = db.query(BaseActivity).filter(BaseActivity.user_id == user.user_id, BaseActivity.id == activity_id).first()
     if not ga: raise HTTPException(status_code=404, detail="记录不存在")
 
     source_region = ga.garmin_connect.region or "CN"
     target_region = "GLOBAL" if source_region == "CN" else "CN"
 
-    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == target_region).first()
+    target_config = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.region == target_region).first()
     if not target_config: raise HTTPException(status_code=404, detail="目标区域未授权")
 
     file_resp, filename = get_garmin_activity_download_info(db, user, activity_id)
     return _upload_file_to_garmin(user, target_config, file_resp.content, filename, "佳明上传运动")
 
-def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target_region: str) -> dict:
+def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, connect_id: int) -> dict:
     """高驰同步到佳明逻辑。"""
-    target_config = db.query(GarminConnect).filter(GarminConnect.user_id == user.user_id, GarminConnect.region == target_region).first()
+    target_config = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
     if not target_config: raise HTTPException(status_code=404, detail="目标佳明区域未授权")
 
     file_resp, filename = coros_service.get_coros_activity_download_info(db, user, coros_activity_id)
@@ -351,10 +353,10 @@ def sync_coros_to_garmin(db: Session, user: User, coros_activity_id: int, target
 
 def refresh_garmin_activity_count(db: Session) -> dict:
     """刷新所有用户的佳明活动总数统计。"""     
-    users = db.query(GarminConnect.user_id).distinct().all()
+    users = db.query(BaseConnect.user_id).distinct().all()
     for (user_id,) in users:
-      garmin_auths = db.query(GarminConnect).filter(GarminConnect.user_id == user_id)
+      garmin_auths = db.query(BaseConnect).filter(BaseConnect.user_id == user_id)
       for garmin_auth in garmin_auths:
-        activity_count = db.query(GarminActivity).filter(GarminActivity.user_id == user_id, GarminActivity.garmin_connect_id == garmin_auth.id).count()
+        activity_count = db.query(BaseActivity).filter(BaseActivity.user_id == user_id, BaseActivity.garmin_connect_id == garmin_auth.id).count()
         update_garmin_count(db, garmin_auth.id, activity_count)
      

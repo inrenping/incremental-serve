@@ -4,8 +4,8 @@ from sqlalchemy import desc
 
 from app.core.security import get_current_user
 from app.db.session import get_db
-from app.models.operation_log import OperationLog
-from app.models.sys_log import SysLog
+from app.models.log_operation import OperationLog
+from app.models.log_api import SysLog
 from app.models.user import User
 
 

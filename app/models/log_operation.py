@@ -4,9 +4,9 @@ from app.db.session import Base
 class OperationLog(Base):
     """
     用户操作日志实体类
-    映射表名: public.t_operation_log
+    映射表名: public.t_log_operation
     """
-    __tablename__ = "t_operation_log"
+    __tablename__ = "t_log_operation"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键，自增ID")
     user_id = Column(

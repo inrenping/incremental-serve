@@ -137,7 +137,7 @@ def get_garmin_secret_string(
 
 @router.post("/getGarminAccessTokenBySecertString") 
 def get_garmin_access_token_by_secret_string(
-    configId: int,
+    connectId: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):    
@@ -145,7 +145,7 @@ def get_garmin_access_token_by_secret_string(
     garmin_config = garmin_service.get_garmin_config(
         db,
         current_user,
-        configId
+        connectId
     )
     
     if not garmin_config or not garmin_config.secret_string:

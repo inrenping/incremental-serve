@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 from fastapi import Request
 from app.db.session import SessionLocal
-from app.models.operation_log import OperationLog
+from app.models.log_operation import OperationLog
 from app.logger import logger
 
 @contextmanager

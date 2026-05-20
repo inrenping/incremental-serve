@@ -7,7 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import coros_service
-from app.models.coros_connect import CorosConnect
+from app.models.base_connect import BaseConnect
 
 router = APIRouter()
 
@@ -42,6 +42,7 @@ def login_coros(
 
 @router.post("/relogin")
 def relogin_coros(
+    connect_id: int = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -49,9 +50,11 @@ def relogin_coros(
     模拟高驰 (Coros) 登录并将认证信息存入数据库。
     成功后将保存 accessToken 到 coros_connect 表。
     """
+    if not connect_id:
+        return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
     coros_config = (
-        db.query(CorosConnect)
-        .filter(CorosConnect.user_id == current_user.user_id)
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.user_id,BaseConnect.id == connect_id)
         .first()
     )
     if not coros_config:
@@ -59,6 +62,7 @@ def relogin_coros(
     coros_auth = coros_service.perform_coros_login(
         db=db,
         user=current_user,
+        connect_id=connect_id,
         account=coros_config.coros_account,
         password_encrypted=coros_config.coros_password_encrypted
     )    

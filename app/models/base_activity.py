@@ -38,7 +38,7 @@ class BaseActivity(Base):
         nullable=False,
         comment="数据来源: garmin(佳明), coros(高驰), strava 等",
     )
-    origin_activity_id = Column(
+    activity_id = Column(
         String(64),
         nullable=False,
         unique=True,  # 配合 source_provider 构成唯一逻辑，若在DB层是联合唯一，可保持该字段的独立或通过联合约束表达
