@@ -21,8 +21,10 @@ from app.utils.logger_utils import log_request
 
 GARMIN_UPLOAD_API_DOMAIN = {"CN": "connectapi.garmin.cn", "GLOBAL": "connectapi.garmin.com"}
 
-def get_garmin_config(db: Session, current_user: User,connect_id: Optional[int] = None) -> List[BaseConnect]:
+def get_garmin_connect(connect_id: int, db: Session, current_user: User) -> List[BaseConnect]:
     """获取指定用户的指定的佳明授权配置。"""
+    if not connect_id:
+        return None
     return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id , BaseConnect.id == connect_id).first()
 
 def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
@@ -38,121 +40,138 @@ def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -
         return True
     return False
 
-def save_garmin_secret(
+def save_garmin_connection(
     db: Session, 
-    connect_id: int, 
-    username: str, 
-    password: str,
-    secret_string: str  
-):
-    garmin_auth = db.query(BaseConnect).filter(
-        BaseConnect.id == connect_id
-    ).first()
+    user_id: int, 
+    id: Optional[int] = None,
+    token_data: Any = None, 
+    secret_string: Optional[str] = None,
+    username: Optional[str] = None, 
+    password: Optional[str] = None
+) -> BaseConnect:
+    """
+    支持从 OAuth token 数据 (TokenData) 或 Garth 凭据字符串 (secret_string) 进行更新。
+    """
+    region = None
+    garmin_guid = None
 
+    # 1. 如果提供了 token_data，优先解析以确定 region 和 guid
+    if token_data:
+        try:
+            oauth2 = token_data.oauth2
+            _, payload_b64, _ = oauth2.access_token.split('.')
+            missing_padding = len(payload_b64) % 4
+            if missing_padding:
+                payload_b64 += '=' * (4 - missing_padding)
+            
+            decoded_payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode('utf-8'))
+            garmin_guid = decoded_payload.get("garmin_guid")
+            iss = decoded_payload.get("iss", "")
+            region = "GLOBAL" if "garmin.com" in iss else "CN"
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"解析 Garmin Token 失败: {str(e)}")
+
+    # 2. 定位记录：优先按数据库主键查找，次选业务逻辑查找
+    garmin_auth = None
+    if id:
+        garmin_auth = db.query(BaseConnect).filter(BaseConnect.id == id).first()
+    
+    if not garmin_auth and region:
+        query = db.query(BaseConnect).filter(
+            BaseConnect.user_id == user_id,
+            BaseConnect.region == region
+        )       
+        garmin_auth = query.first()
+
+    # 3. 如果还是没找到且具备创建条件，则新建
     if not garmin_auth:
-      raise HTTPException(status_code=404, detail="未找到对应的 Garmin 授权配置")
+        if not region:
+            raise HTTPException(status_code=400, detail="未找到现有配置且缺少足够信息（Region）创建新配置")
+        garmin_auth = BaseConnect(user_id=user_id, region=region)
+        db.add(garmin_auth)
+    # 4. 统一更新字段
     garmin_auth.is_active = True
-    garmin_auth.garmin_account = username
-    garmin_auth.garmin_password = password     
     garmin_auth.updated_at = datetime.now(timezone.utc)
-    garmin_auth.secret_string = secret_string
+    if username: garmin_auth.account = username
+    if password: garmin_auth.encrypted_password = password
+    if secret_string: garmin_auth.secret_string = secret_string
+    if garmin_guid: garmin_auth.guid = garmin_guid
+
+    if token_data:
+        oauth1 = token_data.oauth1
+        oauth2 = token_data.oauth2
+        garmin_auth.oauth_token = oauth1.oauth_token
+        garmin_auth.oauth_token_secret = oauth1.oauth_token_secret
+        garmin_auth.access_token = oauth2.access_token
+        garmin_auth.refresh_token = oauth2.refresh_token
+        garmin_auth.access_token_expires_at = datetime.fromtimestamp(oauth2.expires_at)
+        garmin_auth.refresh_token_expires_at = datetime.fromtimestamp(oauth2.refresh_token_expires_at)
 
     db.commit()
     return garmin_auth
 
-
-def save_garmin_auth_config(
-    db: Session, 
-    user_id: int, 
-    connect_id: int,
-    token_data: Any, 
-    username: Optional[str] = None, 
-    password: Optional[str] = None
-) -> dict:
-    """解析并保存 Garmin 授权配置。"""
-    oauth2 = token_data.oauth2
-    oauth1 = token_data.oauth1
-
-    try:
-        _, payload_b64, _ = oauth2.access_token.split('.')
-        missing_padding = len(payload_b64) % 4
-        if missing_padding:
-            payload_b64 += '=' * (4 - missing_padding)
-        
-        decoded_payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode('utf-8'))
-        garmin_guid = decoded_payload.get("garmin_guid")
-        iss = decoded_payload.get("iss", "")
-
-        region = "GLOBAL" if "garmin.com" in iss else "CN"
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"解析 Garmin Token 失败: {str(e)}")
-
-    garmin_auth = db.query(BaseConnect).filter(
-        BaseConnect.user_id == user_id,
-        BaseConnect.region == region,
-        BaseConnect.source_connect_id == connect_id
-    ).first()
-
-    if not garmin_auth:
-        garmin_auth = BaseConnect(user_id=user_id, region=region, source_connect_id=connect_id)
-        db.add(garmin_auth)
-
-    garmin_auth.garmin_guid = garmin_guid
-    garmin_auth.oauth_token = oauth1.oauth_token
-    garmin_auth.oauth_token_secret = oauth1.oauth_token_secret
-    garmin_auth.access_token = oauth2.access_token
-    garmin_auth.refresh_token = oauth2.refresh_token
-    garmin_auth.access_token_expires_at = datetime.fromtimestamp(oauth2.expires_at)
-    garmin_auth.refresh_token_expires_at = datetime.fromtimestamp(oauth2.refresh_token_expires_at)
-    garmin_auth.is_active = True
-    garmin_auth.garmin_account = username
-    garmin_auth.garmin_password = password     
-    garmin_auth.updated_at = datetime.now(timezone.utc)
-
-    db.commit()
-    return {"region": region, "garmin_guid": garmin_guid}
-
-def refresh_garmin_secret_string(db: Session, current_user: User, config_id: int):
+def refresh_garmin_secret_string(connect_id: int, db: Session, current_user: User)->BaseConnect:
     """使用保存的凭据模拟登录并刷新 secret_string。"""
     secret_key = os.getenv("SECRET_KEY")
     if not secret_key:
         raise HTTPException(status_code=500, detail="SECRET_KEY not configured")
 
-    garmin_config = get_garmin_config(db, current_user, config_id)
-    if not garmin_config:
+    garmin_connect = get_garmin_connect(connect_id, db, current_user)
+    if not garmin_connect:
         raise HTTPException(status_code=404, detail="No Garmin configuration found for the user.")
 
-    # 解密密码
+    return get_garmin_secret_string(
+        connect_id = connect_id,
+        account=garmin_connect,
+        encrypted_password=garmin_connect.password_encrypted,
+        region=garmin_connect.region,
+        db=db,
+        current_user=current_user
+    )
+
+def get_garmin_secret_string(connect_id:int,account:str, encrypted_password:str, region:str, db: Session, current_user: User)-> BaseConnect:
+    """使用保存的凭据模拟登录并刷新 secret_string。"""
+    secret_key = os.getenv("SECRET_KEY")
     try:
-        raw_password = CryptoUtils.decrypt(garmin_config.garmin_password, secret_key)
+      raw_password = CryptoUtils.decrypt(encrypted_password, secret_key)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"密码解密失败: {str(e)}")
+      raise HTTPException(status_code=500, detail=f"密码解密失败: {str(e)}")
 
     try:
-        if garmin_config.region and str(garmin_config.region).upper() == "CN":
+        if region and region.upper() == "CN":
             garth.configure(domain="garmin.cn", ssl_verify=False)
         else:
             garth.configure(domain="garmin.com")
 
-        garth.login(garmin_config.garmin_account, raw_password)
+        garth.login(account, raw_password)
         secret_string = garth.client.dumps()
         
     except garth.exc.GarthException as e:
         raise HTTPException(status_code=500, detail=f"佳明登录认证失败: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"佳明连接异常: {str(e)}")
+    
+    if connect_id:
+        return save_garmin_connection(
+            connect_id=connect_id,
+            db=db,
+            user_id=current_user.user_id,
+            username=account,
+            password=raw_password,
+            secret_string=secret_string
+            )
+    else:
+      return save_garmin_connection(
+          db=db,
+          user_id=current_user.user_id,
+          username=account,
+          password=raw_password,
+          secret_string=secret_string
+          )
 
-    return save_garmin_secret(
-        db=db,
-        connect_id=garmin_config.id, 
-        username=garmin_config.garmin_account,
-        password=garmin_config.garmin_password,
-        secret_string=secret_string
-    )
-
-def get_garmin_access_token(db: Session, current_user: User, connect_id: int) -> str:
+def refresh_garmin_access_token(connect_id: int, db: Session, current_user: User) -> BaseConnect:
     """通过 secret_string 获取有效的 Access Token，必要时自动刷新。"""
-    garmin_config = get_garmin_config(db, current_user, connect_id)
+    garmin_config = get_garmin_connect(connect_id, db, current_user)
     
     if not garmin_config or not garmin_config.secret_string:
         raise HTTPException(status_code=404, detail="找不到有效的佳明配置或凭证字符串")
@@ -170,25 +189,21 @@ def get_garmin_access_token(db: Session, current_user: User, connect_id: int) ->
             new_secret_string = garth.client.dumps()
             secret_data = json.loads(new_secret_string)
             
-            # 持久化新刷新的凭证
-            # 注意：此处假定 save_garmin_auth_config 内部已处理 token_data 的解构或根据需求调整
-            save_garmin_auth_config(
+            base_connect = save_garmin_connection(
                 db=db, 
                 user_id=current_user.user_id,
-                connect_id=garmin_config.id, 
-                token_data=TokenDataHelper(secret_data), # 包装一下以适配其属性访问
-                username=garmin_config.garmin_account,
-                password=garmin_config.garmin_password
+                id=garmin_config.id, 
+                token_data=TokenDataHelper(secret_data),
+                username=garmin_config.account,
+                password=garmin_config.encrypted_password,
+                secret_string=new_secret_string
             )
-            # 更新 secret_string 字段
-            garmin_config.secret_string = new_secret_string
-            db.commit()
 
         oauth2_token = garth.client.oauth2_token
         if not oauth2_token or not oauth2_token.access_token:
             raise Exception("佳明 OAuth2 Token 或 access_token 字段为空")
             
-        return oauth2_token.access_token
+        return base_connect
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"佳明 Token 处理失败: {str(e)}")

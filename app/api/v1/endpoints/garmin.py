@@ -77,21 +77,21 @@ def relogin_garmin(
     """
     if not content_id:
         return {"status": "error", "message": "缺少 content_id 参数，无法重新登录。"}
-    config = garmin_service.get_garmin_config(db, current_user, content_id)
+    config = garmin_service.get_garmin_connect(content_id,db, current_user)
     if not config:
         return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
     return {
         "status": "success",
         "data": {
-            "username": config.garmin_account,
-            "password": config.garmin_password,
+            "username": config.account,
+            "password": config.encrypted_password,
             "platform": config.region
         }
     }
 
 @router.post("/getGarminSecretString")
 def get_garmin_secret_string(
-    configId: int,
+    connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -99,15 +99,19 @@ def get_garmin_secret_string(
     模拟 Garmin 登录并将认证信息存入数据库。
     成功后将保存 accessToken 到 garmin_connect 表。
     """
-    updated_auth = garmin_service.refresh_garmin_secret_string(db, current_user, configId)
+    try:
+      updated_auth = garmin_service.refresh_garmin_secret_string(connect_id,db, current_user)
+      return {
+          "status": "success",
+          "data": {
+              "garmin_user_id": updated_auth.user_id,
+              "region_id": updated_auth.region
+          }
+      }
+    except HTTPException as e:
+        raise e
+     
     
-    return {
-        "status": "success",
-        "data": {
-            "garmin_user_id": updated_auth.user_id,
-            "region_id": updated_auth.region
-        }
-    }
 
 @router.post("/getGarminAccessTokenBySecertString") 
 def get_garmin_access_token_by_secret_string(
@@ -115,37 +119,10 @@ def get_garmin_access_token_by_secret_string(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    access_token = garmin_service.get_garmin_access_token(db, current_user, connectId)
+    base_connect = garmin_service.refresh_garmin_access_token(connectId, db, current_user)
     return {
         "status": "success",
-        "access_token": access_token
-    }
-
-@router.get("/getConfig")
-def get_garmin_config(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    获取当前用户的 Garmin 授权配置列表。
-    由于支持不同区域（CN/GLOBAL），一个用户可能拥有多个配置。
-    """
-    configs = garmin_service.get_garmin_configs(db, current_user.user_id)
-
-    return {
-        "status": "success",
-        "data": [
-            {
-                "id": c.id,
-                "region": c.region,
-                "garmin_guid": c.garmin_guid,
-                "garmin_display_name": c.garmin_display_name,
-                "is_active": c.is_active,
-                "last_synced_at": c.last_synced_at,
-                "updated_at": c.updated_at
-            }
-            for c in configs
-        ]
+        "access_token": base_connect.access_token
     }
 
 @router.post("/saveConfig")
@@ -158,7 +135,7 @@ def save_garmin_config(
     从前端保存 Garmin 授权配置。
     解析 JWT 自动识别 region 和 garmin_guid，并绑定到当前用户。
     """
-    data = garmin_service.save_garmin_auth_config(
+    garmin_auth = garmin_service.save_garmin_connection(
         db=db,
         user_id=current_user.user_id,
         token_data=payload.tokenData,
@@ -168,7 +145,7 @@ def save_garmin_config(
     
     return {
         "status": "success",
-        "data": data
+        "data": {"region": garmin_auth.region, "garmin_guid": garmin_auth.guid}
     }
 
 @router.get("/refreshGarminActivityCount")

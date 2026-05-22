@@ -41,7 +41,7 @@ def perform_coros_login(
     user: User, 
     connect_id:int,
     account: str, 
-    password_encrypted: str, 
+    encrypted_password: str, 
     is_refresh: bool = False
 ) -> type[BaseConnect] | BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
@@ -52,7 +52,7 @@ def perform_coros_login(
     login_url = "https://teamcnapi.coros.com/account/login"
     login_data = {
         "account": account,
-        "pwd": password_encrypted,
+        "pwd": encrypted_password,
         "accountType": 2,
     }
     headers = {
@@ -90,7 +90,7 @@ def perform_coros_login(
         db.add(coros_auth)
 
     coros_auth.coros_account = account
-    coros_auth.coros_password_encrypted = password_encrypted
+    coros_auth.coros_password_encrypted = encrypted_password
     coros_auth.access_token = data.get("accessToken")
     coros_auth.coros_user_id = str(data.get("userId"))
     coros_auth.region = data.get("regionId")

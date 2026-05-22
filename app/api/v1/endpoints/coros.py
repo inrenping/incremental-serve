@@ -30,7 +30,7 @@ def login_coros(
         db=db,
         user=current_user,
         account=payload.email,
-        password_encrypted=payload.password
+        encrypted_password=payload.password
     )    
     return {
         "status": "success",
@@ -64,7 +64,7 @@ def relogin_coros(
         user=current_user,
         connect_id=connect_id,
         account=coros_config.coros_account,
-        password_encrypted=coros_config.coros_password_encrypted
+        encrypted_password=coros_config.coros_password_encrypted
     )    
     return {
         "status": "success",

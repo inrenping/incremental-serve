@@ -42,9 +42,8 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
-    base_connect_service.perform_login(login_request.email,login_request.password,login_request.platform,db, current_user);
-     
-    return {"status": "success", "message": "登录成功"}
+    base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.platform,db, current_user);     
+    return {"status": "success", "message": "登录成功","data":base_connect.id}
 
 @router.post("/relogin")
 def relogin_coros(
@@ -58,11 +57,9 @@ def relogin_coros(
     """
     if not connect_id:
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
+    base_connect = base_connect_service.perform_relogin(connect_id,db, current_user);
     
-    # 这里可以根据 connect_id 来查找对应的连接配置，并调用相应的服务函数进行重新登录
-    # 例如，如果 connect_id 对应的是高驰连接，则调用 coros_service.perform_coros_login() 进行重新登录
-    
-    return {"status": "success", "message": "重新登录成功"}
+    return {"status": "success", "message": "重新登录成功","data":base_connect.id}
 
 @router.post("/pullFullActivities")
 def pull_full_activities(

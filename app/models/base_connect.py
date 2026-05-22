@@ -26,7 +26,7 @@ class BaseConnect(Base):
         Index("idx_base_source_id", "source_type", "source_connect_id"),
         Index("idx_base_user_source", "user_id", "source_type"),
         # 推荐增加的联合唯一约束：同一个用户在同一个运动平台上，只能拥有一条有效的绑定记录
-        UniqueConstraint("user_id", "source_type", name="uq_user_base_source"),
+        # UniqueConstraint("user_id", "source_type", name="uq_user_base_source"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键 ID")
@@ -54,7 +54,7 @@ class BaseConnect(Base):
         nullable=True,
         comment="三方平台内部的用户唯一标识（如 Garmin 的 GUID 或 Coros 的 UserID）",
     )
-    password_encrypted = Column(
+    encrypted_password = Column(
         Text,
         nullable=True,
         comment="加密存储的三方平台登录密码（用于自动刷新或后台重连）",
