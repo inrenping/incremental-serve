@@ -43,7 +43,7 @@ def perform_coros_login(
     account: str, 
     password_encrypted: str, 
     is_refresh: bool = False
-) -> BaseConnect:
+) -> type[BaseConnect] | BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
     if not connect_id:
         raise HTTPException(status_code=400, detail="缺少 connect_id 参数，无法登录。")
@@ -90,7 +90,7 @@ def perform_coros_login(
         db.add(coros_auth)
 
     coros_auth.coros_account = account
-    coros_auth.coros_password_encrypted = password_encrypted 
+    coros_auth.coros_password_encrypted = password_encrypted
     coros_auth.access_token = data.get("accessToken")
     coros_auth.coros_user_id = str(data.get("userId"))
     coros_auth.region = data.get("regionId")
@@ -101,17 +101,17 @@ def perform_coros_login(
 
 def pull_full_coros_activities(db: Session, user: User,connect_id: int,incremental: bool = True) -> dict:
     """同步高驰运动记录。incremental 表示是否增量拉取。"""
-    coros_auth = db.query(BaseConnect).filter(
+    base_auth = db.query(BaseConnect).filter(
         BaseConnect.user_id == user.user_id,
         BaseConnect.is_active == True,
         BaseConnect.id == connect_id
     ).first()
 
-    if not coros_auth or not coros_auth.access_token:
+    if not base_auth or not base_auth.access_token:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权配置，请先绑定账号")
 
-    base_url = get_team_api_base(str(coros_auth.region))
-    headers = {"Accept": "application/json, text/plain, */*", "accesstoken": coros_auth.access_token}
+    base_url = get_team_api_base(str(base_auth.region))
+    headers = {"Accept": "application/json, text/plain, */*", "accesstoken": base_auth.access_token}
 
     page_size = 50
     page_number = 1
@@ -146,7 +146,7 @@ def pull_full_coros_activities(db: Session, user: User,connect_id: int,increment
         data = result.get("data", {})
         if page_number == 1:
             total_count = data.get("count", 0)
-            update_coros_count(db, coros_auth.id, total_count)
+            update_coros_count(db, base_auth.id, total_count)
 
         activities_list = data.get("dataList", [])
         if not activities_list:
@@ -175,9 +175,9 @@ def pull_full_coros_activities(db: Session, user: User,connect_id: int,increment
             end_dt = datetime.fromtimestamp(item.get("endTime", 0), tz=timezone.utc) if item.get("endTime") else None
 
             new_activity = BaseActivity(
+                connect_id= base_auth.id,
                 user_id=user.user_id,
-                coros_connect_id=coros_auth.id,
-                label_id=label_id,
+                activity_id=label_id,
                 name=item.get("name"),
                 sport_type=item.get("sportType"),
                 mode=item.get("mode"),
@@ -200,7 +200,7 @@ def pull_full_coros_activities(db: Session, user: User,connect_id: int,increment
             break
         page_number += 1
 
-    coros_auth.last_synced_at = datetime.now(timezone.utc)
+    base_auth.last_synced_at = datetime.now(timezone.utc)
     db.commit()
 
     return {

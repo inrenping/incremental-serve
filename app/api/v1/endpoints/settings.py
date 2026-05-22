@@ -6,13 +6,9 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.coros_activity import CorosActivity
-from app.models.garmin_activity import GarminActivity
+from app.models.base_activity import BaseActivity
 from app.models.user import User
-from app.models.garmin_connect import GarminConnect
-from app.models.coros_connect import CorosConnect
-from app.models.sync_temp import SyncTemp
-from app.models.sync_task import SyncTask
+from app.models.base_connect import BaseConnect
 from app.core.security import get_current_user
 from app.api.v1.endpoints.garmin import (
     pull_full_activities as pull_full_garmin,
@@ -57,7 +53,7 @@ def format_duration(seconds: Optional[float]) -> str:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
 
-def _format_garmin_activity_dict(activity: GarminActivity, region: str) -> dict:
+def _format_garmin_activity_dict(activity: BaseActivity, region: str) -> dict:
     """将 Garmin 活动模型转换为前端使用的统一字典格式。"""
     return {
         "id": activity.id,
@@ -73,7 +69,7 @@ def _format_garmin_activity_dict(activity: GarminActivity, region: str) -> dict:
         "syncTime": format_datetime(activity.updated_at),
     }
 
-def _format_coros_activity_dict(activity: CorosActivity) -> dict:
+def _format_coros_activity_dict(activity: BaseActivity) -> dict:
     """将 Coros 活动模型转换为前端使用的统一字典格式。"""
     return {
         "id": activity.id,
@@ -93,7 +89,7 @@ def _build_app_config_item(
     app_id: str, 
     label: str, 
     description: str, 
-    config: Optional[Annotated[GarminConnect, CorosConnect]], 
+    config: Optional[Annotated[BaseConnect, BaseConnect]], 
     region_label: Optional[str] = None
 ) -> dict:
     """统一构建第三方应用授权状态的响应字典。"""

@@ -12,6 +12,8 @@ api_router.include_router(garmin.router, prefix="/garmin", tags=["Garmin"])
 
 api_router.include_router(coros.router, prefix="/coros", tags=["Coros"])
 
+api_router.include_router(settings.router, prefix="/base", tags=["Base"])
+
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
 
 api_router.include_router(log.router, prefix="/log", tags=["Log"])
