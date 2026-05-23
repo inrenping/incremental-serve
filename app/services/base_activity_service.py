@@ -7,7 +7,7 @@ from app.models.user import User
 from app.services import base_connect_service, garmin_service,coros_service
 
 def pull_full_activities(connect_id:int, db: Session, current_user: User, incremental: bool = False) -> dict:
-  """全量/增量同步。"""
+  """全量/增量拉取数据。"""
   base_connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
   if not base_connect:
    return {"status": "error", "message": "未找到授权配置，请先登录获取授权。"}
@@ -92,3 +92,25 @@ def upload_activity_to_target(id:int, target_connect_id:int, db: Session, curren
        garmin_service.sync_coros_to_garmin(db, current_user, id)
   except Exception as e:
      return {"status": "error", "message": str(e)}
+
+
+def is_same_activity(
+    source_activity: BaseActivity,
+    target_activity: BaseActivity,
+) -> bool:
+    """粗略判断是不是同一个运动记录。"""
+    if source_activity.start_time and target_activity.start_time:
+        # 时间校验：差异在 5 分钟 (300秒) 以内
+        time_diff = abs((source_activity.start_time - target_activity.start_time).total_seconds())
+        if time_diff <= 300 :
+           return True
+
+        # 距离校验：差异在 5% 以内
+        s_dist = float(source_activity.distance_meters or 0)
+        t_dist = float(target_activity.distance_meters or 0)        
+        if s_dist > 0 or t_dist > 0:
+            max_dist = max(s_dist, t_dist)
+            if (abs(s_dist - t_dist) / max_dist) <= 0.05:
+               return True
+
+    return False

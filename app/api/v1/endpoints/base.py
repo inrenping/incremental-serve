@@ -25,7 +25,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@router.get("/getConnectConfig")
+@router.get("/getConnectConfigs")
 def get_connect_config(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -33,9 +33,9 @@ def get_connect_config(
     """
     获取当前用户的连接配置。
     """
-    connect_config = base_connect_service.get_connect_config(db, current_user);
+    connect_configs = base_connect_service.get_connect_configs(db, current_user);
     
-    return {"status": "success", "data": connect_config}
+    return {"status": "success", "data": connect_configs}
 
 @router.post("/login")
 def login(

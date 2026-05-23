@@ -5,7 +5,8 @@ from app.models.user import User
 from app.services import coros_service,garmin_service
 from fastapi import HTTPException
 
-def get_connect_config(db: Session, current_user: User):
+def get_connect_configs(db: Session, current_user: User):
+  """  获取当前用户的n账号连接配置。"""
   connect_configs = db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
   return connect_configs;
 

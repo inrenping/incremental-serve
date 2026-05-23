@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import user,auth,garmin,coros,settings,log
+from app.api.v1.endpoints import user,auth,garmin,coros,settings,log,base
 
 
 api_router = APIRouter()
@@ -12,7 +12,7 @@ api_router.include_router(garmin.router, prefix="/garmin", tags=["Garmin"])
 
 api_router.include_router(coros.router, prefix="/coros", tags=["Coros"])
 
-api_router.include_router(settings.router, prefix="/base", tags=["Base"])
+api_router.include_router(base.router, prefix="/base", tags=["Base"])
 
 api_router.include_router(settings.router, prefix="/settings", tags=["Settings"])
 
