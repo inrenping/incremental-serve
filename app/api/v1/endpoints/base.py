@@ -1,14 +1,20 @@
 
 
-from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends
-from pydantic.v1 import BaseModel
+from typing import Optional
 
+from sqlalchemy import desc, or_
+from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
+
+from app import db
 from app.core.security import get_current_user
 from app.db.session import get_db
+from app.models.base_activity import BaseActivity
+from app.models.base_connect import BaseConnect
 from app.models.user import User
 
 from app.services import base_connect_service,base_activity_service
+from pydantic import BaseModel
 
 router = APIRouter()
 
@@ -44,21 +50,75 @@ def login(
     base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.platform,db, current_user);     
     return {"status": "success", "message": "登录成功","data":base_connect.id}
 
-@router.post("/relogin")
-def relogin_coros(
+@router.post("/reloginConnect")
+def relogin_connect(
     connect_id: int = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    重新登录并更新认证信息。
-    成功后将更新 accessToken 到对应的连接表中。
+    重新登录指定的第三方平台连接并更新认证信息。
+    成功后将更新 accessToken 或其他凭证到对应的 BaseConnect 记录中。
+    Args:
+        connect_id (int, optional): 要重新登录的连接ID。如果为空，则无法重新登录。
+        current_user (User): 当前认证用户。
+        db (Session): 数据库会话。
+    Returns:
+        dict: 包含状态、消息和更新后的连接ID。
     """
     if not connect_id:
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
     base_connect = base_connect_service.perform_relogin(connect_id,db, current_user);
     
     return {"status": "success", "message": "重新登录成功","data":base_connect.id}
+
+@router.get("/getActivitiesByPage")
+def get_activities_by_page(
+    connect_id: int,
+    pageSize: int = 10,
+    pageCount: int = 1,
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+  if not connect_id:
+      return {"status": "error", "message": "缺少 connect_id 参数，无法获取活动列表。"}
+  base_connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id,BaseConnect.user_id == current_user.user_id).first()
+  if not base_connect:
+      return {"status": "success", "data": [], "total": 0}
+
+  # Filter BaseActivity by user_id and source_provider from the BaseConnect object.
+  # Note: The original code used BaseActivity.garmin_connect_id == base_connect.id,
+  # which implies a direct link for Garmin. For a generic BaseActivity,
+  # filtering by source_provider and user_id is more appropriate.
+  # If BaseActivity has specific connect_id fields (e.g., garmin_connect_id, coros_connect_id),
+  # the query needs to dynamically select the correct field based on base_connect.source_type.
+  query = db.query(BaseActivity).filter(
+      BaseActivity.user_id == current_user.user_id,
+      BaseActivity.source_provider == base_connect.source_type)
+  total = query.count()
+  if startDate:
+      query = query.filter(BaseActivity.start_time_local >= startDate)
+  if endDate:
+      query = query.filter(BaseActivity.start_time_local <= endDate)
+  result = query.order_by(desc(BaseActivity.start_time_local)).limit(pageSize).offset((pageCount - 1) * pageSize).all()
+  return {"status": "success", "data": result, "total": total}
+
+
+@router.get("/getActivity")
+def get_activity(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+  activity = db.query(BaseActivity).filter(
+            BaseActivity.user_id == current_user.user_id,
+            BaseActivity.id == id,
+        ).first()
+  if not activity:
+      raise HTTPException(status_code=404, detail="未找到对应的活动记录")
+  return {"status": "success", "data": activity}
 
 @router.post("/pullFullActivities")
 def pull_full_activities(

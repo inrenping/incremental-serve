@@ -118,7 +118,7 @@ def perform_coros_login(
     db.commit()
     return coros_auth
 
-def pull_full_coros_activities(db: Session, user: User,connect_id: int,incremental: bool = True) -> dict:
+def pull_full_coros_activities(db: Session, user: User,connect_id: int, incremental: bool = True) -> dict:
     """同步高驰运动记录。incremental 表示是否增量拉取。"""
     base_auth = db.query(BaseConnect).filter(
         BaseConnect.user_id == user.user_id,

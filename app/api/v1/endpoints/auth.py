@@ -161,7 +161,11 @@ def github_callback(
     request: Request,
     db: Session = Depends(get_db)
 ):
-    """GitHub OAuth 回调"""
+    """
+    GitHub OAuth 回调接口 (GET)。
+    此接口通常用于接收 GitHub 授权服务器重定向回来的 `code` 参数，
+    然后通过该 `code` 换取 `access_token` 并完成用户登录流程。
+    """
     access_token = exchange_github_code(code)
     github_user = fetch_github_user_info(access_token)
     payload = GitHubLoginRequest(

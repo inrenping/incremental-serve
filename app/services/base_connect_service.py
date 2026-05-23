@@ -5,7 +5,6 @@ from app.models.user import User
 from app.services import coros_service,garmin_service
 from fastapi import HTTPException
 
-
 def get_connect_config(db: Session, current_user: User):
   connect_configs = db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
   return connect_configs;
