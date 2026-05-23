@@ -10,7 +10,6 @@ from app.models.user import User
 
 from app.services import base_connect_service,base_activity_service
 
-
 router = APIRouter()
 
 class LoginRequest(BaseModel):

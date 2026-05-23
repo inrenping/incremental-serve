@@ -36,13 +36,32 @@ def update_coros_count(db: Session, coros_connect_id: int, total_count: int) -> 
         return True
     return False
 
+def test_coros_token(connect_id:int,db: Session, current_user: User)-> bool:
+    """测试 Token 有效性"""
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.user_id,BaseConnect.id == connect_id)
+        .first()
+    )
+    if not base_connect:
+        return False
+    base_url = get_team_api_base(str(base_connect.region))
+    headers = {"Accept": "application/json, text/plain, */*", "accesstoken": base_connect.access_token}
+    page_size = 1
+    page_number = 1
+    query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
+    response = requests.get(query_url, headers=headers, timeout=10)
+    if response.status_code == 200:
+        return True
+    else:
+      return False
+
 def perform_coros_login(
     db: Session, 
     user: User, 
     connect_id:int,
     account: str, 
-    encrypted_password: str, 
-    is_refresh: bool = False
+    encrypted_password: str
 ) -> type[BaseConnect] | BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
     if not connect_id:
@@ -76,10 +95,10 @@ def perform_coros_login(
       response.raise_for_status()
       login_response = response.json()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"{'刷新' if is_refresh else '登录'}失败: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"登录失败: {str(e)}")
 
     if login_response.get("result") != "0000":
-        if is_refresh and coros_auth:
+        if coros_auth:
             coros_auth.is_active = False
             db.commit()
         raise HTTPException(status_code=400, detail=f"高驰登录失败: {login_response.get('message')}")
@@ -115,6 +134,7 @@ def pull_full_coros_activities(db: Session, user: User,connect_id: int,increment
 
     page_size = 50
     page_number = 1
+
     total_count = 0
     total_fetched = 0
     new_saved_count = 0
@@ -339,7 +359,6 @@ def _upload_fit_zip_to_coros(user:User,coros_auth: BaseConnect, fit_data: bytes,
         )
         return {"status": "success", "message": "已成功同步到高驰", "data": res}        
     return {"status": "error", "message": f"高驰导入失败: {res.get('message', '未知错误')}", "details": res}
-
 
 def sync_garmin_to_coros(db: Session, user: User, garmin_activity_id: int,connect_id: int) -> dict:
     """将佳明活动上传到高驰，支持 OSS + uploadActivity 流程"""

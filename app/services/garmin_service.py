@@ -31,6 +31,31 @@ def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
     """获取指定用户的所有佳明授权配置。"""
     return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
 
+def test_garmin_token(connect_id:int,db: Session, current_user: User)-> bool:
+    """测试 Token 有效性"""
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.user_id,BaseConnect.id == connect_id)
+        .first()
+    )
+    if not base_connect:
+        return False
+    start, limit = 0, 0
+    base_url = "connect.garmin.cn" if base_connect.region == "CN" else "connect.garmin.com"
+    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
+    
+    headers = {
+        "Authorization": f"Bearer {base_connect.access_token}",
+        "di-backend": base_url,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    api_params = {"start": start, "limit": limit}
+    response = requests.get(api_url, params=api_params, headers=headers, timeout=10)
+    if response.status_code == 200:
+        return True
+    else:
+      return False
+
 def update_garmin_count(db: Session, garmin_connect_id: int, total_count: int) -> bool:
     """更新 BaseConnect 中对应的 total_count 的值。"""
     garmin_auth = db.query(BaseConnect).filter(BaseConnect.id == garmin_connect_id).first()
