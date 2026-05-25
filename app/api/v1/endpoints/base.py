@@ -20,7 +20,7 @@ router = APIRouter()
 
 class LoginRequest(BaseModel):
     """登录请求模型"""
-    platform: str
+    region: str
     email: str
     password: str
 
@@ -47,7 +47,7 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
-    base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.platform,db, current_user);     
+    base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.region,db, current_user);     
     return {"status": "success", "message": "登录成功","data":base_connect.id}
 
 @router.post("/reloginConnect")

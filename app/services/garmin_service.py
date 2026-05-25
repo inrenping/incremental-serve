@@ -39,6 +39,7 @@ def test_garmin_token(connect_id:int,db: Session, current_user: User)-> bool:
         .first()
     )
     if not base_connect:
+        print(f"NOT FOUND GARMIN CONNECT {connect_id}")
         return False
     start, limit = 0, 0
     base_url = "connect.garmin.cn" if base_connect.region == "CN" else "connect.garmin.com"
@@ -176,7 +177,7 @@ def get_garmin_secret_string(connect_id:int,account:str, encrypted_password:str,
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"佳明连接异常: {str(e)}")
     
-    if connect_id:
+    if connect_id and connect_id > 0:
         return save_garmin_connection(
             connect_id=connect_id,
             db=db,

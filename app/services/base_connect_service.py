@@ -10,8 +10,9 @@ def get_connect_configs(db: Session, current_user: User):
   connect_configs = db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
   return connect_configs;
 
-def perform_login(email: str, password: str, platform: str, db: Session, current_user: User)->BaseConnect:
-  if platform == "coros":
+def perform_login(email: str, password: str, region: str, db: Session, current_user: User)->BaseConnect:
+  print(f"perform_login->region:{region }")
+  if region == "coros":
     coros_auth = coros_service.perform_coros_login(
         db=db,
         user=current_user,
@@ -20,9 +21,11 @@ def perform_login(email: str, password: str, platform: str, db: Session, current
     )    
     return coros_auth
     
-  elif platform == "garmin":
+  elif region == "garmin" or region.upper() == "CN":
+    print(f"region:{region }")
     # 先刷新 secret_string
-    updated_auth = garmin_service.get_garmin_secret_string(email,password,platform,db, current_user)
+    updated_auth = garmin_service.get_garmin_secret_string(0,email,password,region,db, current_user)
+    # 再刷新 access_token
     updated_auth = garmin_service.refresh_garmin_secret_string(updated_auth.id,db, current_user)
     return updated_auth
   else:

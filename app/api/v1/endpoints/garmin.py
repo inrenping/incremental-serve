@@ -48,7 +48,7 @@ def login_garmin(
     db: Session = Depends(get_db)
 ):
     """
-    给前端返回用户名密码，让前端去刷新认证
+    通过用户名密码模拟登录
     """
     configs = garmin_service.get_garmin_configs(db, current_user.user_id)
     if not configs:

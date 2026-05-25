@@ -44,6 +44,7 @@ def test_coros_token(connect_id:int,db: Session, current_user: User)-> bool:
         .first()
     )
     if not base_connect:
+        print(f"NOT FOUND COROS CONNECT {connect_id}")
         return False
     base_url = get_team_api_base(str(base_connect.region))
     headers = {"Accept": "application/json, text/plain, */*", "accesstoken": base_connect.access_token}
