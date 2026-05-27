@@ -26,6 +26,7 @@ def perform_login(email: str, password: str, region: str, db: Session, current_u
     # 先刷新 secret_string
     updated_auth = garmin_service.get_garmin_secret_string(0,email,password,region,db, current_user)
     # 再刷新 access_token
+    print(f"准备刷新 access_token { updated_auth.id }")
     updated_auth = garmin_service.refresh_garmin_secret_string(updated_auth.id,db, current_user)
     return updated_auth
   else:

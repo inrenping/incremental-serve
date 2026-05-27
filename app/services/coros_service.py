@@ -60,14 +60,14 @@ def test_coros_token(connect_id:int,db: Session, current_user: User)-> bool:
 def perform_coros_login(
     db: Session, 
     user: User, 
-    connect_id:int,
     account: str, 
-    encrypted_password: str
-) -> type[BaseConnect] | BaseConnect:
+    encrypted_password: str,
+    connect_id: int = None
+) -> BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
-    if not connect_id:
-        raise HTTPException(status_code=400, detail="缺少 connect_id 参数，无法登录。")
-    coros_auth = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.id == connect_id).first()
+    coros_auth = None
+    if connect_id:
+        coros_auth = db.query(BaseConnect).filter(BaseConnect.user_id == user.user_id, BaseConnect.id == connect_id).first()
     
     login_url = "https://teamcnapi.coros.com/account/login"
     login_data = {
@@ -105,14 +105,17 @@ def perform_coros_login(
         raise HTTPException(status_code=400, detail=f"高驰登录失败: {login_response.get('message')}")
 
     data = login_response.get("data", {})
+    print(data)
     if not coros_auth:
         coros_auth = BaseConnect(user_id=user.user_id)
         db.add(coros_auth)
 
-    coros_auth.coros_account = account
-    coros_auth.coros_password_encrypted = encrypted_password
+    coros_auth.source_type="coros"
+    coros_auth.account = account
+    coros_auth.encrypted_password = encrypted_password
     coros_auth.access_token = data.get("accessToken")
-    coros_auth.coros_user_id = str(data.get("userId"))
+    coros_auth.user_id = user.user_id
+    coros_auth.guid = str(data.get("userId"))
     coros_auth.region = data.get("regionId")
     coros_auth.is_active = True
     coros_auth.updated_at = datetime.now(timezone.utc)

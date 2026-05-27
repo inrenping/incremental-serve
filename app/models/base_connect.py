@@ -23,7 +23,6 @@ class BaseConnect(Base):
 
     __tablename__ = "t_base_connect"
     __table_args__ = (
-        Index("idx_base_source_id", "source_type", "source_connect_id"),
         Index("idx_base_user_source", "user_id", "source_type"),
         # 推荐增加的联合唯一约束：同一个用户在同一个运动平台上，只能拥有一条有效的绑定记录
         # UniqueConstraint("user_id", "source_type", name="uq_user_base_source"),
@@ -42,11 +41,6 @@ class BaseConnect(Base):
         String(20),
         nullable=False,
         comment="三方平台类型/来源标识（如：garmin, coros, strava）",
-    )
-    source_connect_id = Column(
-        Integer,
-        nullable=False,
-        comment="用于业务区分的来源连接 ID / 状态控制 ID",
     )
     account = Column(String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）")
     guid = Column(

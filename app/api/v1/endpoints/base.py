@@ -47,10 +47,12 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
-    base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.region,db, current_user);     
+    base_connect = base_connect_service.perform_login(login_request.email,login_request.password,login_request.region,db, current_user); 
+    if not base_connect:
+        return {"status": "error", "message": "登录失败"}   
     return {"status": "success", "message": "登录成功","data":base_connect.id}
 
-@router.post("/reloginConnect")
+@router.post("/relogin")
 def relogin_connect(
     connect_id: int = None,
     current_user: User = Depends(get_current_user),
@@ -69,7 +71,8 @@ def relogin_connect(
     if not connect_id:
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
     base_connect = base_connect_service.perform_relogin(connect_id,db, current_user);
-    
+    if not base_connect:
+        return {"status": "error", "message": "重新登录失败"}
     return {"status": "success", "message": "重新登录成功","data":base_connect.id}
 
 @router.get("/getActivitiesByPage")
