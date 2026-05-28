@@ -7,6 +7,8 @@ from sqlalchemy import (
     Integer,
     String,
     Numeric,
+    Float,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -16,63 +18,82 @@ from app.db.session import Base
 class BaseActivity(Base):
     """
     统一运动活动汇总基础模型，对应表 `t_base_activity`。
-    整合了佳明（Garmin）、高驰（Coros）等各渠道的运动数据。
+    完美对齐最新 PostgreSQL 物理表结构。
     """
 
     __tablename__ = "t_base_activity"
+
+    # ---- 索引与联合约束配置 ----
     __table_args__ = (
-        Index("idx_base_activity_user_start_time", "user_id", "start_time"),
+        # 联合唯一约束: 确保同一渠道下的原始活动ID唯一
+        UniqueConstraint(
+            "source_type", "activity_id", name="uq_base_act_source_origin"
+        ),
+        # 单列索引: 第三方连接ID
+        Index("idx_base_activities_connect", "base_connect_id"),
     )
 
+    # ---- 主键与关联外键 ----
     id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
     user_id = Column(
         Integer,
         ForeignKey("t_users.user_id", ondelete="CASCADE"),
         nullable=False,
-        comment="关联 t_users 表的用户ID",
+        comment="用户ID",
     )
+    base_connect_id = Column(Integer, nullable=False, comment="关联渠道连接ID")
 
     # ---- 数据来源追踪 ----
-    source_provider = Column(
-        String(20),
-        nullable=False,
-        comment="数据来源: garmin(佳明), coros(高驰), strava 等",
+    source_type = Column(
+        String(20), nullable=False, comment="数据来源: garmin, coros, strava 等"
     )
-    activity_id = Column(
-        String(64),
-        nullable=False,
-        unique=True,  # 配合 source_provider 构成唯一逻辑，若在DB层是联合唯一，可保持该字段的独立或通过联合约束表达
-        comment="源渠道中的原始活动唯一ID（统一转为字符串存储）",
-    )
+    activity_id = Column(String(64), nullable=False, comment="源渠道中的原始活动唯一ID")
 
     # ---- 基础信息 ----
-    activity_name = Column(String(255), comment="活动名称（如：宁波市 跑步）")
-    sport_type_standard = Column(
-        String(50), comment="归一化后的标准运动类型（如：running, cycling, walking）"
+    activity_name = Column(String(255), nullable=True, comment="活动名称")
+    sport_type_raw = Column(
+        String(50), nullable=True, comment="第三方渠道的原始运动类型"
     )
-    sport_type_raw = Column(String(50), comment="第三方渠道的原始运动类型/枚举值")
+    sport_mode_raw = Column(
+        Integer, nullable=True, comment="第三方渠道的原始运动模式/枚举"
+    )
 
     # ---- 时间与空间 ----
-    start_time = Column(DateTime(timezone=True), comment="标准运动开始时间 (UTC时间)")
-    end_time = Column(DateTime(timezone=True), comment="运动结束时间 (UTC时间)")
-    duration_seconds = Column(Numeric(10, 2), comment="总耗时（秒，含暂停）")
-    moving_duration_seconds = Column(Numeric(10, 2), comment="净运动耗时（秒）")
+    start_time_gmt = Column(
+        DateTime(timezone=True), nullable=True, comment="标准运动开始时间 (UTC时间)"
+    )
+    start_time_local = Column(
+        DateTime(timezone=False), nullable=True, comment="本地运动开始时间 (无时区)"
+    )
+    end_time_gmt = Column(
+        DateTime(timezone=True), nullable=True, comment="运动结束时间 (UTC时间)"
+    )
 
-    # ---- 核心运动数据（统一单位） ----
-    distance_meters = Column(Numeric(12, 2), comment="总距离（单位：米）")
-    calories = Column(Numeric(10, 2), comment="消耗热量（大卡）")
-    elevation_gain = Column(Numeric(10, 2), comment="累计爬升（米）")
-    elevation_loss = Column(Numeric(10, 2), comment="累计下降（米）")
+    # ---- 核心运动数据 ----
+    distance_meters = Column(Numeric(12, 2), nullable=True, comment="总距离（米）")
+    duration_seconds = Column(
+        Numeric(10, 2), nullable=True, comment="总耗时（秒，含暂停）"
+    )
+    moving_duration_seconds = Column(
+        Numeric(10, 2), nullable=True, comment="净运动耗时（秒）"
+    )
+    calories = Column(Numeric(10, 2), nullable=True, comment="消耗热量（大卡）")
 
     # ---- 生理与运动指标 ----
-    average_hr = Column(Integer, comment="平均心率")
-    max_hr = Column(Integer, comment="最大心率")
-    average_cadence = Column(Integer, comment="平均步频（步/分钟）")
+    average_hr = Column(Integer, nullable=True, comment="平均心率")
+    max_hr = Column(Integer, nullable=True, comment="最大心率")
+    average_cadence = Column(Integer, nullable=True, comment="平均步频（步/分钟）")
+    max_cadence = Column(Integer, nullable=True, comment="最大步频")
+    average_speed = Column(Numeric(8, 3), nullable=True, comment="平均速度")
+    max_speed = Column(Numeric(8, 3), nullable=True, comment="最大速度")
 
-    # ---- 后续新增的特定渠道冗余 ID (允许为空) ----
-    coros_activity_id = Column(String(64), nullable=True, comment="高驰原始活动ID (冗余存储)")
-    garmin_activity_id = Column(String(64), nullable=True, comment="佳明国际区原始活动ID (冗余存储)")
-    garmin_cn_activity_id = Column(String(64), nullable=True, comment="佳明大陆区原始活动ID (冗余存储)")
+    # ---- 地理位置与设备 ----
+    start_lat = Column(Float, nullable=True, comment="起点纬度")
+    start_lon = Column(Float, nullable=True, comment="起点经度")
+    location_name = Column(String(255), nullable=True, comment="位置名称描述")
+    device_id = Column(String(100), nullable=True, comment="设备硬件唯一ID")
+    elevation_gain = Column(Numeric(10, 2), nullable=True, comment="累计爬升（米）")
+    elevation_loss = Column(Numeric(10, 2), nullable=True, comment="累计下降（米）")
 
     # ---- 系统时间字段 ----
     created_at = Column(

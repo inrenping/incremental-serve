@@ -2,7 +2,7 @@ from typing import Optional
 
 from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app import db
 from app.core.security import get_current_user
@@ -84,19 +84,16 @@ def relogin_connect(
 
 @router.get("/getActivitiesByPage")
 def get_activities_by_page(
+    # 使用 Query(alias=...) 既能保持 Python 下划线规范，又能接收前端传的 pageSize
     connect_id: int,
-    pageSize: int = 10,
-    pageCount: int = 1,
-    startDate: Optional[str] = None,
-    endDate: Optional[str] = None,
+    page_size: int = Query(10, alias="pageSize"),
+    page_count: int = Query(1, alias="pageCount"),
+    start_date: Optional[str] = Query(None, alias="startDate"),
+    end_date: Optional[str] = Query(None, alias="endDate"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not connect_id:
-        return {
-            "status": "error",
-            "message": "缺少 connect_id 参数，无法获取活动列表。",
-        }
+    # 1. 校验连接凭证
     base_connect = (
         db.query(BaseConnect)
         .filter(
@@ -107,27 +104,29 @@ def get_activities_by_page(
     if not base_connect:
         return {"status": "success", "data": [], "total": 0}
 
-    # Filter BaseActivity by user_id and source_provider from the BaseConnect object.
-    # Note: The original code used BaseActivity.garmin_connect_id == base_connect.id,
-    # which implies a direct link for Garmin. For a generic BaseActivity,
-    # filtering by source_provider and user_id is more appropriate.
-    # If BaseActivity has specific connect_id fields (e.g., garmin_connect_id, coros_connect_id),
-    # the query needs to dynamically select the correct field based on base_connect.source_type.
+    # 2. 构建基础查询
     query = db.query(BaseActivity).filter(
         BaseActivity.user_id == current_user.user_id,
-        BaseActivity.source_provider == base_connect.source_type,
+        BaseActivity.source_type == base_connect.source_type,
     )
+
+    # 3. 组合时间过滤条件
+    if start_date:
+        query = query.filter(BaseActivity.start_time_local >= start_date)
+    if end_date:
+        query = query.filter(BaseActivity.start_time_local <= end_date)
+
+    # 4. 计算符合条件的总条数
     total = query.count()
-    if startDate:
-        query = query.filter(BaseActivity.start_time_local >= startDate)
-    if endDate:
-        query = query.filter(BaseActivity.start_time_local <= endDate)
+
+    # 5. 执行分页与排序查询
     result = (
         query.order_by(desc(BaseActivity.start_time_local))
-        .limit(pageSize)
-        .offset((pageCount - 1) * pageSize)
+        .limit(page_size)
+        .offset((page_count - 1) * page_size)
         .all()
     )
+
     return {"status": "success", "data": result, "total": total}
 
 

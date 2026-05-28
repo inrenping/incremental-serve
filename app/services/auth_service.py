@@ -1,4 +1,5 @@
 """认证服务"""
+
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 from fastapi import HTTPException, Request
@@ -11,12 +12,14 @@ from app.services.user_service import (
     get_user_by_email,
     get_active_user_by_email,
     create_user,
-    generate_unique_username
+    generate_unique_username,
 )
 from app.services.captcha_service import verify_captcha_logic
 
 
-def generate_user_tokens(db: Session, user: User, request: Request) -> Dict[str, Any]:
+def generate_user_tokens(
+    db: Session, current_user: User, request: Request
+) -> Dict[str, Any]:
     """
     为用户生成 Access Token 和 Refresh Token
 
@@ -24,19 +27,19 @@ def generate_user_tokens(db: Session, user: User, request: Request) -> Dict[str,
         包含 access_token, refresh_token, token_type, user_id 的字典
     """
     # 生成 Access Token (通常 15-60 分钟)
-    access_token = create_access_token(data={"sub": str(user.user_id)})
+    access_token = create_access_token(data={"sub": str(current_user.user_id)})
 
     # 生成 Refresh Token (通常 7 天)
     refresh_token_str = create_refresh_token()
 
     new_refresh_token = UserRefreshToken(
-        user_id=user.user_id,
+        user_id=current_user.user_id,
         refresh_token=refresh_token_str,
         expires_time=datetime.now(timezone.utc) + timedelta(days=7),
         created_at=datetime.now(timezone.utc),
         expires_ip=request.client.host,
         user_agent=request.headers.get("user-agent"),
-        revoked=False
+        revoked=False,
     )
     db.add(new_refresh_token)
 
@@ -44,11 +47,13 @@ def generate_user_tokens(db: Session, user: User, request: Request) -> Dict[str,
         "access_token": access_token,
         "refresh_token": refresh_token_str,
         "token_type": "bearer",
-        "user_id": user.user_id
+        "user_id": current_user.user_id,
     }
 
 
-def register_user(db: Session, username: str, email: str, captcha: str, request: Request) -> Dict[str, Any]:
+def register_user(
+    db: Session, username: str, email: str, captcha: str, request: Request
+) -> Dict[str, Any]:
     """
     用户注册逻辑
 
@@ -63,9 +68,11 @@ def register_user(db: Session, username: str, email: str, captcha: str, request:
         包含 token 信息的响应字典
     """
     # A. 检查用户名和邮箱是否已存在
-    existing_user = db.query(User).filter(
-        (User.user_name == username) | (User.user_email == email)
-    ).first()
+    existing_user = (
+        db.query(User)
+        .filter((User.user_name == username) | (User.user_email == email))
+        .first()
+    )
 
     if existing_user:
         field = "用户名" if existing_user.user_name == username else "邮箱"
@@ -84,7 +91,9 @@ def register_user(db: Session, username: str, email: str, captcha: str, request:
     return tokens
 
 
-def login_user(db: Session, email: str, captcha: str, request: Request) -> Dict[str, Any]:
+def login_user(
+    db: Session, email: str, captcha: str, request: Request
+) -> Dict[str, Any]:
     """
     用户登录逻辑
 
@@ -112,8 +121,16 @@ def login_user(db: Session, email: str, captcha: str, request: Request) -> Dict[
     return tokens
 
 
-def handle_oauth_user(db: Session, provider: str, provider_user_id: str, email: str, name: str,
-                     avatar: str = None, access_token: str = None, request: Request = None) -> tuple:
+def handle_oauth_user(
+    db: Session,
+    provider: str,
+    provider_user_id: str,
+    email: str,
+    name: str,
+    avatar: str = None,
+    access_token: str = None,
+    request: Request = None,
+) -> tuple:
     """
     处理 OAuth 用户登录/注册的通用逻辑
 
@@ -133,10 +150,14 @@ def handle_oauth_user(db: Session, provider: str, provider_user_id: str, email: 
     now = datetime.now(timezone.utc)
 
     # 1. 查找社交登录记录
-    social = db.query(UserSocial).filter(
-        UserSocial.provider == provider,
-        UserSocial.provider_user_id == provider_user_id
-    ).first()
+    social = (
+        db.query(UserSocial)
+        .filter(
+            UserSocial.provider == provider,
+            UserSocial.provider_user_id == provider_user_id,
+        )
+        .first()
+    )
 
     user = None
 
@@ -181,7 +202,9 @@ def handle_oauth_user(db: Session, provider: str, provider_user_id: str, email: 
     return user, social
 
 
-def refresh_user_token(db: Session, refresh_token: str, request: Request) -> Dict[str, Any]:
+def refresh_user_token(
+    db: Session, refresh_token: str, request: Request
+) -> Dict[str, Any]:
     """
     刷新用户Token
 
@@ -196,25 +219,23 @@ def refresh_user_token(db: Session, refresh_token: str, request: Request) -> Dic
     now = datetime.now(timezone.utc)
 
     # 在数据库中查找该 Refresh Token
-    db_token = db.query(UserRefreshToken).filter(
-        UserRefreshToken.refresh_token == refresh_token,
-        UserRefreshToken.revoked == False,
-        UserRefreshToken.expires_time > now
-    ).first()
+    db_token = (
+        db.query(UserRefreshToken)
+        .filter(
+            UserRefreshToken.refresh_token == refresh_token,
+            UserRefreshToken.revoked == False,
+            UserRefreshToken.expires_time > now,
+        )
+        .first()
+    )
 
     if not db_token:
-        raise HTTPException(
-            status_code=401,
-            detail="Refresh Token 无效或已过期"
-        )
+        raise HTTPException(status_code=401, detail="Refresh Token 无效或已过期")
 
     # 检查关联用户是否存在且活跃
     user = db.query(User).filter(User.user_id == db_token.user_id).first()
     if not user or not user.active:
-        raise HTTPException(
-            status_code=401,
-            detail="用户不存在或已被禁用"
-        )
+        raise HTTPException(status_code=401, detail="用户不存在或已被禁用")
 
     # 标记旧的 Refresh Token 为撤销（Rotation 机制）
     db_token.revoked = True

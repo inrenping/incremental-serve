@@ -2,29 +2,17 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.db.session import get_db
 from app.models.base_activity import BaseActivity
 from app.models.user import User
-from app.models.base_connect import BaseConnect
-from app.core.security import get_current_user
-from app.api.v1.endpoints.garmin import (
-    pull_full_activities as pull_full_garmin,
-    pull_new_activities as pull_new_garmin,
-)
-from app.api.v1.endpoints.coros import (
-    pull_full_activities as pull_full_coros,
-    pull_new_activities as pull_new_coros,
-)
-
-from app.services import garmin_service,coros_service
 
 router = APIRouter()
 
+
 class OneClickSyncRequest(BaseModel):
     """一键同步请求模型"""
+
     source: str
     target: str
 
@@ -35,7 +23,9 @@ def download_garmin(id: int, current_user: User, db: Session):
     The actual implementation is in app.api.v1.endpoints.garmin.download_garmin_activity.
     """
     from app.api.v1.endpoints.garmin import download_garmin_activity
+
     return download_garmin_activity(id=id, current_user=current_user, db=db)
+
 
 def download_coros(id: int, current_user: User, db: Session):
     """
@@ -43,6 +33,7 @@ def download_coros(id: int, current_user: User, db: Session):
     The actual implementation is in app.api.v1.endpoints.coros.download_coros_activity.
     """
     from app.api.v1.endpoints.coros import download_coros_activity
+
     return download_coros_activity(id=id, current_user=current_user, db=db)
 
 
@@ -65,12 +56,13 @@ def format_duration(seconds: Optional[float]) -> str:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
 
+
 def _format_garmin_activity_dict(activity: BaseActivity, region: str) -> dict:
     """将 Garmin 活动模型转换为前端使用的统一字典格式。"""
     return {
         "id": activity.id,
         "title": activity.activity_name,
-        "startTime": activity.start_time_local, # Assuming GarminActivity has start_time_local
+        "startTime": activity.start_time_local,  # Assuming GarminActivity has start_time_local
         "type": activity.activity_type_key,
         "workoutTime": format_duration(activity.moving_duration_seconds),
         "totalTime": format_duration(activity.duration_seconds),
@@ -81,12 +73,13 @@ def _format_garmin_activity_dict(activity: BaseActivity, region: str) -> dict:
         "syncTime": format_datetime(activity.updated_at),
     }
 
+
 def _format_coros_activity_dict(activity: BaseActivity) -> dict:
     """将 Coros 活动模型转换为前端使用的统一字典格式。"""
     return {
         "id": activity.id,
         "title": activity.name,
-        "startTime": activity.start_time, # Assuming CorosActivity has start_time
+        "startTime": activity.start_time,  # Assuming CorosActivity has start_time
         "type": str(activity.sport_type),
         "workoutTime": format_duration(activity.workout_time),
         "totalTime": format_duration(activity.total_time),
@@ -97,28 +90,6 @@ def _format_coros_activity_dict(activity: BaseActivity) -> dict:
         "syncTime": format_datetime(activity.updated_at),
     }
 
-
-@router.post("/pullFullActivities")
-def pull_full_activities(
-    platform: str = "garmin",
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    同步下载指定平台的运动记录。
-    根据 platform 参数分别调用 Garmin (Global/CN) 或 Coros 的同步逻辑。
-    """
-    if platform == "garmin":
-        # 调用 Garmin 国际区同步接口
-        return pull_full_garmin(region="GLOBAL", current_user=current_user, db=db)
-    elif platform == "garmin_cn":
-        # 调用 Garmin 中国区同步接口
-        return pull_full_garmin(region="CN", current_user=current_user, db=db)
-    elif platform == "coros":
-        # 调用 Coros 同步接口
-        return pull_full_coros(current_user=current_user, db=db)
-    else:
-        raise HTTPException(status_code=400, detail="不支持的平台类型")
 
 def is_same_activity(
     source_start_time: Optional[datetime],
@@ -138,16 +109,14 @@ def is_same_activity(
     Returns:
         bool: True 表示两条记录可判定为同一活动，False 表示不是。
     """
-    if (
-        source_start_time is None
-        or target_start_time is None
-    ):
+    if source_start_time is None or target_start_time is None:
         return False
 
     time_diff_seconds = abs((source_start_time - target_start_time).total_seconds())
     if time_diff_seconds > 5 * 60:
         return False
     return True
+
 
 def to_aware_utc(dt):
     """把 datetime 转成 UTC aware，如果是 naive 则假设是 UTC"""

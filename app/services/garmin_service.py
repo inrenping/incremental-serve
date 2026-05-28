@@ -121,7 +121,7 @@ def save_garmin_connection(
                 base64.urlsafe_b64decode(payload_b64).decode("utf-8")
             )
 
-            print(f"解析出来的佳明登录信息 {decoded_payload}")
+            # print(f"解析出来的佳明登录信息 {decoded_payload}")
 
             garmin_guid = decoded_payload.get("garmin_guid")
             iss = decoded_payload.get("iss", "")
@@ -140,13 +140,12 @@ def save_garmin_connection(
     # 3. 如果还是没找到，则新建
     if not garmin_auth:
         print(f"新建 对应 region {region}")
-        garmin_auth = BaseConnect(user_id=user_id, region=region, source_type=region)
+        garmin_auth = BaseConnect(user_id=user_id, region=region)
         db.add(garmin_auth)
 
     # 4. 统一更新字段
     garmin_auth.is_active = True
-    source_type = "garmin_cn" if region == "cn" else "garmin"
-    garmin_auth.source_type = source_type
+    garmin_auth.source_type = "garmin"
     garmin_auth.updated_at = datetime.now(timezone.utc)
     if username:
         garmin_auth.account = username
@@ -218,15 +217,26 @@ def get_garmin_secret_string(
         else:
             garth.configure(domain="garmin.com")
 
-        print(f"{account} | {raw_password} | {region}")
-        garth.login(account, raw_password)
-        secret_string = garth.client.dumps()
-
-        print(f"佳明 { region } 登录成功:{ secret_string }")
+        # print(f"{account} | {raw_password} | {region}")
+        with log_request(
+            current_user=current_user,
+            req_url="",
+            req_method="GET",
+            req_params="",
+            log_type="login",
+            module_name="garmin",
+            op_desc="佳明模拟登录",
+        ) as ctx:
+            garth.login(account, raw_password)
+            secret_string = garth.client.dumps()
+            print(f"佳明 { region } 模拟登录成功")
+            ctx["response"] = secret_string
 
     except garth.exc.GarthException as e:
+        print(f"佳明登录认证失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"佳明登录认证失败: {str(e)}")
     except Exception as e:
+        print(f"佳明连接异常: {str(e)}")
         raise HTTPException(status_code=500, detail=f"佳明连接异常: {str(e)}")
 
     if connect_id and connect_id > 0:
@@ -266,7 +276,7 @@ def refresh_garmin_access_token(
         else:
             garth.configure(domain="garmin.com")
 
-        print(f"secret_string = {garmin_config.secret_string}")
+        # print(f"secret_string = {garmin_config.secret_string}")
 
         garth.client.loads(garmin_config.secret_string)
 
@@ -275,7 +285,7 @@ def refresh_garmin_access_token(
             garth.client.refresh_oauth2()
             new_secret_string = garth.client.dumps()
 
-            print(f"garmin 登录成功:{ new_secret_string }")
+            # print(f"garmin 登录成功:{ new_secret_string }")
 
             try:
                 # 1. Base64 解码得到 bytes，再转成 utf-8 字符串
@@ -284,9 +294,9 @@ def refresh_garmin_access_token(
 
                 # 2. 将解码后的 JSON 字符串解析为原始列表
                 secret_data = json.loads(decoded_string)
-                print(f"成功解码原始 token 列表: { secret_data }")
+                # print(f"成功解码原始 token 列表: { secret_data }")
 
-                # 3. 【精准修复】根据 TokenDataHelper 的构造函数，组装其需要的双层字典结构
+                # 3. 根据 TokenDataHelper 的构造函数，组装其需要的双层字典结构
                 token_dict = {}
                 oauth1_sub_dict = {}
                 oauth2_sub_dict = {}
@@ -304,7 +314,7 @@ def refresh_garmin_access_token(
                 token_dict["oauth1"] = oauth1_sub_dict
                 token_dict["oauth2"] = oauth2_sub_dict
 
-                print(f"最终带有命名空间的兼容字典: { token_dict }")
+                # print(f"最终带有命名空间的兼容字典: { token_dict }")
 
             except Exception as e:
                 print(
@@ -350,45 +360,55 @@ class TokenDataHelper:
 def _sync_garmin_activities_internal(
     db: Session,
     config: BaseConnect,
-    user: User,
+    current_user: User,
     start: int = 0,
     limit: int = 100,
     incremental: bool = True,
 ) -> Tuple[int, int]:
-    """辅助方法：抓取并保存活动。"""
-    base_url = "connect.garmin.cn" if config.region == "CN" else "connect.garmin.com"
-    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
+    """辅助方法：使用 garth 抓取并保存活动。"""
 
-    headers = {
-        "Authorization": f"Bearer {config.access_token}",
-        "di-backend": base_url,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
+    # 1. 动态配置 garth 的域名（根据 CN 或 国际区）
+    # 注意：在实际运行此函数前，应确保已通过 garth.login() 或 garth.resume() 完成了初始化
+    garth.client.configure(
+        domain="garmin.cn" if config.region == "CN" else "garmin.com"
+    )
+
+    # 对应原原接口的相对路径
+    api_path = "/activitylist-service/activities/search/activities"
     api_params = {"start": start, "limit": limit}
+
     try:
+        # 使用原有的日志记录器，这里将完整的 URL 拼接出来供日志使用
+        full_url = f"https://connect.{garth.client.domain}{api_path}"
+
         with log_request(
-            current_user=user,
-            req_url=api_url,
+            current_user=current_user,
+            req_url=full_url,
             req_method="GET",
             req_params=api_params,
-            log_type="fileUrl",
+            log_type="query",
             module_name="garmin",
-            op_desc="佳明获取运动记录",
+            op_desc="获取佳明运动记录",
         ) as ctx:
-            response = requests.get(
-                api_url, params=api_params, headers=headers, timeout=10
-            )
+            # 使用 garth 的内置 client 发送请求，它会自动处理授权 Headers
+            response = garth.connectapi(api_path, params=api_params)
             ctx["response"] = response
-        response.raise_for_status()
-        activities_data = response.json()
+
+        # garth 返回的直接就是解析后的 JSON 数据（通常是 list 或 dict）
+        activities_data = response
+
     except Exception as e:
+        print(f"同步佳明数据失败: {str(e)}")
         raise HTTPException(status_code=400, detail=f"同步佳明数据失败: {str(e)}")
 
     if not activities_data or not isinstance(activities_data, list):
         return 0, 0
 
+    # 2. 提取 ID 并去重
     activity_ids = [
-        item.get("activityId") for item in activities_data if item.get("activityId")
+        str(item.get("activityId"))
+        for item in activities_data
+        if item.get("activityId")
     ]
     existing_ids = (
         {
@@ -410,14 +430,16 @@ def _sync_garmin_activities_internal(
                 break
             continue
 
-        # 转换时间
+        # 3. 转换时间
         start_time_str = item.get("startTimeGMT")
         start_time = None
         if start_time_str:
+            # 兼容 Z 结尾的 ISO 格式
             start_time = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
 
+        # 4. 构建并保存模型
         new_activity = BaseActivity(
-            user_id=user.user_id,
+            user_id=current_user.user_id,
             source_provider="garmin",
             activity_id=activity_id,
             activity_name=item.get("activityName"),
@@ -435,7 +457,7 @@ def _sync_garmin_activities_internal(
             elevation_gain=item.get("elevationGain"),
             elevation_loss=item.get("elevationLoss"),
             garmin_activity_id=activity_id if config.region != "CN" else None,
-            garmin_cn_activity_id=activity_id if config.region == "CN" else None,
+            garmin_cn_activity_id=(activity_id if config.region == "CN" else None),
         )
         db.add(new_activity)
         saved_count += 1
@@ -444,13 +466,14 @@ def _sync_garmin_activities_internal(
 
 
 def pull_full_garmin_activities(
-    db: Session, user: User, region: str, incremental: bool = True
+    db: Session, current_user: User, connect_id: int, incremental: bool = True
 ) -> dict:
     """全量或者增量同步佳明活动。"""
     config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == user.user_id, BaseConnect.region == region.upper()
+            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.id == connect_id,
         )
         .first()
     )
@@ -460,7 +483,7 @@ def pull_full_garmin_activities(
     start, limit, total_saved, total_fetched = 0, 100, 0, 0
     while True:
         fetched, saved = _sync_garmin_activities_internal(
-            db, config, user, start, limit, incremental
+            db, config, current_user, start, limit, incremental
         )
         total_fetched += fetched
         total_saved += saved
@@ -503,12 +526,14 @@ def sync_new_garmin_activities(
 
 
 def get_garmin_activity_download_info(
-    db: Session, user: User, activity_id: int
+    db: Session, current_user: User, activity_id: int
 ) -> Tuple[requests.Response, str]:
     """获取佳明文件下载响应对象（不直接读取内容）。"""
     ga = (
         db.query(BaseActivity)
-        .filter(BaseActivity.user_id == user.user_id, BaseActivity.id == activity_id)
+        .filter(
+            BaseActivity.user_id == current_user.user_id, BaseActivity.id == activity_id
+        )
         .first()
     )
 
@@ -519,7 +544,9 @@ def get_garmin_activity_download_info(
     region = "CN" if ga.garmin_cn_activity_id else "GLOBAL"
     config = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == user.user_id, BaseConnect.region == region)
+        .filter(
+            BaseConnect.user_id == current_user.user_id, BaseConnect.region == region
+        )
         .first()
     )
 
@@ -581,7 +608,7 @@ def parse_garmin_upload_response(
 
 
 def _upload_file_to_garmin(
-    user: User,
+    current_user: User,
     target_config: BaseConnect,
     file_data: bytes,
     filename: str,
@@ -623,7 +650,7 @@ def _upload_file_to_garmin(
     url = f"https://{api_domain}/upload-service/upload"
 
     with log_request(
-        current_user=user,
+        current_user=current_user,
         req_url=url,
         req_method="POST",
         req_params=None,
@@ -651,11 +678,13 @@ def _upload_file_to_garmin(
     }
 
 
-def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
+def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int) -> dict:
     """佳明之间同步逻辑。"""
     ga = (
         db.query(BaseActivity)
-        .filter(BaseActivity.user_id == user.user_id, BaseActivity.id == activity_id)
+        .filter(
+            BaseActivity.user_id == current_user.user_id, BaseActivity.id == activity_id
+        )
         .first()
     )
     if not ga:
@@ -667,27 +696,31 @@ def sync_garmin_to_garmin(db: Session, user: User, activity_id: int) -> dict:
     target_config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == user.user_id, BaseConnect.region == target_region
+            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.region == target_region,
         )
         .first()
     )
     if not target_config:
         raise HTTPException(status_code=404, detail="目标区域未授权")
 
-    file_resp, filename = get_garmin_activity_download_info(db, user, activity_id)
+    file_resp, filename = get_garmin_activity_download_info(
+        db, current_user, activity_id
+    )
     return _upload_file_to_garmin(
-        user, target_config, file_resp.content, filename, "佳明上传运动"
+        current_user, target_config, file_resp.content, filename, "佳明上传运动"
     )
 
 
 def sync_coros_to_garmin(
-    db: Session, user: User, base_activity_id: int, target_region: str = "CN"
+    db: Session, current_user: User, base_activity_id: int, target_region: str = "CN"
 ) -> dict:
     """高驰同步到佳明逻辑。"""
     target_config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == user.user_id, BaseConnect.region == target_region
+            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.region == target_region,
         )
         .first()
     )
@@ -697,11 +730,11 @@ def sync_coros_to_garmin(
         )
 
     file_resp, filename = coros_service.get_coros_activity_download_info(
-        db, user, base_activity_id
+        db, current_user, base_activity_id
     )
 
     return _upload_file_to_garmin(
-        user, target_config, file_resp.content, filename, "上传佳明活动"
+        current_user, target_config, file_resp.content, filename, "上传佳明活动"
     )
 
 

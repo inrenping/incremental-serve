@@ -1,4 +1,5 @@
 """用户管理服务"""
+
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
@@ -10,10 +11,9 @@ from app.models.user_social import UserSocial
 
 def get_user_by_username(db: Session, username: str) -> Optional[User]:
     """通过用户名获取活跃用户"""
-    return db.query(User).filter(
-        User.user_name == username,
-        User.active == True
-    ).first()
+    return (
+        db.query(User).filter(User.user_name == username, User.active == True).first()
+    )
 
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
@@ -23,10 +23,7 @@ def get_user_by_email(db: Session, email: str) -> Optional[User]:
 
 def get_active_user_by_email(db: Session, email: str) -> Optional[User]:
     """通过邮箱获取活跃用户"""
-    return db.query(User).filter(
-        User.user_email == email,
-        User.active == True
-    ).first()
+    return db.query(User).filter(User.user_email == email, User.active == True).first()
 
 
 def user_exists(db: Session, username: str = None, email: str = None) -> Optional[User]:
@@ -69,15 +66,16 @@ def generate_unique_username(db: Session, base_name: str, email: str) -> str:
     return f"user_{int(datetime.now(timezone.utc).timestamp())}"
 
 
-def get_user_info(db: Session, username: str = None, email: str = None) -> Dict[str, Any]:
+def get_user_info(
+    db: Session, username: str = None, email: str = None
+) -> Dict[str, Any]:
     """
     获取用户信息（查询接口使用）
     支持通过用户名或邮箱查询，只返回活跃用户
     """
     if not username and not email:
         raise HTTPException(
-            status_code=400,
-            detail="必须提供 username 或 email 其中之一作为查询参数"
+            status_code=400, detail="必须提供 username 或 email 其中之一作为查询参数"
         )
 
     query = db.query(User).filter(User.active == True)
@@ -92,10 +90,7 @@ def get_user_info(db: Session, username: str = None, email: str = None) -> Dict[
     user = query.first()
 
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=f"未找到用户: {identifier}"
-        )
+        raise HTTPException(status_code=404, detail=f"未找到用户: {identifier}")
 
     return {
         "id": user.user_id,
@@ -105,9 +100,12 @@ def get_user_info(db: Session, username: str = None, email: str = None) -> Dict[
         "updated_at": user.updated_at,
     }
 
-def get_user_social_info(db: Session, user: User) -> list[dict]:
+
+def get_user_social_info(db: Session, current_user: User) -> list[dict]:
     """根据当前用户获取该用户的社交登录信息"""
-    socials = db.query(UserSocial).filter(UserSocial.user_id == user.user_id).all()
+    socials = (
+        db.query(UserSocial).filter(UserSocial.user_id == current_user.user_id).all()
+    )
     return [
         {
             "id": social.id,

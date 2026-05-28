@@ -33,7 +33,7 @@ def perform_login(
     print(f"perform_login->region:{region }")
     if region == "coros":
         coros_auth = coros_service.perform_coros_login(
-            db=db, user=current_user, account=email, encrypted_password=password
+            db=db, current_user=current_user, account=email, encrypted_password=password
         )
         return coros_auth
 
@@ -73,7 +73,7 @@ def perform_relogin(connect_id: int, db: Session, current_user: User) -> BaseCon
         else:
             base_connect = coros_service.perform_coros_login(
                 db=db,
-                user=current_user,
+                current_user=current_user,
                 account=base_connect.account,
                 encrypted_password=base_connect.encrypted_password,
             )
