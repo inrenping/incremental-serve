@@ -13,56 +13,68 @@ router = APIRouter()
 
 # --- 定义前端请求的数据结构 ---
 
+
 class OAuth1Data(BaseModel):
     """Garmin OAuth 1.0 凭证数据模型"""
+
     oauth_token: str
     oauth_token_secret: str
 
+
 class OAuth2Data(BaseModel):
     """Garmin OAuth 2.0 令牌数据模型"""
+
     access_token: str
     refresh_token: str
     expires_at: float
     refresh_token_expires_at: float
 
+
 class TokenData(BaseModel):
     """完整的 Garmin Token 数据包，包含 OAuth1 和 OAuth2"""
+
     oauth1: OAuth1Data
     oauth2: OAuth2Data
     session: Optional[Any] = None
 
+
 class GarminSaveRequest(BaseModel):
     """保存 Garmin 授权配置的请求体"""
+
     tokenData: TokenData
     username: Optional[str] = None
     password: Optional[str] = None
 
+
 class GarminLoginRequest(BaseModel):
     """高驰登录请求模型"""
+
     email: str
     password: str
 
+
 @router.post("/login")
-def login_garmin(    
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+def login_garmin(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     通过用户名密码模拟登录
     """
     configs = garmin_service.get_garmin_configs(db, current_user.user_id)
     if not configs:
-        raise HTTPException(status_code=404, detail="No Garmin configuration found for the user.")
+        raise HTTPException(
+            status_code=404, detail="No Garmin configuration found for the user."
+        )
     return {
         "status": "success",
         "data": [
             {
                 "username": config.garmin_account,
                 "password": config.garmin_password,
-                "platform": config.region
+                "platform": config.region,
             }
             for config in configs
-        ]
+        ],
     }
 
 
@@ -70,14 +82,14 @@ def login_garmin(
 def relogin_garmin(
     content_id: int = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     从配置获取 secret_string 刷新token 如果不行的话，用用户名密码获取 secret_string，然后刷新token
     """
     if not content_id:
         return {"status": "error", "message": "缺少 content_id 参数，无法重新登录。"}
-    config = garmin_service.get_garmin_connect(content_id,db, current_user)
+    config = garmin_service.get_garmin_connect(content_id, db, current_user)
     if not config:
         return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
     return {
@@ -85,51 +97,55 @@ def relogin_garmin(
         "data": {
             "username": config.account,
             "password": config.encrypted_password,
-            "platform": config.region
-        }
+            "platform": config.region,
+        },
     }
+
 
 @router.post("/getGarminSecretString")
 def get_garmin_secret_string(
     connect_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     模拟 Garmin 登录并将认证信息存入数据库。
     成功后将保存 accessToken 到 garmin_connect 表。
     """
     try:
-      updated_auth = garmin_service.refresh_garmin_secret_string(connect_id,db, current_user)
-      return {
-          "status": "success",
-          "data": {
-              "garmin_user_id": updated_auth.user_id,
-              "region_id": updated_auth.region
-          }
-      }
+        updated_auth = garmin_service.refresh_garmin_secret_string(
+            connect_id, db, current_user
+        )
+        return {
+            "status": "success",
+            "data": {
+                "garmin_user_id": updated_auth.user_id,
+                "region_id": updated_auth.region,
+            },
+        }
     except HTTPException as e:
         raise e
-     
-    
 
-@router.post("/getGarminAccessTokenBySecertString") 
+
+@router.post("/getGarminAccessTokenBySecertString")
 def get_garmin_access_token_by_secret_string(
     connectId: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    base_connect = garmin_service.refresh_garmin_access_token(connectId, db, current_user)
-    return {
-        "status": "success",
-        "access_token": base_connect.access_token
-    }
+    base_connect = garmin_service.refresh_garmin_access_token(
+        connectId, db, current_user
+    )
+    if not base_connect:
+        return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
+    return {"status": "success", "access_token": base_connect.access_token}
+
 
 @router.post("/saveConfig")
 def save_garmin_config(
     payload: GarminSaveRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     从前端保存 Garmin 授权配置。
@@ -140,76 +156,78 @@ def save_garmin_config(
         user_id=current_user.user_id,
         token_data=payload.tokenData,
         username=payload.username,
-        password=payload.password
+        password=payload.password,
     )
-    
+
     return {
         "status": "success",
-        "data": {"region": garmin_auth.region, "garmin_guid": garmin_auth.guid}
+        "data": {"region": garmin_auth.region, "garmin_guid": garmin_auth.guid},
     }
 
+
 @router.get("/refreshGarminActivityCount")
-def refresh_garmin_activity_count(
-    db: Session = Depends(get_db)
-):
+def refresh_garmin_activity_count(db: Session = Depends(get_db)):
     """刷新数字"""
     garmin_service.refresh_garmin_activity_count(db)
     return {"status": "success"}
+
 
 @router.get("/pullFullActivities")
 def pull_full_activities(
     region: str = "CN",
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     从佳明接口获取全部运动数据并保存到本地数据库。
     使用分页参数 (start, limit) 循环拉取，直到数据取完。
     """
-    return garmin_service.pull_full_garmin_activities(db, current_user, region,True)
+    return garmin_service.pull_full_garmin_activities(db, current_user, region, True)
+
 
 @router.get("/pullNewActivities")
 def pull_new_activities(
     region: str = "CN",
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     从佳明接口获取全部运动数据并保存到本地数据库。
     使用分页参数 (start, limit) 循环拉取，直到数据取完。
     """
-    return garmin_service.pull_full_garmin_activities(db, current_user, region,False)
+    return garmin_service.pull_full_garmin_activities(db, current_user, region, False)
+
 
 @router.get("/saveNewActivities")
 def save_new_activities(
     region: str = "CN",
-    new_count:int = 10,
+    new_count: int = 10,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     从佳明接口获取最新的运动数据并保存。
     默认获取最近的 10 条记录，用于快速增量同步。
     """
     return garmin_service.sync_new_garmin_activities(
-        db=db,
-        user_id=current_user.user_id,
-        region=region,
-        limit=new_count
+        db=db, user_id=current_user.user_id, region=region, limit=new_count
     )
+
 
 @router.get("/downloadActivity/{id}")
 def download_garmin_activity(
     id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     下载佳明运动记录的原文件，支持流式传输。
     """
     # 1. 获取 Response 对象（此时连接仍处于 open 状态）
-    file_response, filename = garmin_service.get_garmin_activity_download_info(db, current_user, id)
-    
+    file_response, filename = garmin_service.get_garmin_activity_download_info(
+        db, current_user, id
+    )
+
     # 2. 定义生成器，确保在传输完成后关闭连接
     def stream_contents():
         try:
@@ -222,9 +240,10 @@ def download_garmin_activity(
 
     return StreamingResponse(
         stream_contents(),
-        media_type="application/zip", # 佳明原始文件通常是压缩包
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        media_type="application/zip",  # 佳明原始文件通常是压缩包
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
 
 @router.post("/uploadGarminActivity2Garmin/{id}")
 def upload_garmin_activity_to_garmin(
@@ -238,9 +257,10 @@ def upload_garmin_activity_to_garmin(
     """
     return garmin_service.sync_garmin_to_garmin(db, current_user, id)
 
+
 @router.post("/uploadCorosActivity2Garmin/{id}")
 def upload_coros_activity_to_garmin(
-    id: int, 
+    id: int,
     region: str = Query("CN", description="上传目标佳明账号区域: CN 或 GLOBAL"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -248,5 +268,7 @@ def upload_coros_activity_to_garmin(
     """
     按 /coros/downloadActivity 同源流程从高驰获取 FIT，再上传到当前用户绑定的佳明账号。
     """
-    region = region.upper();
-    return garmin_service.sync_coros_to_garmin(db, current_user, id, target_region=region)
+    region = region.upper()
+    return garmin_service.sync_coros_to_garmin(
+        db, current_user, id, target_region=region
+    )

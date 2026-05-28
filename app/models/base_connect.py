@@ -7,8 +7,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    Text,
-    UniqueConstraint,
+    Text
 )
 from sqlalchemy.orm import relationship
 
