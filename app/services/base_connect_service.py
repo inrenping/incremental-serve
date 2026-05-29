@@ -9,9 +9,7 @@ def get_connects(db: Session, current_user: User):
     """获取当前用户下的账号连接配置。"""
     connect_configs = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.is_active == True
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.is_active == True)
         .all()
     )
     return connect_configs
@@ -21,7 +19,7 @@ def get_connect(id: int, db: Session, current_user: User):
     """获取账号连接配置。"""
     connect_configs = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.user_id, BaseConnect.id == id)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == id)
         .first()
     )
     return connect_configs
@@ -33,7 +31,7 @@ def test_connect(id: int, db: Session, current_user: User):
         return {"status": "error", "message": "缺少 id 参数，无法测试。"}
     base_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.user_id, BaseConnect.id == id)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == id)
         .first()
     )
     if not base_connect:
@@ -92,9 +90,7 @@ def perform_relogin(connect_id: int, db: Session, current_user: User) -> BaseCon
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
     base_connect = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.id == connect_id
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
         .first()
     )
     if not base_connect:

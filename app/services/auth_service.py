@@ -27,13 +27,13 @@ def generate_user_tokens(
         包含 access_token, refresh_token, token_type, user_id 的字典
     """
     # 生成 Access Token (通常 15-60 分钟)
-    access_token = create_access_token(data={"sub": str(current_user.user_id)})
+    access_token = create_access_token(data={"sub": str(current_user.id)})
 
     # 生成 Refresh Token (通常 7 天)
     refresh_token_str = create_refresh_token()
 
     new_refresh_token = UserRefreshToken(
-        user_id=current_user.user_id,
+        user_id=current_user.id,
         refresh_token=refresh_token_str,
         expires_time=datetime.now(timezone.utc) + timedelta(days=7),
         created_at=datetime.now(timezone.utc),
@@ -47,7 +47,7 @@ def generate_user_tokens(
         "access_token": access_token,
         "refresh_token": refresh_token_str,
         "token_type": "bearer",
-        "user_id": current_user.user_id,
+        "user_id": current_user.id,
     }
 
 
@@ -163,7 +163,7 @@ def handle_oauth_user(
 
     if social:
         # 2. 如果存在社交账户，查找关联的用户
-        user = db.query(User).filter(User.user_id == social.user_id).first()
+        user = db.query(User).filter(User.id == social.user_id).first()
         if user:
             if not user.active:
                 raise HTTPException(status_code=400, detail="账号已被禁用")
@@ -178,7 +178,7 @@ def handle_oauth_user(
                 raise HTTPException(status_code=400, detail="账号已被禁用")
             # 创建社交账户绑定
             social = UserSocial(
-                user_id=user.user_id,
+                user_id=user.id,
                 provider=provider,
                 provider_user_id=provider_user_id,
                 access_token=access_token,
@@ -191,7 +191,7 @@ def handle_oauth_user(
             user = create_user(db, username, email)
 
             social = UserSocial(
-                user_id=user.user_id,
+                user_id=user.id,
                 provider=provider,
                 provider_user_id=provider_user_id,
                 access_token=access_token,
@@ -233,7 +233,7 @@ def refresh_user_token(
         raise HTTPException(status_code=401, detail="Refresh Token 无效或已过期")
 
     # 检查关联用户是否存在且活跃
-    user = db.query(User).filter(User.user_id == db_token.user_id).first()
+    user = db.query(User).filter(User.id == db_token.user_id).first()
     if not user or not user.active:
         raise HTTPException(status_code=401, detail="用户不存在或已被禁用")
 

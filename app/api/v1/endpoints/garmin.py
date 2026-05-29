@@ -60,7 +60,7 @@ def login_garmin(
     """
     通过用户名密码模拟登录
     """
-    configs = garmin_service.get_garmin_configs(db, current_user.user_id)
+    configs = garmin_service.get_garmin_configs(db, current_user.id)
     if not configs:
         raise HTTPException(
             status_code=404, detail="No Garmin configuration found for the user."
@@ -129,7 +129,7 @@ def save_garmin_config(
     """
     garmin_auth = garmin_service.save_garmin_connection(
         db=db,
-        user_id=current_user.user_id,
+        user_id=current_user.id,
         token_data=payload.tokenData,
         username=payload.username,
         password=payload.password,
@@ -160,7 +160,7 @@ def save_new_activities(
     默认获取最近的 10 条记录，用于快速增量同步。
     """
     return garmin_service.sync_new_garmin_activities(
-        db=db, user_id=current_user.user_id, region=region, limit=new_count
+        db=db, user_id=current_user.id, region=region, limit=new_count
     )
 
 

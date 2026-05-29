@@ -45,9 +45,7 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
     """测试 Token 有效性"""
     base_connect = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.id == connect_id
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
         .first()
     )
     if not base_connect:
@@ -78,7 +76,7 @@ def perform_coros_login(
         coros_auth = (
             db.query(BaseConnect)
             .filter(
-                BaseConnect.user_id == current_user.user_id,
+                BaseConnect.user_id == current_user.id,
                 BaseConnect.id == id,
             )
             .first()
@@ -126,14 +124,14 @@ def perform_coros_login(
     data = login_response.get("data", {})
     print(data)
     if not coros_auth:
-        coros_auth = BaseConnect(user_id=current_user.user_id)
+        coros_auth = BaseConnect(user_id=current_user.id)
         db.add(coros_auth)
 
     coros_auth.source_type = "coros"
     coros_auth.account = account
     coros_auth.encrypted_password = encrypted_password
     coros_auth.access_token = data.get("accessToken")
-    coros_auth.user_id = current_user.user_id
+    coros_auth.user_id = current_user.id
     coros_auth.guid = str(data.get("userId"))
     coros_auth.region = data.get("regionId")
     coros_auth.is_active = True
@@ -149,7 +147,7 @@ def pull_full_coros_activities(
     base_auth = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.is_active == True,
             BaseConnect.id == connect_id,
         )
@@ -248,7 +246,7 @@ def pull_full_coros_activities(
 
             new_activity = BaseActivity(
                 connect_id=base_auth.id,
-                user_id=current_user.user_id,
+                user_id=current_user.id,
                 activity_id=label_id,
                 name=item.get("name"),
                 sport_type=item.get("sportType"),
@@ -294,7 +292,7 @@ def get_coros_activity_download_info(
     coros_auth = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.is_active == True,
             BaseConnect.id == connect_id,
         )
@@ -305,9 +303,7 @@ def get_coros_activity_download_info(
 
     activity = (
         db.query(BaseActivity)
-        .filter(
-            BaseActivity.user_id == current_user.user_id, BaseActivity.id == activity_id
-        )
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
         .first()
     )
     if not activity:
@@ -347,7 +343,7 @@ def get_coros_activity_download_info(
         file_response = requests.get(download_url, stream=True, timeout=30)
         ctx["response"] = None
     log_operation_async(
-        user_id=current_user.user_id,
+        user_id=current_user.id,
         log_type="DOWNLOAD",
         module_name="coros",
         op_desc="下载高驰运动文件",
@@ -431,7 +427,7 @@ def _upload_fit_zip_to_coros(
         return {"status": "error", "message": f"上传异常: {str(e)}"}
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
         log_operation_async(
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             log_type="UPLOAD",
             module_name="coros",
             op_desc="上传活动到高驰",
@@ -452,7 +448,7 @@ def sync_garmin_to_coros(
     ga = (
         db.query(BaseActivity)
         .filter(
-            BaseActivity.user_id == current_user.user_id,
+            BaseActivity.user_id == current_user.id,
             BaseActivity.id == garmin_activity_id,
         )
         .first()
@@ -464,7 +460,7 @@ def sync_garmin_to_coros(
     ca = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.is_active == True,
             BaseConnect.id == connect_id,
         )

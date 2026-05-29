@@ -60,9 +60,7 @@ def relogin_coros(
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
     coros_config = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.id == connect_id
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
         .first()
     )
     if not coros_config:

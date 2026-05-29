@@ -7,7 +7,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
-    Text
+    Text,
 )
 from sqlalchemy.orm import relationship
 
@@ -30,7 +30,7 @@ class BaseConnect(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键 ID")
     user_id = Column(
         Integer,
-        ForeignKey("t_users.user_id", ondelete="CASCADE"),
+        ForeignKey("t_users.id", ondelete="CASCADE"),
         nullable=False,
         comment="本地系统用户 ID（关联 t_users 表）",
     )
@@ -41,7 +41,9 @@ class BaseConnect(Base):
         nullable=False,
         comment="三方平台类型/来源标识（如：garmin, coros, strava）",
     )
-    account = Column(String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）")
+    account = Column(
+        String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）"
+    )
     guid = Column(
         String(255),
         nullable=True,

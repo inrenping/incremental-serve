@@ -37,7 +37,7 @@ class BaseActivity(Base):
     id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
     user_id = Column(
         Integer,
-        ForeignKey("t_users.user_id", ondelete="CASCADE"),
+        ForeignKey("t_users.id", ondelete="CASCADE"),
         nullable=False,
         comment="用户ID",
     )

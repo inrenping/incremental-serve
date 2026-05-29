@@ -108,9 +108,7 @@ def get_activities_by_page(
     # 1. 校验连接凭证
     base_connect = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.id == connect_id, BaseConnect.user_id == current_user.user_id
-        )
+        .filter(BaseConnect.id == connect_id, BaseConnect.user_id == current_user.id)
         .first()
     )
     if not base_connect:
@@ -118,7 +116,7 @@ def get_activities_by_page(
 
     # 2. 构建基础查询
     query = db.query(BaseActivity).filter(
-        BaseActivity.user_id == current_user.user_id,
+        BaseActivity.user_id == current_user.id,
         BaseActivity.source_type == base_connect.source_type,
     )
 
@@ -151,7 +149,7 @@ def get_activity(
     activity = (
         db.query(BaseActivity)
         .filter(
-            BaseActivity.user_id == current_user.user_id,
+            BaseActivity.user_id == current_user.id,
             BaseActivity.id == id,
         )
         .first()

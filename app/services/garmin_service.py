@@ -32,25 +32,21 @@ def get_garmin_connect(connect_id: int, db: Session, current_user: User) -> Base
         return None
     return (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.id == connect_id
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
         .first()
     )
 
 
 def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
     """获取指定用户的所有佳明授权配置。"""
-    return (
-        db.query(BaseConnect).filter(BaseConnect.user_id == current_user.user_id).all()
-    )
+    return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.id).all()
 
 
 def test_garmin_token(id: int, db: Session, current_user: User) -> bool:
     """测试 Token 有效性"""
     base_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.user_id, BaseConnect.id == id)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == id)
         .first()
     )
     if not base_connect:
@@ -102,6 +98,8 @@ def save_garmin_connection(
     支持从 OAuth token 数据 (TokenData) 或 Garth 凭据字符串 (secret_string) 进行更新。
     """
     print(f"开始保存登录信息")
+
+    ## TODO 如果是新增账户要判断重复添加
 
     garmin_guid = None
 
@@ -242,7 +240,7 @@ def get_garmin_secret_string(
         return save_garmin_connection(
             id=id,
             db=db,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             username=account,
             password=encrypted_password,
             secret_string=secret_string,
@@ -251,7 +249,7 @@ def get_garmin_secret_string(
     else:
         return save_garmin_connection(
             db=db,
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             username=account,
             password=encrypted_password,
             secret_string=secret_string,
@@ -326,7 +324,7 @@ def refresh_garmin_access_token(
             # 4. 保存连接并返回
             base_connect = save_garmin_connection(
                 db=db,
-                user_id=current_user.user_id,
+                user_id=current_user.id,
                 id=garmin_config.id,
                 token_data=TokenDataHelper(token_dict),
                 username=garmin_config.account,
@@ -455,7 +453,7 @@ def _sync_garmin_activities_internal(
         # 4. 构建并保存模型（字段无缝对齐最新 PostgreSQL 物理表结构）
         new_activity = BaseActivity(
             # 主键与关联外键
-            user_id=current_user.user_id,
+            user_id=current_user.id,
             base_connect_id=config.id,
             # 数据来源追踪
             source_type="garmin",
@@ -502,7 +500,7 @@ def pull_full_garmin_activities(
     config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.id == connect_id,
         )
         .first()
@@ -540,7 +538,7 @@ def sync_new_garmin_activities(
     db: Session, user_id: int, region: str, limit: int = 10
 ) -> dict:
     """增量同步最新佳明活动。"""
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.id == user_id).first()
     config = (
         db.query(BaseConnect)
         .filter(BaseConnect.user_id == user_id, BaseConnect.region == region.upper())
@@ -561,9 +559,7 @@ def get_garmin_activity_download_info(
     """获取佳明文件下载响应对象（不直接读取内容）。"""
     ga = (
         db.query(BaseActivity)
-        .filter(
-            BaseActivity.user_id == current_user.user_id, BaseActivity.id == activity_id
-        )
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
         .first()
     )
 
@@ -574,9 +570,7 @@ def get_garmin_activity_download_info(
     region = "CN" if ga.garmin_cn_activity_id else "GLOBAL"
     config = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.region == region
-        )
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.region == region)
         .first()
     )
 
@@ -712,9 +706,7 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int) -> 
     """佳明之间同步逻辑。"""
     ga = (
         db.query(BaseActivity)
-        .filter(
-            BaseActivity.user_id == current_user.user_id, BaseActivity.id == activity_id
-        )
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
         .first()
     )
     if not ga:
@@ -726,7 +718,7 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int) -> 
     target_config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.region == target_region,
         )
         .first()
@@ -749,7 +741,7 @@ def sync_coros_to_garmin(
     target_config = (
         db.query(BaseConnect)
         .filter(
-            BaseConnect.user_id == current_user.user_id,
+            BaseConnect.user_id == current_user.id,
             BaseConnect.region == target_region,
         )
         .first()

@@ -93,7 +93,7 @@ def get_user_info(
         raise HTTPException(status_code=404, detail=f"未找到用户: {identifier}")
 
     return {
-        "id": user.user_id,
+        "id": user.id,
         "username": user.user_name,
         "email": user.user_email,
         "created_at": user.created_at,
@@ -103,9 +103,7 @@ def get_user_info(
 
 def get_user_social_info(db: Session, current_user: User) -> list[dict]:
     """根据当前用户获取该用户的社交登录信息"""
-    socials = (
-        db.query(UserSocial).filter(UserSocial.user_id == current_user.user_id).all()
-    )
+    socials = db.query(UserSocial).filter(UserSocial.user_id == current_user.id).all()
     return [
         {
             "id": social.id,
