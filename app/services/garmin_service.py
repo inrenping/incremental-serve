@@ -46,34 +46,33 @@ def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
     )
 
 
-def test_garmin_token(connect_id: int, db: Session, current_user: User) -> bool:
+def test_garmin_token(id: int, db: Session, current_user: User) -> bool:
     """测试 Token 有效性"""
     base_connect = (
         db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.user_id, BaseConnect.id == connect_id
-        )
+        .filter(BaseConnect.user_id == current_user.user_id, BaseConnect.id == id)
         .first()
     )
     if not base_connect:
-        print(f"NOT FOUND GARMIN CONNECT {connect_id}")
+        print(f"NOT FOUND GARMIN CONNECT {id}")
         return False
-    start, limit = 0, 0
-    base_url = (
-        "connect.garmin.cn" if base_connect.region == "CN" else "connect.garmin.com"
-    )
-    api_url = f"https://{base_url}/activitylist-service/activities/search/activities"
-
-    headers = {
-        "Authorization": f"Bearer {base_connect.access_token}",
-        "di-backend": base_url,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    }
-    api_params = {"start": start, "limit": limit}
-    response = requests.get(api_url, params=api_params, headers=headers, timeout=10)
-    if response.status_code == 200:
-        return True
-    else:
+    try:
+        start, limit = 0, 1
+        # print(base_connect.region)
+        if base_connect.region == "CN" or base_connect.region == "cn":
+            garth.configure(domain="garmin.cn", ssl_verify=False)
+        else:
+            garth.configure(domain="garmin.com")
+        api_url = "/activitylist-service/activities/search/activities"
+        params = {"start": start, "limit": limit}
+        response = garth.connectapi(path=api_url, params=params)
+        print(f"测试佳明 token 有效性。{response}")
+        if response:
+            return True
+        else:
+            return False
+    except Exception as e:
+        print(f"测试佳明 token 有效性失败: {str(e)}")
         return False
 
 
@@ -102,13 +101,12 @@ def save_garmin_connection(
     """
     支持从 OAuth token 数据 (TokenData) 或 Garth 凭据字符串 (secret_string) 进行更新。
     """
-
     print(f"开始保存登录信息")
 
     garmin_guid = None
 
     # 1. 如果提供了 token_data，优先解析以确定 region 和 guid
-    print(token_data)
+    print(f"token_data: {token_data}")
     if token_data:
         try:
             oauth2 = token_data.oauth2
@@ -167,7 +165,6 @@ def save_garmin_connection(
         garmin_auth.refresh_token_expires_at = datetime.fromtimestamp(
             oauth2.refresh_token_expires_at
         )
-
     db.commit()
     return garmin_auth
 
@@ -187,8 +184,8 @@ def refresh_garmin_secret_string(
         )
 
     return get_garmin_secret_string(
-        connect_id=connect_id,
-        account=garmin_connect,
+        id=connect_id,
+        account=garmin_connect.account,
         encrypted_password=garmin_connect.encrypted_password,
         region=garmin_connect.region,
         db=db,
@@ -197,7 +194,7 @@ def refresh_garmin_secret_string(
 
 
 def get_garmin_secret_string(
-    connect_id: int,
+    id: int,
     account: str,
     encrypted_password: str,
     region: str,
@@ -210,19 +207,21 @@ def get_garmin_secret_string(
         raw_password = CryptoUtils.decrypt(encrypted_password, secret_key)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"密码解密失败: {str(e)}")
-
+    print(f"开始佳明模拟登录，{region}")
     try:
         if region and region.upper() == "CN":
-            garth.configure(domain="garmin.cn", ssl_verify=False)
+            base_url = "garmin.cn"
+            garth.configure(domain=base_url, ssl_verify=False)
         else:
-            garth.configure(domain="garmin.com")
+            base_url = "garmin.com"
+            garth.configure(domain=base_url)
 
-        # print(f"{account} | {raw_password} | {region}")
+        print(f"{account} | {raw_password} | {region}")
         with log_request(
             current_user=current_user,
-            req_url="",
+            req_url=base_url + " | garth.login",
             req_method="GET",
-            req_params="",
+            req_params=account,
             log_type="login",
             module_name="garmin",
             op_desc="佳明模拟登录",
@@ -233,15 +232,15 @@ def get_garmin_secret_string(
             ctx["response"] = secret_string
 
     except garth.exc.GarthException as e:
-        print(f"佳明登录认证失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"佳明登录认证失败: {str(e)}")
+        print(f"登录佳明认证失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"登录佳明认证失败: {str(e)}")
     except Exception as e:
         print(f"佳明连接异常: {str(e)}")
         raise HTTPException(status_code=500, detail=f"佳明连接异常: {str(e)}")
 
-    if connect_id and connect_id > 0:
+    if id and id > 0:
         return save_garmin_connection(
-            connect_id=connect_id,
+            id=id,
             db=db,
             user_id=current_user.user_id,
             username=account,
@@ -261,10 +260,10 @@ def get_garmin_secret_string(
 
 
 def refresh_garmin_access_token(
-    connect_id: int, db: Session, current_user: User
+    id: int, db: Session, current_user: User
 ) -> BaseConnect:
     """通过 secret_string 获取有效的 Access Token，必要时自动刷新。"""
-    garmin_config = base_connect_service.get_connect(connect_id, db, current_user)
+    garmin_config = base_connect_service.get_connect(id, db, current_user)
 
     if not garmin_config or not garmin_config.secret_string:
         raise HTTPException(status_code=404, detail="找不到有效的佳明配置或凭证字符串")
@@ -362,16 +361,16 @@ def _sync_garmin_activities_internal(
     config: BaseConnect,
     current_user: User,
     start: int = 0,
-    limit: int = 100,
+    limit: int = 5,
     incremental: bool = True,
 ) -> Tuple[int, int]:
     """辅助方法：使用 garth 抓取并保存活动。"""
 
     # 1. 动态配置 garth 的域名（根据 CN 或 国际区）
-    # 注意：在实际运行此函数前，应确保已通过 garth.login() 或 garth.resume() 完成了初始化
-    garth.client.configure(
-        domain="garmin.cn" if config.region == "CN" else "garmin.com"
-    )
+    if config.region and config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
 
     # 对应原原接口的相对路径
     api_path = "/activitylist-service/activities/search/activities"
@@ -396,6 +395,7 @@ def _sync_garmin_activities_internal(
 
         # garth 返回的直接就是解析后的 JSON 数据（通常是 list 或 dict）
         activities_data = response
+        print(f"获取佳明运动记录，{activities_data}")
 
     except Exception as e:
         print(f"同步佳明数据失败: {str(e)}")
@@ -404,12 +404,13 @@ def _sync_garmin_activities_internal(
     if not activities_data or not isinstance(activities_data, list):
         return 0, 0
 
-    # 2. 提取 ID 并去重
+    # 2. 提取 ID 并去重 (统一映射至 Garmin 真实的驼峰命名 'activityId')
     activity_ids = [
         str(item.get("activityId"))
         for item in activities_data
         if item.get("activityId")
     ]
+
     existing_ids = (
         {
             aid
@@ -423,42 +424,71 @@ def _sync_garmin_activities_internal(
 
     saved_count = 0
     for item in activities_data:
-        activity_id = str(item.get("activityId"))
+        activity_id = str(item.get("activityId")) if item.get("activityId") else None
+        if not activity_id:
+            continue
+
         if activity_id in existing_ids:
             if incremental:
                 # 增量同步模式下，遇到已存在记录即停止本批次后续处理
                 break
             continue
 
-        # 3. 转换时间
-        start_time_str = item.get("startTimeGMT")
-        start_time = None
-        if start_time_str:
-            # 兼容 Z 结尾的 ISO 格式
-            start_time = datetime.fromisoformat(start_time_str.replace("Z", "+00:00"))
+        # 3. 转换时间（精准匹配 JSON 中的 startTimeGMT, startTimeLocal, endTimeGMT）
+        start_time_gmt = None
+        start_time_local = None
+        end_time_gmt = None
 
-        # 4. 构建并保存模型
+        if item.get("startTimeGMT"):
+            start_time_gmt = datetime.fromisoformat(item["startTimeGMT"]).replace(
+                tzinfo=timezone.utc
+            )
+
+        if item.get("startTimeLocal"):
+            start_time_local = datetime.fromisoformat(item["startTimeLocal"])
+
+        if item.get("endTimeGMT"):
+            end_time_gmt = datetime.fromisoformat(item["endTimeGMT"]).replace(
+                tzinfo=timezone.utc
+            )
+
+        # 4. 构建并保存模型（字段无缝对齐最新 PostgreSQL 物理表结构）
         new_activity = BaseActivity(
+            # 主键与关联外键
             user_id=current_user.user_id,
-            source_provider="garmin",
+            base_connect_id=config.id,
+            # 数据来源追踪
+            source_type="garmin",
             activity_id=activity_id,
+            # 基础信息
             activity_name=item.get("activityName"),
-            sport_type_standard=item.get("activityType", {}).get("typeKey"),
             sport_type_raw=item.get("activityType", {}).get("typeKey"),
-            start_time=start_time,
+            sport_mode_raw=item.get("activityType", {}).get("typeId"),
+            # 时间与空间
+            start_time_gmt=start_time_gmt,
+            start_time_local=start_time_local,
+            end_time_gmt=end_time_gmt,
+            # 核心运动数据
             distance_meters=item.get("distance"),
             duration_seconds=item.get("duration"),
             moving_duration_seconds=item.get("movingDuration"),
             calories=item.get("calories"),
+            # 生理与运动指标
             average_hr=item.get("averageHR"),
             max_hr=item.get("maxHR"),
             average_cadence=item.get("averageRunningCadenceInStepsPerMinute")
             or item.get("averageBikingCadenceInRevPerMinute"),
+            average_speed=item.get("averageSpeed"),
+            max_speed=item.get("maxSpeed"),
+            # 地理位置与设备
+            start_lat=item.get("startLatitude"),
+            start_lon=item.get("startLongitude"),
+            location_name=item.get("locationName"),
+            device_id=str(item.get("deviceId")) if item.get("deviceId") else None,
             elevation_gain=item.get("elevationGain"),
             elevation_loss=item.get("elevationLoss"),
-            garmin_activity_id=activity_id if config.region != "CN" else None,
-            garmin_cn_activity_id=(activity_id if config.region == "CN" else None),
         )
+
         db.add(new_activity)
         saved_count += 1
 

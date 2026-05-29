@@ -78,30 +78,6 @@ def login_garmin(
     }
 
 
-@router.post("/relogin")
-def relogin_garmin(
-    content_id: int = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    从配置获取 secret_string 刷新token 如果不行的话，用用户名密码获取 secret_string，然后刷新token
-    """
-    if not content_id:
-        return {"status": "error", "message": "缺少 content_id 参数，无法重新登录。"}
-    config = garmin_service.get_garmin_connect(content_id, db, current_user)
-    if not config:
-        return {"status": "error", "message": "未找到高驰授权配置，请先登录获取授权。"}
-    return {
-        "status": "success",
-        "data": {
-            "username": config.account,
-            "password": config.encrypted_password,
-            "platform": config.region,
-        },
-    }
-
-
 @router.post("/getGarminSecretString")
 def get_garmin_secret_string(
     connect_id: int,

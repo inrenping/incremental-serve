@@ -62,6 +62,7 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
     page_number = 1
     query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
     response = requests.get(query_url, headers=headers, timeout=10)
+    print(f"测试coros token 有效性。{response.status_code}")
     if response.status_code == 200:
         return True
     else:
@@ -69,20 +70,16 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
 
 
 def perform_coros_login(
-    db: Session,
-    current_user: User,
-    account: str,
-    encrypted_password: str,
-    connect_id: int = None,
+    id: int, account: str, encrypted_password: str, db: Session, current_user: User
 ) -> BaseConnect:
     """执行高驰登录逻辑并更新授权信息。"""
     coros_auth = None
-    if connect_id:
+    if id:
         coros_auth = (
             db.query(BaseConnect)
             .filter(
                 BaseConnect.user_id == current_user.user_id,
-                BaseConnect.id == connect_id,
+                BaseConnect.id == id,
             )
             .first()
         )
@@ -477,11 +474,10 @@ def sync_garmin_to_coros(
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
 
     # 下载 Garmin 文件
-    base = (
-        "connect.garmin.cn"
-        if ga.garmin_connect.region == "CN"
-        else "connect.garmin.com"
-    )
+    if ga.garmin_connect.region == "CN" or ga.garmin_connect.region == "cn":
+        base = "connect.garmin.cn"
+    else:
+        base = "connect.garmin.com"
     down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
     # print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
     headers = {

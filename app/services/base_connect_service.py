@@ -27,13 +27,41 @@ def get_connect(id: int, db: Session, current_user: User):
     return connect_configs
 
 
+def test_connect(id: int, db: Session, current_user: User):
+    """测试 token 有效性"""
+    if not id:
+        return {"status": "error", "message": "缺少 id 参数，无法测试。"}
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.user_id, BaseConnect.id == id)
+        .first()
+    )
+    if not base_connect:
+        return {"status": "error", "message": "未找到授权配置，请先登录获取授权。"}
+    elif base_connect.source_type == "coros":
+        if coros_service.test_coros_token(base_connect.id, db, current_user):
+            return base_connect
+        else:
+            return {"status": "error", "message": "coros 测试失败"}
+    elif base_connect.source_type.startswith("garmin"):
+        if garmin_service.test_garmin_token(base_connect.id, db, current_user):
+            return base_connect
+        else:
+            return {"status": "error", "message": "garmin 测试失败"}
+    return {"status": "error", "message": "测试失败"}
+
+
 def perform_login(
-    email: str, password: str, region: str, db: Session, current_user: User
+    id: int, email: str, password: str, region: str, db: Session, current_user: User
 ) -> BaseConnect:
     print(f"perform_login->region:{region }")
     if region == "coros":
         coros_auth = coros_service.perform_coros_login(
-            db=db, current_user=current_user, account=email, encrypted_password=password
+            id=id,
+            db=db,
+            current_user=current_user,
+            account=email,
+            encrypted_password=password,
         )
         return coros_auth
 
@@ -41,12 +69,17 @@ def perform_login(
         print(f"region:{region }")
         # 先刷新 secret_string
         updated_auth = garmin_service.get_garmin_secret_string(
-            0, email, password, region, db, current_user
+            id=id,
+            account=email,
+            encrypted_password=password,
+            region=region,
+            db=db,
+            current_user=current_user,
         )
         # 再刷新 access_token
         print(f"准备刷新 access_token { updated_auth.id }")
         updated_auth = garmin_service.refresh_garmin_access_token(
-            updated_auth.id, db, current_user
+            id=updated_auth.id, db=db, current_user=current_user
         )
         return updated_auth
     else:

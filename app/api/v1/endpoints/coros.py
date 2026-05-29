@@ -15,6 +15,7 @@ router = APIRouter()
 class CorosLoginRequest(BaseModel):
     """高驰登录请求模型"""
 
+    id: int
     email: str
     password: str
 
@@ -30,10 +31,11 @@ def login_coros(
     成功后将保存 accessToken 到 coros_connect 表。
     """
     coros_auth = coros_service.perform_coros_login(
-        db=db,
-        current_user=current_user,
+        id=payload.id,
         account=payload.email,
         encrypted_password=payload.password,
+        db=db,
+        current_user=current_user,
     )
     return {
         "status": "success",
@@ -68,7 +70,7 @@ def relogin_coros(
     coros_auth = coros_service.perform_coros_login(
         db=db,
         current_user=current_user,
-        connect_id=connect_id,
+        id=connect_id,
         account=coros_config.coros_account,
         encrypted_password=coros_config.coros_password_encrypted,
     )

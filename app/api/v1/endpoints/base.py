@@ -20,6 +20,7 @@ router = APIRouter()
 class LoginRequest(BaseModel):
     """登录请求模型"""
 
+    id: int
     region: str
     email: str
     password: str
@@ -36,6 +37,16 @@ def get_connect_config(
     return connect_configs
 
 
+@router.get("/testConnect")
+def test_connect(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """测试连接"""
+    return base_connect_service.test_connect(id, db, current_user)
+
+
 @router.post("/login")
 def login(
     login_request: LoginRequest,
@@ -47,11 +58,12 @@ def login(
     成功后将保存 accessToken 到对应的连接表中。
     """
     base_connect = base_connect_service.perform_login(
-        login_request.email,
-        login_request.password,
-        login_request.region,
-        db,
-        current_user,
+        id=login_request.id,
+        email=login_request.email,
+        password=login_request.password,
+        region=login_request.region,
+        db=db,
+        current_user=current_user,
     )
     if not base_connect:
         return {"status": "error", "message": "登录失败"}
