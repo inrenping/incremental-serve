@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.models.log_operation import OperationLog
 from app.logger import logger
 
+
 @contextmanager
 def log_request(
     current_user=None,
@@ -29,15 +30,17 @@ def log_request(
     - ctx['response']: 上下文内赋值 response 对象，用于记录响应内容
     """
     start_time = time.time()
-    context = {"req_params": req_params} 
+    context = {"req_params": req_params}
     try:
         yield context
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
 
         # 用户信息
-        user_id = getattr(current_user, "user_id", None)
-        user_name = getattr(current_user, "user_name", None) or getattr(current_user, "username", None)
+        user_id = getattr(current_user, "id", None)
+        user_name = getattr(current_user, "user_name", None) or getattr(
+            current_user, "username", None
+        )
 
         # 请求信息
         url = None
@@ -86,15 +89,14 @@ def log_request(
             resp_data=resp_data,
         )
 
+
 def log_operation_async(
-    user_id: str,
-    log_type: str,
-    module_name: str = "",
-    op_desc: str = ""
+    user_id: str, log_type: str, module_name: str = "", op_desc: str = ""
 ):
     """
     异步记录用户操作日志，独立线程执行，不阻塞主线程
     """
+
     def _write_log():
         db = SessionLocal()
         try:
@@ -103,7 +105,7 @@ def log_operation_async(
                 log_type=log_type,
                 module_name=module_name,
                 op_desc=op_desc,
-                created_at=datetime.now(timezone.utc)
+                created_at=datetime.now(timezone.utc),
             )
             db.add(log)
             db.commit()
@@ -113,4 +115,3 @@ def log_operation_async(
             db.close()
 
     threading.Thread(target=_write_log, daemon=True).start()
-
