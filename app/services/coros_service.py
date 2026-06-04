@@ -60,11 +60,29 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
     page_number = 1
     query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
     response = requests.get(query_url, headers=headers, timeout=10)
-    print(f"测试coros token 有效性。{response.status_code}")
-    if response.status_code == 200:
-        return True
-    else:
+    print(f"测试coros token 有效性。{json.dumps(response.json())}")
+    try:
+        data_json = response.json()
+    except ValueError:
         return False
+
+
+def is_response_valid(response) -> bool:
+    # 1. 检查 HTTP 状态码
+    if response.status_code != 200:
+        return False
+
+    # 2. 获取 JSON 数据
+    data_json = response.json()
+
+    # 3. 校验业务逻辑核心字段
+    # 判断 result 是否为 "0000" (通常代表业务成功)
+    # 并且确保 dataList 存在且不是 None
+    result_code = data_json.get("result")
+    data_content = data_json.get("data") or {}
+    data_list = data_content.get("dataList")
+
+    return result_code == "0000" and data_list is not None
 
 
 def perform_coros_login(
@@ -144,7 +162,7 @@ def pull_full_coros_activities(
     db: Session, current_user: User, connect_id: int, incremental: bool = True
 ) -> dict:
     """同步高驰运动记录。incremental 表示是否增量拉取。"""
-    base_auth = (
+    base_connect = (
         db.query(BaseConnect)
         .filter(
             BaseConnect.user_id == current_user.id,
@@ -154,17 +172,25 @@ def pull_full_coros_activities(
         .first()
     )
 
-    if not base_auth or not base_auth.access_token:
+    if not base_connect or not base_connect.access_token:
         raise HTTPException(
             status_code=404, detail="未找到有效的高驰授权配置，请先绑定账号"
         )
 
     # TODO 测试 token 有效性，如果无效则刷新 token
 
-    base_url = get_team_api_base(str(base_auth.region))
+    if not test_coros_token(base_connect.id, db, current_user):
+        base_connect = perform_coros_login(
+            base_connect.id,
+            base_connect.account,
+            base_connect.encrypted_password,
+            db,
+            current_user,
+        )
+    base_url = get_team_api_base(str(base_connect.region))
     headers = {
         "Accept": "application/json, text/plain, */*",
-        "accesstoken": base_auth.access_token,
+        "accesstoken": base_connect.access_token,
     }
 
     page_size = 50
@@ -205,7 +231,7 @@ def pull_full_coros_activities(
         data = result.get("data", {})
         if page_number == 1:
             total_count = data.get("count", 0)
-            update_coros_count(db, base_auth.id, total_count)
+            update_coros_count(db, base_connect.id, total_count)
 
         activities_list = data.get("dataList", [])
         if not activities_list:
@@ -219,7 +245,7 @@ def pull_full_coros_activities(
         if label_ids:
             existing_ids = {
                 lid
-                for (lid,) in db.query(BaseActivity.label_id)
+                for (lid,) in db.query(BaseActivity.activity_id)
                 .filter(BaseActivity.activity_id.in_(label_ids))
                 .all()
             }
@@ -232,35 +258,31 @@ def pull_full_coros_activities(
                     stop_fetching = True
                     break
                 continue
-
-            start_dt = (
-                datetime.fromtimestamp(item.get("startTime", 0), tz=timezone.utc)
-                if item.get("startTime")
-                else None
-            )
-            end_dt = (
-                datetime.fromtimestamp(item.get("endTime", 0), tz=timezone.utc)
-                if item.get("endTime")
-                else None
-            )
-
+            # 时间处理
+            start_ts = item.get("startTime")
+            end_ts = item.get("endTime")
+            start_dt_gmt = datetime.fromtimestamp(start_ts, tz=timezone.utc)
+            end_dt_gmt = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+            start_dt_local = datetime.fromtimestamp(start_ts)
             new_activity = BaseActivity(
-                connect_id=base_auth.id,
+                base_connect_id=base_connect.id,
                 user_id=current_user.id,
-                activity_id=label_id,
-                name=item.get("name"),
-                sport_type=item.get("sportType"),
-                mode=item.get("mode"),
-                distance=item.get("distance"),
-                ascent=item.get("ascent"),
-                descent=item.get("descent"),
+                source_type="coros",
+                activity_id=str(item.get("labelId")),
+                activity_name=item.get("name"),
+                sport_type_raw=item.get("sportType"),
+                sport_mode_raw=item.get("mode"),
+                start_time_gmt=start_dt_gmt,
+                start_time_local=start_dt_local,
+                end_time_gmt=end_dt_gmt,
+                distance_meters=item.get("distance"),
+                duration_seconds=item.get("totalTime"),
+                moving_duration_seconds=item.get("movingTime"),
                 calories=item.get("calorie"),
-                avg_hr=item.get("avgHr"),
+                average_hr=item.get("avgHr"),
                 max_hr=item.get("maxHr"),
-                workout_time=item.get("workoutTime"),
-                total_time=item.get("totalTime"),
-                start_time=start_dt,
-                end_time=end_dt,
+                elevation_gain=item.get("ascent"),
+                elevation_loss=item.get("descent"),
             )
             db.add(new_activity)
             new_saved_count += 1
@@ -274,7 +296,7 @@ def pull_full_coros_activities(
             break
         page_number += 1
 
-    base_auth.last_synced_at = datetime.now(timezone.utc)
+    base_connect.last_synced_at = datetime.now(timezone.utc)
     db.commit()
 
     return {
@@ -310,7 +332,7 @@ def get_coros_activity_download_info(
         raise HTTPException(status_code=404, detail="未找到运动记录")
 
     base_url = get_team_api_base(str(coros_auth.region))
-    meta_url = f"{base_url}/activity/detail/download?labelId={activity.label_id}&sportType={activity.sport_type}&fileType=4"
+    meta_url = f"{base_url}/activity/detail/download?labelId={activity.activity_id}&sportType={activity.sport_type_raw}&fileType=4"
     headers = {"accesstoken": coros_auth.access_token}
 
     with log_request(
@@ -338,7 +360,7 @@ def get_coros_activity_download_info(
         req_params=None,
         log_type="fileUrl",
         module_name="coros",
-        op_desc="高驰下载运动文件)",
+        op_desc="下载高驰运动文件",
     ) as ctx:
         file_response = requests.get(download_url, stream=True, timeout=30)
         ctx["response"] = None
@@ -349,7 +371,7 @@ def get_coros_activity_download_info(
         op_desc="下载高驰运动文件",
     )
     file_response.raise_for_status()
-    return file_response, f"coros_activity_{activity.label_id}.fit"
+    return file_response, f"coros_activity_{activity.activity_id}.fit"
 
 
 def _upload_fit_zip_to_coros(
@@ -370,7 +392,7 @@ def _upload_fit_zip_to_coros(
     # print(f"生成 ZIP 文件: {zip_path}，大小: {filesize}, MD5: {md5_hash}")
 
     # 2. 上传到 OSS
-    oss_path = f"fit_zip/{coros_auth.coros_user_id}/{md5_hash}.zip"
+    oss_path = f"fit_zip/{coros_auth.guid}/{md5_hash}.zip"
     # print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_auth.region}")
 
     if coros_auth.region == 2:  # 中国区

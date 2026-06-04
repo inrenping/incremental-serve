@@ -101,6 +101,7 @@ def perform_relogin(connect_id: int, db: Session, current_user: User) -> BaseCon
             return base_connect
         else:
             base_connect = coros_service.perform_coros_login(
+                id=base_connect.id,
                 db=db,
                 current_user=current_user,
                 account=base_connect.account,

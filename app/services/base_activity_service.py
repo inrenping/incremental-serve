@@ -1,3 +1,4 @@
+import io
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -51,7 +52,7 @@ def download_activity(id: int, db: Session, current_user: User):
         return {"status": "error", "message": "缺少 activity_id 参数，无法下载。"}
     base_activity = db.query(BaseActivity).filter(BaseActivity.id == id).first()
     base_connect = (
-        db.query(BaseConnect).filter(BaseConnect.id == base_activity.connect_id).first()
+        db.query(BaseConnect).filter(BaseConnect.id == base_activity.base_connect_id).first()
     )
     # Token 有效性
     base_connect = base_connect_service.perform_relogin(
@@ -62,7 +63,7 @@ def download_activity(id: int, db: Session, current_user: User):
     # 高驰下载
     if base_activity and base_activity.source_type == "coros":
         file_response, filename = coros_service.get_coros_activity_download_info(
-            db, current_user, id
+            db, current_user,base_connect.id, id
         )
         return StreamingResponse(
             file_response.iter_content(chunk_size=8192),
@@ -72,26 +73,20 @@ def download_activity(id: int, db: Session, current_user: User):
     # 佳明下载
     elif base_activity and base_activity.source_type == "garmin":
         # 1. 获取 Response 对象（此时连接仍处于 open 状态）
-        file_response, filename = garmin_service.get_garmin_activity_download_info(
+        file_data, filename = garmin_service.get_garmin_activity_download_info(
             db, current_user, id
         )
 
-        # 2. 定义生成器，确保在传输完成后关闭连接
-        def stream_contents():
-            try:
-                # 这里的 .iter_content 是 requests 对象的方法
-                for chunk in file_response.iter_content(chunk_size=8192):
-                    yield chunk
-            finally:
-                # 无论传输成功还是客户端断开，都关闭与佳明的连接
-                file_response.close()
+        # 直接将 bytes 转换为字节流
+        stream = io.BytesIO(file_data)
 
         return StreamingResponse(
-            stream_contents(),
-            media_type="application/zip",  # 佳明原始文件通常是压缩包
+            stream,
+            media_type="application/octet-stream",  # 建议统一使用 octet-stream，兼容性更好
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-    return None
+
+    return {"status": "error", "message": "不支持的设备类型"}
 
 
 def upload_activity_to_target(

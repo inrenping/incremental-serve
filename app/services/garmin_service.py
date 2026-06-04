@@ -555,7 +555,7 @@ def sync_new_garmin_activities(
 
 def get_garmin_activity_download_info(
     db: Session, current_user: User, activity_id: int
-) -> Tuple[requests.Response, str]:
+) -> tuple[bytes, str]:
     """获取佳明文件下载响应对象（不直接读取内容）。"""
     ga = (
         db.query(BaseActivity)
@@ -567,37 +567,48 @@ def get_garmin_activity_download_info(
         raise HTTPException(status_code=404, detail="未找到活动记录")
 
     # 根据活动记录寻找对应的 Garmin 配置
-    region = "CN" if ga.garmin_cn_activity_id else "GLOBAL"
     config = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.id, BaseConnect.region == region)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == ga.base_connect_id)
         .first()
     )
-
     if not config:
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权或活动记录")
 
-    base = "connect.garmin.cn" if region == "CN" else "connect.garmin.com"
-    down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
-    headers = {
-        "di-backend": base,
-        "Authorization": f"Bearer {config.access_token}",
-        "User-Agent": "Mozilla/5.0",
-    }
+    if config.region and config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
 
+    download_url = "/download-service/files/activity"
+    url = f"{download_url}/{ga.activity_id}"
     try:
-        # 注意：这里不使用 with 语句，也不手动读取 .content
-        # stream=True 允许我们后续分块读取
-        resp = requests.get(down_url, headers=headers, timeout=30, stream=True)
+        with log_request(
+                current_user=current_user,
+                req_url=url,
+                req_method="POST",
+                req_params=None,
+                log_type="download",
+                module_name="garmin",
+                op_desc="下载佳明运动文件",
+        ):
+            raw = garth.client.download(url)
+        if not raw:
+            raise Exception("下载内容为空")
 
-        if resp.status_code != 200:
-            resp.close()  # 只有在失败时立即关闭
-            raise HTTPException(status_code=resp.status_code, detail="佳明文件下载失败")
+        final_data = raw
+        if raw.startswith(b"PK"):
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
+                if fit_names:
+                    final_data = zf.read(fit_names[0])
+        # 构造文件名
+        filename = f"{ga.activity_id}.fit"
+        return final_data, filename
 
-        return resp, f"{ga.activity_id}.zip"
-
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"网络请求错误: {str(e)}")
+    except Exception as e:
+        print(f"  Failed to download FIT for {activity_id}: {e}")
+        raise HTTPException(status_code=500,detail=f"佳明文件下载失败:{str(e)}")
 
 
 def parse_garmin_upload_response(
