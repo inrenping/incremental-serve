@@ -20,37 +20,31 @@ from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
 from app.utils.logger_utils import log_request
 
-GARMIN_UPLOAD_API_DOMAIN = {
-    "CN": "connectapi.garmin.cn",
-    "GLOBAL": "connectapi.garmin.com",
-}
-
-
-def get_garmin_connect(connect_id: int, db: Session, current_user: User) -> BaseConnect:
+def get_garmin_connect(connect_id: int, db: Session, current_user: User) -> type[BaseConnect]|None:
     """获取指定用户的指定的佳明授权配置。"""
     if not connect_id:
+        print(f"NOT FOUND GARMIN CONNECT {connect_id}")
+    connect = db.query(BaseConnect).filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id).first()
+    if connect:
+        return connect
+    else:
         return None
-    return (
-        db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
-        .first()
-    )
 
 
-def get_garmin_configs(db: Session, current_user: User) -> List[BaseConnect]:
+def get_garmin_configs(db: Session, current_user: User) -> list[type[BaseConnect]]:
     """获取指定用户的所有佳明授权配置。"""
     return db.query(BaseConnect).filter(BaseConnect.user_id == current_user.id).all()
 
 
-def test_garmin_token(id: int, db: Session, current_user: User) -> bool:
+def test_garmin_token(connect_id: int, db: Session, current_user: User) -> bool:
     """测试 Token 有效性"""
     base_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == id)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
         .first()
     )
     if not base_connect:
-        print(f"NOT FOUND GARMIN CONNECT {id}")
+        print(f"NOT FOUND GARMIN CONNECT {connect_id}")
         return False
     try:
         start, limit = 0, 1
@@ -62,7 +56,7 @@ def test_garmin_token(id: int, db: Session, current_user: User) -> bool:
         api_url = "/activitylist-service/activities/search/activities"
         params = {"start": start, "limit": limit}
         response = garth.connectapi(path=api_url, params=params)
-        print(f"测试佳明 token 有效性。{response}")
+        print(f"测试佳明 ({base_connect.region}) token 有效性。{response}")
         if response:
             return True
         else:
@@ -567,15 +561,15 @@ def get_garmin_activity_download_info(
         raise HTTPException(status_code=404, detail="未找到活动记录")
 
     # 根据活动记录寻找对应的 Garmin 配置
-    config = (
+    target_config = (
         db.query(BaseConnect)
         .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == ga.base_connect_id)
         .first()
     )
-    if not config:
+    if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权或活动记录")
 
-    if config.region and config.region.upper() == "CN":
+    if target_config.region and target_config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
     else:
         garth.client.configure(domain="garmin.com")
@@ -607,7 +601,7 @@ def get_garmin_activity_download_info(
         return final_data, filename
 
     except Exception as e:
-        print(f"  Failed to download FIT for {activity_id}: {e}")
+        print(f"佳明文件下载失败 {activity_id}: {e}")
         raise HTTPException(status_code=500,detail=f"佳明文件下载失败:{str(e)}")
 
 
@@ -651,86 +645,67 @@ def _upload_file_to_garmin(
 ) -> dict:
     """内部辅助方法：执行将文件上传到佳明服务器的通用逻辑。支持自动解压 zip 中的 fit 文件。"""
 
-    # --- 新增逻辑：处理 ZIP 文件 ---
     upload_data = file_data
     upload_filename = filename
 
-    if filename.lower().endswith(".zip"):
+    # --- 直接处理 ZIP ---
+    if filename.lower().endswith(".fit"):
         try:
             with zipfile.ZipFile(io.BytesIO(file_data)) as z:
-                # 获取 zip 中所有后缀为 .fit 的文件列表
-                fit_files = [f for f in z.namelist() if f.lower().endswith(".fit")]
+                # 获取 ZIP 压缩包内的第一个文件名
+                file_list = z.namelist()
+                if not file_list:
+                    return {"status": "error", "message": "Zip 为空"}
 
-                if not fit_files:
-                    return {
-                        "status": "error",
-                        "message": "Zip 压缩包中未找到 .fit 文件",
-                    }
-
-                # 提取第一个 fit 文件的内容
-                upload_filename = fit_files[0]
+                upload_filename = file_list[0]
                 upload_data = z.read(upload_filename)
         except zipfile.BadZipFile:
             return {"status": "error", "message": "无效的 Zip 文件"}
-    # ----------------------------
 
-    target_region = target_config.region
-    api_domain = GARMIN_UPLOAD_API_DOMAIN.get(target_region, "connectapi.garmin.com")
-    headers = {
-        "Authorization": f"Bearer {target_config.access_token}",
-        "di-backend": (
-            "connect.garmin.cn" if target_region == "CN" else "connect.garmin.com"
-        ),
-    }
-    url = f"https://{api_domain}/upload-service/upload"
+    # --- 配置域名 ---
+    domain = "garmin.cn" if (target_config.region or "").upper() == "CN" else "garmin.com"
+    garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
 
-    with log_request(
-        current_user=current_user,
-        req_url=url,
-        req_method="POST",
-        req_params=None,
-        log_type="upload",
-        module_name="garmin",
-        op_desc=op_desc,
-    ) as ctx:
-        # 使用处理后的 upload_filename 和 upload_data
-        resp = requests.post(
-            url,
-            headers=headers,
-            files={"file": (upload_filename, upload_data, "application/octet-stream")},
-            timeout=60,
-        )
-        ctx["response"] = resp
+    # --- 执行上传 ---
+    try:
+        # 使用 garth 的 API 接口进行上传
+        files = {'file': (upload_filename, upload_data, 'application/octet-stream')}
+        response = garth.client.request("post", "upload-service", "upload", files=files)
 
-    status, json_res = parse_garmin_upload_response(resp)
-    return {
-        "status": "success",
-        "upload_status": status,
-        "target_region": target_region,
-        "http_status": resp.status_code,
-        "garmin_response": json_res,
-        "actual_filename": upload_filename,  # 可选：记录实际上传的文件名
-    }
+        result = response.json()
+        import_result = result.get("detailedImportResult", {})
+
+        # 成功判断
+        if response.status_code == 202 and import_result.get("uploadId"):
+            return {"status": "SUCCESS", "uploadId": import_result.get("uploadId")}
+
+        # 重复活动判断
+        failures = import_result.get("failures", [])
+        if failures and "Duplicate" in str(failures[0]):
+            return {"status": "DUPLICATE_ACTIVITY"}
+
+        return {"status": "UPLOAD_FAILED", "message": str(result)}
+
+    except Exception as e:
+        return {"status": "UPLOAD_EXCEPTION", "message": str(e)}
 
 
-def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int) -> dict:
+
+def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int,target_connect_id:int) -> dict:
     """佳明之间同步逻辑。"""
-    ga = (
+    activity = (
         db.query(BaseActivity)
         .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
         .first()
     )
-    if not ga:
+    if not activity:
         raise HTTPException(status_code=404, detail="记录不存在")
-
-    source_region = "CN" if ga.garmin_cn_activity_id else "GLOBAL"
-    target_region = "GLOBAL" if source_region == "CN" else "CN"
 
     target_config = (
         db.query(BaseConnect)
         .filter(
             BaseConnect.user_id == current_user.id,
-            BaseConnect.region == target_region,
+            BaseConnect.id == target_connect_id,
         )
         .first()
     )
@@ -746,24 +721,29 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int) -> 
 
 
 def sync_coros_to_garmin(
-    db: Session, current_user: User, base_activity_id: int, target_region: str = "CN"
+    db: Session, current_user: User, activity_id: int, target_connect_id: int
 ) -> dict:
     """高驰同步到佳明逻辑。"""
+    activity = (
+        db.query(BaseActivity)
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
+        .first()
+    )
     target_config = (
         db.query(BaseConnect)
         .filter(
             BaseConnect.user_id == current_user.id,
-            BaseConnect.region == target_region,
+            BaseConnect.id == target_connect_id,
         )
         .first()
     )
     if not target_config:
         raise HTTPException(
-            status_code=404, detail=f"目标佳明区域 {target_region} 未授权"
+            status_code=404, detail=f"目标佳明区域 {target_connect_id} 未授权"
         )
 
     file_resp, filename = coros_service.get_coros_activity_download_info(
-        db, current_user, base_activity_id
+        db, current_user, activity.base_connect_id,activity_id
     )
 
     return _upload_file_to_garmin(

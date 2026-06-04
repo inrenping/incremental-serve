@@ -1,6 +1,9 @@
 import os
 import json
 import requests
+os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
+import garth
+from garth.http import Client
 from datetime import datetime, timezone
 from typing import Tuple
 from fastapi import HTTPException
@@ -342,7 +345,7 @@ def get_coros_activity_download_info(
         req_params=None,
         log_type="download",
         module_name="coros",
-        op_desc="高驰获取下载运动链接",
+        op_desc="获取高驰下载运动链接",
     ) as ctx:
         meta_res = requests.post(meta_url, headers=headers, timeout=10).json()
         ctx["response"] = meta_res
@@ -475,11 +478,23 @@ def sync_garmin_to_coros(
         )
         .first()
     )
-    if not ga or not ga.garmin_connect:
+    if not ga:
         raise HTTPException(status_code=404, detail="未找到有效的佳明记录或授权")
+    #查询 Garmin 授权
 
+    source_config = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.is_active == True,
+            BaseConnect.id == ga.base_connect_id,
+        )
+        .first()
+    )
+    if not source_config:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权")
     # 查询 Coros 授权
-    ca = (
+    target_config = (
         db.query(BaseConnect)
         .filter(
             BaseConnect.user_id == current_user.id,
@@ -488,40 +503,32 @@ def sync_garmin_to_coros(
         )
         .first()
     )
-    if not ca:
+    if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
 
     # 下载 Garmin 文件
-    if ga.garmin_connect.region == "CN" or ga.garmin_connect.region == "cn":
-        base = "connect.garmin.cn"
+    if source_config.region and source_config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
     else:
-        base = "connect.garmin.com"
-    down_url = f"https://{base}/download-service/files/activity/{ga.activity_id}"
-    # print(f"准备下载 Garmin 活动 {ga.activity_id}，URL: {down_url}")
-    headers = {
-        "di-backend": base,
-        "Authorization": f"Bearer {ga.garmin_connect.access_token}",
-    }
-    with log_request(
-        current_user=current_user,
-        req_url=down_url,
-        req_method="GET",
-        req_params=None,
-        log_type="fileUrl",
-        module_name="garmin",
-        op_desc="佳明下载运动文件zip",
-    ) as ctx:
-        resp = requests.get(down_url, headers=headers, timeout=30)
-        ctx["response"] = None
+        garth.client.configure(domain="garmin.com")
+    download_url = "/download-service/files/activity"
+    url = f"{download_url}/{ga.activity_id}"
+    try:
+        with log_request(
+            current_user=current_user,
+            req_url=url,
+            req_method="POST",
+            req_params=None,
+            log_type="download",
+            module_name="garmin",
+            op_desc="下载佳明运动文件",
+        ) as ctx:
+            raw = garth.client.download(url)
+            if not raw:
+                raise Exception("下载内容为空")
+    except Exception as e:
+        print(f"佳明文件下载失败: {e}")
+        raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
+    print(f"成功下载 Garmin 活动 {ga.activity_id}，文件大小: {len(raw)} 字节")
 
-    # print(f"下载佳明活动 {ga.activity_id}，HTTP 状态码: {resp.status_code}")
-    file_data = resp.content
-    # 校验下载文件大小
-    # if len(file_data) < 10000:
-    #     raise HTTPException(
-    #         status_code=400,
-    #         detail=f"下载到的 Garmin 文件可能不完整，大小: {len(file_data)} 字节"
-    #     )
-    print(f"成功下载 Garmin 活动 {ga.activity_id}，文件大小: {len(file_data)} 字节")
-
-    return _upload_fit_zip_to_coros(current_user, ca, file_data, str(ga.activity_id))
+    return _upload_fit_zip_to_coros(current_user, target_config, raw, str(ga.activity_id))

@@ -195,19 +195,6 @@ def download_garmin_activity(
     )
 
 
-@router.post("/uploadGarminActivity2Garmin/{id}")
-def upload_garmin_activity_to_garmin(
-    id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    从活动所属区域下载 FIT，上传到另一区域佳明账号（国际↔中国）。
-    需在两个区域分别完成绑定并持有有效 token。
-    """
-    return garmin_service.sync_garmin_to_garmin(db, current_user, id)
-
-
 @router.post("/uploadCorosActivity2Garmin/{id}")
 def upload_coros_activity_to_garmin(
     id: int,
@@ -220,5 +207,5 @@ def upload_coros_activity_to_garmin(
     """
     region = region.upper()
     return garmin_service.sync_coros_to_garmin(
-        db, current_user, id, target_region=region
+        db, current_user, id, target_connect_id=region
     )

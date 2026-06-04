@@ -34,7 +34,7 @@ def download_coros(id: int, current_user: User, db: Session):
     """
     from app.api.v1.endpoints.coros import download_coros_activity
 
-    return download_coros_activity(id=id, current_user=current_user, db=db)
+    return download_coros_activity(activity_id=id, current_user=current_user, db=db)
 
 
 def format_datetime(dt: Optional[datetime]) -> str:

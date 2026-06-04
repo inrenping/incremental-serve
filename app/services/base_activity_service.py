@@ -46,11 +46,11 @@ def pull_full_activities(
         raise HTTPException(status_code=400, detail="不支持的平台类型")
 
 
-def download_activity(id: int, db: Session, current_user: User):
+def download_activity(activity_id: int, db: Session, current_user: User):
     """下载文件"""
-    if not id:
+    if not activity_id:
         return {"status": "error", "message": "缺少 activity_id 参数，无法下载。"}
-    base_activity = db.query(BaseActivity).filter(BaseActivity.id == id).first()
+    base_activity = db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
     base_connect = (
         db.query(BaseConnect).filter(BaseConnect.id == base_activity.base_connect_id).first()
     )
@@ -63,7 +63,7 @@ def download_activity(id: int, db: Session, current_user: User):
     # 高驰下载
     if base_activity and base_activity.source_type == "coros":
         file_response, filename = coros_service.get_coros_activity_download_info(
-            db, current_user,base_connect.id, id
+            db, current_user,base_connect.id, activity_id
         )
         return StreamingResponse(
             file_response.iter_content(chunk_size=8192),
@@ -74,7 +74,7 @@ def download_activity(id: int, db: Session, current_user: User):
     elif base_activity and base_activity.source_type == "garmin":
         # 1. 获取 Response 对象（此时连接仍处于 open 状态）
         file_data, filename = garmin_service.get_garmin_activity_download_info(
-            db, current_user, id
+            db, current_user, activity_id
         )
 
         # 直接将 bytes 转换为字节流
@@ -88,17 +88,16 @@ def download_activity(id: int, db: Session, current_user: User):
 
     return {"status": "error", "message": "不支持的设备类型"}
 
-
 def upload_activity_to_target(
-    id: int, target_connect_id: int, db: Session, current_user: User
+    activity_id: int, target_connect_id: int, db: Session, current_user: User
 ):
     """把运动数据同步到指定账号"""
-    source_activity = db.query(BaseActivity).filter(BaseActivity.id == id).first()
+    source_activity = db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
     if not source_activity:
         return {"status": "error", "message": "未找到对应的活动记录"}
     source_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.id == source_activity.connect_id)
+        .filter(BaseConnect.id == source_activity.base_connect_id)
         .first()
     )
     target_connect = (
@@ -107,21 +106,23 @@ def upload_activity_to_target(
     try:
         if not target_connect:
             return {"status": "error", "message": "未找到对应的目标账号"}
-        # 确认 token 可用
+        # TODO 推送之前先去查一下目标记录是否已经存在（根据时间和距离判断）
+        if source_connect.id == target_connect.id:
+            return {"status": "error", "message": "源账号和目标账号不能相同"}
+
+        # 确认 token 可用。重新刷新一下登录认证
         source_connect = base_connect_service.perform_relogin(
             source_connect.id, db, current_user
         )
         target_connect = base_connect_service.perform_relogin(
             target_connect.id, db, current_user
         )
-        # TODO 推送之前先去查一下目标记录是否已经存在（根据时间和距离判断）
-        if source_connect.id == target_connect.id:
-            return {"status": "error", "message": "源账号和目标账号不能相同"}
+        # 开始分情况推送
         if (
             source_connect.source_type == "garmin"
             and target_connect.source_type == "coros"
         ):
-            coros_service.sync_garmin_to_coros(db, current_user, id)
+            coros_service.sync_garmin_to_coros(db, current_user, activity_id, target_connect.id)
         elif (
             source_connect.source_type == "coros"
             and target_connect.source_type == "coros"
@@ -131,13 +132,14 @@ def upload_activity_to_target(
             source_connect.source_type == "garmin"
             and target_connect.source_type == "garmin"
         ):
-            garmin_service.sync_garmin_to_garmin(db, current_user, id)
+            garmin_service.sync_garmin_to_garmin(db, current_user, activity_id,target_connect.id)
         elif (
             source_connect.source_type == "coros"
             and target_connect.source_type == "garmin"
         ):
-            garmin_service.sync_coros_to_garmin(db, current_user, id)
+            garmin_service.sync_coros_to_garmin(db, current_user, activity_id,target_connect.id)
     except Exception as e:
+        print(f"上传失败: {str(e)}")
         return {"status": "error", "message": str(e)}
 
 

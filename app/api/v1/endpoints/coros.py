@@ -83,7 +83,7 @@ def relogin_coros(
 
 @router.get("/downloadActivity/{id}")
 def download_coros_activity(
-    id: int,
+    activity_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -92,23 +92,10 @@ def download_coros_activity(
     流程：1. 请求元数据获取下载 URL -> 2. 执行 StreamingResponse 流式下载文件。
     """
     file_response, filename = coros_service.get_coros_activity_download_info(
-        db, current_user, id
+        db, current_user, activity_id
     )
     return StreamingResponse(
         file_response.iter_content(chunk_size=8192),
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
-
-
-@router.post("/uploadGarminActivity2Coros/{id}")
-def upload_garmin_activity_to_coros(
-    id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    跨平台同步：将佳明的活动记录同步至高驰。
-    流程：从佳明下载 FIT 原文件 -> 调用高驰 import 接口上传。
-    """
-    return coros_service.sync_garmin_to_coros(db, current_user, id)

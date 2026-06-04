@@ -201,16 +201,16 @@ def download_activity(
     return base_activity_service.download_activity(id, db, current_user)
 
 
-@router.post("/uploadActivity2Target")
+@router.post("/uploadActivity2Target/{activity_id}/{target_connect_id}")
 def upload_activity_to_target(
-    id: int,
-    target_platform: str,
+    activity_id: int,
+    target_connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    从活动所属区域下载 FIT，上传到另一区域佳明账号（国际↔中国）。
+    从活动所属区域下载 FIT，上传到另一个账号
     """
     return base_activity_service.upload_activity_to_target(
-        id, target_platform, db, current_user
+        activity_id, target_connect_id  , db, current_user
     )
