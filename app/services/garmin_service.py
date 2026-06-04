@@ -1,5 +1,7 @@
 import os
 
+from pyasn1.type.univ import Boolean
+
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from garth.http import Client
@@ -590,15 +592,15 @@ def get_garmin_activity_download_info(
         if not raw:
             raise Exception("下载内容为空")
 
-        final_data = raw
+        file_data = raw
         if raw.startswith(b"PK"):
             with zipfile.ZipFile(io.BytesIO(raw)) as zf:
                 fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
                 if fit_names:
-                    final_data = zf.read(fit_names[0])
+                    file_data = zf.read(fit_names[0])
         # 构造文件名
         filename = f"{ga.activity_id}.fit"
-        return final_data, filename
+        return file_data, filename
 
     except Exception as e:
         print(f"佳明文件下载失败 {activity_id}: {e}")
@@ -751,23 +753,14 @@ def sync_coros_to_garmin(
     )
 
 
-def refresh_garmin_activity_count(db: Session) -> dict:
+def refresh_garmin_activity_count(db: Session) -> None:
     """刷新所有用户的佳明活动总数统计。"""
-    users = db.query(BaseConnect.user_id).distinct().all()
-    for (user_id,) in users:
-        garmin_auths = (
-            db.query(BaseConnect).filter(BaseConnect.user_id == user_id).all()
+    connects =  db.query(BaseConnect).filter(BaseConnect.source_type == "garmin").all()
+    for connect in connects:
+        connect_id = connect.id
+        query = db.query(BaseActivity).filter(
+            BaseActivity.base_connect_id == connect_id
         )
-        for garmin_auth in garmin_auths:
-            # 统计属于该 provider 的活动
-            query = db.query(BaseActivity).filter(
-                BaseActivity.user_id == user_id,
-                BaseActivity.source_provider == "garmin",
-            )
-            if garmin_auth.region == "CN":
-                query = query.filter(BaseActivity.garmin_cn_activity_id.isnot(None))
-            else:
-                query = query.filter(BaseActivity.garmin_activity_id.isnot(None))
+        activity_count = query.count()
+        update_garmin_count(db, connect_id, activity_count)
 
-            activity_count = query.count()
-            update_garmin_count(db, garmin_auth.id, activity_count)

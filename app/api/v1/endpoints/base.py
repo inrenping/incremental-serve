@@ -117,7 +117,7 @@ def get_activities_by_page(
     # 2. 构建基础查询
     query = db.query(BaseActivity).filter(
         BaseActivity.user_id == current_user.id,
-        BaseActivity.source_type == base_connect.source_type,
+        BaseActivity.base_connect_id == base_connect.id
     )
 
     # 3. 组合时间过滤条件

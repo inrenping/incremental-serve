@@ -1,9 +1,10 @@
 import os
+import io
+import zipfile
 import json
 import requests
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
-from garth.http import Client
 from datetime import datetime, timezone
 from typing import Tuple
 from fastapi import HTTPException
@@ -384,15 +385,29 @@ def _upload_fit_zip_to_coros(
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
     """
-    # 1. 保存为 ZIP 文件
+
+    # TODO 先解压再压缩，结果还是不可以
+    if fit_data.startswith(b"PK"):
+        with zipfile.ZipFile(io.BytesIO(fit_data)) as zf:
+            fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
+            if fit_names:
+                file_data = zf.read(fit_names[0])
+
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
     zip_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
+
+    memory_zip = io.BytesIO()
+    with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{source_id}.fit", file_data)
+
+    zip_content = memory_zip.getvalue()
+
     with open(zip_path, "wb") as f:
-        f.write(fit_data)
+        f.write(zip_content)
 
     filesize = os.path.getsize(zip_path)
     md5_hash = calculate_md5_file(zip_path)
-    # print(f"生成 ZIP 文件: {zip_path}，大小: {filesize}, MD5: {md5_hash}")
+    print(f"准备上传 ZIP 文件: {zip_path}, 大小: {filesize}, MD5: {md5_hash}")
 
     # 2. 上传到 OSS
     oss_path = f"fit_zip/{coros_auth.guid}/{md5_hash}.zip"
@@ -446,9 +461,9 @@ def _upload_fit_zip_to_coros(
                 timeout=60,
             ).json()
             ctx["response"] = res
-        # print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
+            print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
     except Exception as e:
-        # print("上传异常:", e)
+        print("高驰 uploadActivity 异常:", e)
         return {"status": "error", "message": f"上传异常: {str(e)}"}
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
         log_operation_async(
@@ -463,6 +478,7 @@ def _upload_fit_zip_to_coros(
         "message": f"高驰导入失败: {res.get('message', '未知错误')}",
         "details": res,
     }
+
 
 
 def sync_garmin_to_coros(

@@ -84,7 +84,8 @@ def perform_login(
         return None
 
 
-def perform_relogin(connect_id: int, db: Session, current_user: User) -> BaseConnect:
+def perform_relogin(connect_id: int, db: Session, current_user: User) -> dict[str, str] | type[
+    BaseConnect] | BaseConnect | None:
     """刷新 Token 的操作"""
     if not connect_id:
         return {"status": "error", "message": "缺少 connect_id 参数，无法重新登录。"}
