@@ -10,12 +10,13 @@ from app.services.user_service import get_user_info, get_user_social_info
 
 router = APIRouter()
 
+
 @router.get("")
 def get_user(
     username: Optional[str] = None,
     email: Optional[str] = None,
-    db: Session = Depends(get_db)
-):   
+    db: Session = Depends(get_db),
+):
     """
     获取用户信息。支持通过 username 或 email 进行查询。
     接口格式示例：
@@ -23,6 +24,7 @@ def get_user(
     - /user?email=test@example.com
     """
     return get_user_info(db, username=username, email=email)
+
 
 @router.get("/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
@@ -34,24 +36,24 @@ def read_users_me(current_user: User = Depends(get_current_user)):
     return {
         "status": "token_valid",
         "user": {
-            "id": current_user.user_id,
+            "id": current_user.id,
             "username": current_user.user_name,
-            "email": current_user.user_email
-        }
+            "email": current_user.user_email,
+        },
     }
+
 
 @router.get("/socials")
 def get_user_socials(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """根据当前登录用户获取其社交登录信息。"""
     return get_user_social_info(db, current_user)
 
+
 @router.delete("")
 def delete_user(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
     逻辑删除当前用户。将 active 字段置为 false。

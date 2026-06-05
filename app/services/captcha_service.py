@@ -1,4 +1,5 @@
 """验证码服务"""
+
 import random
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
@@ -15,20 +16,26 @@ def generate_captcha_code() -> str:
     return f"{random.randint(100000, 999999)}"
 
 
-def verify_captcha_logic(db: Session, email: str, code: str, purpose: str) -> UserVerifyCode:
+def verify_captcha_logic(
+    db: Session, email: str, code: str, purpose: str
+) -> UserVerifyCode:
     """
     验证验证码逻辑
     检查验证码是否存在、有效、未过期、未使用
     返回验证码记录并标记为已使用
     """
     now = datetime.now(timezone.utc)
-    db_code = db.query(UserVerifyCode).filter(
-        UserVerifyCode.email == email,
-        UserVerifyCode.code == code,
-        UserVerifyCode.purpose == purpose,
-        UserVerifyCode.used == False,
-        UserVerifyCode.expires_at > now
-    ).first()
+    db_code = (
+        db.query(UserVerifyCode)
+        .filter(
+            UserVerifyCode.email == email,
+            UserVerifyCode.code == code,
+            UserVerifyCode.purpose == purpose,
+            UserVerifyCode.used == False,
+            UserVerifyCode.expires_at > now,
+        )
+        .first()
+    )
 
     if not db_code:
         raise HTTPException(status_code=400, detail="验证码无效、已过期或已使用")
@@ -43,26 +50,30 @@ def send_captcha_email(email: str, code: str) -> Dict[str, Any]:
     通过 Resend 发送验证码邮件
     """
     try:
-        response = resend.Emails.send({
-            "from": settings.RESEND_EMAIL_FROM,
-            "to": [email],
-            "subject": f"[Incremental] Sudo email verification code",
-            "html": f"""
+        response = resend.Emails.send(
+            {
+                "from": settings.RESEND_EMAIL_FROM,
+                "to": [email],
+                "subject": f"[Incremental] Sudo email verification code",
+                "html": f"""
                 <p>Here is your Incremental sudo authentication code:</p>
                 <p><strong>{code}</strong></p>
                 <p>This code is valid for 5 minutes and can only be used once.</p>
                 <p>Please don't share this code with anyone: we'll never ask for it on the phone or via email.</p>
-            """
-        })
+            """,
+            }
+        )
         return response
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"邮件发送失败: {str(e)}"
+            detail=f"邮件发送失败: {str(e)}",
         )
 
 
-def create_and_send_captcha(db: Session, email: str, purpose: str, ip_address: str) -> Dict[str, Any]:
+def create_and_send_captcha(
+    db: Session, email: str, purpose: str, ip_address: str
+) -> Dict[str, Any]:
     """
     生成验证码、存入数据库、发送邮件
 
@@ -93,10 +104,11 @@ def create_and_send_captcha(db: Session, email: str, purpose: str, ip_address: s
         expires_at=expires_at,
         created_at=now,
         used=False,
-        ip_address=ip_address
+        ip_address=ip_address,
     )
 
     # 发送邮件
+    print(f"发送验证码到 {email}， {code}")
     response = send_captcha_email(email, code)
 
     # 邮件发送成功后，将记录写入数据库

@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from app.db.session import Base
 
+
 class User(Base):
     """
     用户模型类，对应数据库中的 `t_users` 表。
@@ -15,9 +16,10 @@ class User(Base):
         updated_at (datetime): 记录最后一次更新的时间戳（带时区）。
         active (bool): 账户激活状态。默认为 False，需通过验证后激活。
     """
+
     __tablename__ = "t_users"
 
-    user_id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
     user_name = Column(String, unique=True)
     user_email = Column(String, unique=True)
     created_at = Column(DateTime(timezone=True))

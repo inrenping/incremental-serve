@@ -4,7 +4,7 @@ import queue
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
-from app.models.sys_log import SysLog
+from app.models.log_api import SysLog
 
 class AsyncDBLogger:
     _instance = None

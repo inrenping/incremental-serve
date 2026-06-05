@@ -8,7 +8,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -23,16 +22,15 @@ class BaseConnect(Base):
 
     __tablename__ = "t_base_connect"
     __table_args__ = (
-        Index("idx_base_source_id", "source_type", "source_connect_id"),
         Index("idx_base_user_source", "user_id", "source_type"),
         # 推荐增加的联合唯一约束：同一个用户在同一个运动平台上，只能拥有一条有效的绑定记录
-        UniqueConstraint("user_id", "source_type", name="uq_user_base_source"),
+        # UniqueConstraint("user_id", "source_type", name="uq_user_base_source"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键 ID")
     user_id = Column(
         Integer,
-        ForeignKey("t_users.user_id", ondelete="CASCADE"),
+        ForeignKey("t_users.id", ondelete="CASCADE"),
         nullable=False,
         comment="本地系统用户 ID（关联 t_users 表）",
     )
@@ -43,18 +41,15 @@ class BaseConnect(Base):
         nullable=False,
         comment="三方平台类型/来源标识（如：garmin, coros, strava）",
     )
-    source_connect_id = Column(
-        Integer,
-        nullable=False,
-        comment="用于业务区分的来源连接 ID / 状态控制 ID",
+    account = Column(
+        String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）"
     )
-    account = Column(String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）")
     guid = Column(
         String(255),
         nullable=True,
         comment="三方平台内部的用户唯一标识（如 Garmin 的 GUID 或 Coros 的 UserID）",
     )
-    password_encrypted = Column(
+    encrypted_password = Column(
         Text,
         nullable=True,
         comment="加密存储的三方平台登录密码（用于自动刷新或后台重连）",

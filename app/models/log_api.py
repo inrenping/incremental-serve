@@ -8,9 +8,9 @@ from app.db.session import Base
 class SysLog(Base):
     """
     系统操作日志实体类
-    映射表名: blunt.t_sys_log
+    映射表名: blunt.t_log_api
     """
-    __tablename__ = "t_sys_log"
+    __tablename__ = "t_log_api"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id = Column(String(100), nullable=True, comment="用户ID")
