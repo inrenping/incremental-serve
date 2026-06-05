@@ -550,34 +550,41 @@ def sync_new_garmin_activities(
 
 
 def get_garmin_activity_download_info(
-    db: Session, current_user: User, activity_id: int
+    db: Session, current_user: User, garmin_activity_id: int
 ) -> tuple[bytes, str]:
     """获取佳明文件下载响应对象（不直接读取内容）。"""
-    ga = (
+    activity = (
         db.query(BaseActivity)
-        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
+        .filter(
+            BaseActivity.user_id == current_user.id,
+            BaseActivity.id == garmin_activity_id
+        )
         .first()
     )
 
-    if not ga:
+    if not activity:
         raise HTTPException(status_code=404, detail="未找到活动记录")
 
     # 根据活动记录寻找对应的 Garmin 配置
-    target_config = (
+    config = (
         db.query(BaseConnect)
-        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == ga.base_connect_id)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.is_active == True,
+            BaseConnect.id == activity.base_connect_id
+        )
         .first()
     )
-    if not target_config:
-        raise HTTPException(status_code=404, detail="未找到有效的佳明授权或活动记录")
+    if not config:
+        raise HTTPException(status_code=404, detail="未找到有效的佳明授权")
 
-    if target_config.region and target_config.region.upper() == "CN":
+    if config.region and config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
     else:
         garth.client.configure(domain="garmin.com")
 
     download_url = "/download-service/files/activity"
-    url = f"{download_url}/{ga.activity_id}"
+    url = f"{download_url}/{activity.activity_id}"
     try:
         with log_request(
                 current_user=current_user,
@@ -599,11 +606,11 @@ def get_garmin_activity_download_info(
                 if fit_names:
                     file_data = zf.read(fit_names[0])
         # 构造文件名
-        filename = f"{ga.activity_id}.fit"
+        filename = f"{activity.activity_id}.fit"
         return file_data, filename
 
     except Exception as e:
-        print(f"佳明文件下载失败 {activity_id}: {e}")
+        print(f"佳明文件下载失败 {garmin_activity_id}: {e}")
         raise HTTPException(status_code=500,detail=f"佳明文件下载失败:{str(e)}")
 
 
