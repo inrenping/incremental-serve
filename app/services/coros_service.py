@@ -530,15 +530,10 @@ def _upload_fit_zip_to_coros(
         print("高驰 uploadActivity 异常:", e)
         return {"status": "error", "message": f"上传异常: {str(e)}"}
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
-        log_operation_async(
-            user_id=current_user.id,
-            log_type="UPLOAD",
-            module_name="coros",
-            op_desc="上传活动到高驰",
-        )
         return {"status": "success", "message": "已成功同步到高驰", "data": res}
-    return {
-        "status": "error",
-        "message": f"高驰导入失败: {res.get('message', '未知错误')}",
-        "details": res,
-    }
+    else:
+        return {
+            "status": "error",
+            "message": f"高驰导入失败: {res.get('message', '未知错误')}",
+            "details": res,
+        }
