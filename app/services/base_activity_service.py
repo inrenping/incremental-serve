@@ -103,6 +103,13 @@ def upload_activity_to_target(
     target_connect = (
         db.query(BaseConnect).filter(BaseConnect.id == target_connect_id).first()
     )
+    # 刷新 Token 有效性
+    source_connect = base_connect_service.perform_relogin(
+        source_connect.id, db, current_user
+    )
+    target_connect = base_connect_service.perform_relogin(
+        target_connect.id, db, current_user
+    )
     try:
         if not target_connect:
             return {"status": "error", "message": "未找到对应的目标账号"}

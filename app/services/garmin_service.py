@@ -519,8 +519,6 @@ def pull_full_garmin_activities(
             break
         start += limit
 
-    if total_fetched:
-        update_garmin_count(db, config.id, total_fetched)
     config.last_synced_at = datetime.now(timezone.utc)
     db.commit()
     return {
@@ -600,6 +598,7 @@ def get_garmin_activity_download_info(
             raise Exception("下载内容为空")
 
         file_data = raw
+
         if raw.startswith(b"PK"):
             with zipfile.ZipFile(io.BytesIO(raw)) as zf:
                 fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
@@ -660,14 +659,14 @@ def _upload_file_to_garmin(
     # --- 直接处理 ZIP ---
     if filename.lower().endswith(".fit"):
         try:
-            with zipfile.ZipFile(io.BytesIO(file_data)) as z:
+            with zipfile.ZipFile(io.BytesIO(file_data)) as zf:
                 # 获取 ZIP 压缩包内的第一个文件名
-                file_list = z.namelist()
+                file_list = zf.namelist()
                 if not file_list:
                     return {"status": "error", "message": "Zip 为空"}
 
                 upload_filename = file_list[0]
-                upload_data = z.read(upload_filename)
+                upload_data = zf.read(upload_filename)
         except zipfile.BadZipFile:
             return {"status": "error", "message": "无效的 Zip 文件"}
 
@@ -679,23 +678,27 @@ def _upload_file_to_garmin(
     try:
         # 使用 garth 的 API 接口进行上传
         files = {'file': (upload_filename, upload_data, 'application/octet-stream')}
-        response = garth.client.request("post", "upload-service", "upload", files=files)
+        if (target_config.region or "").upper() == "CN":
+            domain = "garmin.cn"
+        else:
+            domain = "garmin.com"
+        garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+        upload_url = f"https://connectapi.{domain}/upload-service/upload"
+        headers = {"Authorization": {str(garth.client.oauth2_token)}}
+        response = garth.client.request("post", upload_url, files=files, headers=headers)
 
         result = response.json()
         import_result = result.get("detailedImportResult", {})
-
         # 成功判断
         if response.status_code == 202 and import_result.get("uploadId"):
             return {"status": "SUCCESS", "uploadId": import_result.get("uploadId")}
-
         # 重复活动判断
         failures = import_result.get("failures", [])
-        if failures and "Duplicate" in str(failures[0]):
+        if response.status_code == 409 and "Duplicate" in str(failures[0]):
             return {"status": "DUPLICATE_ACTIVITY"}
-
         return {"status": "UPLOAD_FAILED", "message": str(result)}
-
     except Exception as e:
+        print(f"上传失败: {str(e)}")
         return {"status": "UPLOAD_EXCEPTION", "message": str(e)}
 
 

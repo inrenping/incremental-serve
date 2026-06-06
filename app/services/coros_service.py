@@ -1,7 +1,10 @@
 import os
 import io
 import zipfile
+import hashlib
 import json
+from http import client
+
 import requests
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
@@ -454,45 +457,34 @@ def _upload_fit_zip_to_coros(
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
     """
-
-    # TODO 先解压再压缩，继续测试
-    # 其实本身已经是 ZIP 文件了，不需要再解压重新压缩
-
-    if fit_data.startswith(b"PK"):
-        with zipfile.ZipFile(io.BytesIO(fit_data)) as zf:
-            fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
-            if fit_names:
-                file_data = zf.read(fit_names[0])
-
+    # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-    zip_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
+    file_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
 
-    memory_zip = io.BytesIO()
-    with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"{source_id}.fit", file_data)
+    with open(file_path, "wb") as fb:
+        fb.write(fit_data)
 
-    zip_content = memory_zip.getvalue()
+    # 计算文件大小与 MD5 校验码
+    filesize = os.path.getsize(file_path)
+    md5_hash = calculate_md5_file(file_path)
+    print(f"原始 ZIP 已保存: {file_path}, 大小: {filesize} 字节, MD5: {md5_hash}")
 
-    with open(zip_path, "wb") as f:
-        f.write(zip_content)
-
-    filesize = os.path.getsize(zip_path)
-    md5_hash = calculate_md5_file(zip_path)
-    print(f"准备上传 ZIP 文件: {zip_path}, 大小: {filesize}, MD5: {md5_hash}")
-
-    # 2. 上传到 OSS
+    # 2. 上传至 OSS (根据区域选择 阿里云 或 AWS)
     oss_path = f"fit_zip/{coros_config.guid}/{md5_hash}.zip"
-    # print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_auth.region}")
+    print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_config.region}")
 
-    if coros_config.region == 2:  # 中国区
-        oss_client = AliOssClient()
-    else:  # 国外/其他
-        oss_client = AwsOssClient()
 
     try:
-        oss_client.multipart_upload(zip_path, oss_path)
+        oss_client = None
+        if coros_config.region == 2 or coros_config.region == "2":
+            oss_client = AliOssClient()
+        else:
+            oss_client = AwsOssClient()
+        # oss_client.multipart_upload(file_path, f"{coros_config.guid}/{md5_hash}.zip")
+        oss_client.multipart_upload(file_path, oss_path)
         print(f"成功上传到 OSS: {oss_path}")
     except Exception as e:
+        print(f"上传到 OSS 失败:{str(e)}")
         raise HTTPException(status_code=500, detail=f"上传到 OSS 失败: {str(e)}")
 
     # 3. 调用 Coros uploadActivity 接口
@@ -511,6 +503,7 @@ def _upload_fit_zip_to_coros(
         "serviceName": sts["service"],
         "oriFileName": f"{source_id}.zip",
     }
+    print(f" {upload_url} | { json.dumps(params)}")
     try:
         with log_request(
             current_user=current_user,
