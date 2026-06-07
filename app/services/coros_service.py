@@ -1,8 +1,14 @@
 import os
 import io
 import zipfile
+import hashlib
 import json
+from http import client
+
 import requests
+
+from app import db
+from app.services import base_connect_service
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from datetime import datetime, timezone
@@ -417,7 +423,8 @@ def sync_garmin_to_coros(
     )
     if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
-
+    # 刷新 佳明数据源的 认证
+    source_config = base_connect_service.perform_relogin(source_config.id, db, current_user)
     # 下载 Garmin 文件
     if source_config.region and source_config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
@@ -445,54 +452,44 @@ def sync_garmin_to_coros(
         raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
     print(f"成功下载 Garmin 活动 {activity.activity_id}，文件大小: {len(raw)} 字节")
 
-    return _upload_fit_zip_to_coros(current_user, target_config, raw, str(activity.activity_id))
+    return _upload_fit_zip_to_coros(db,current_user, target_config, raw, str(activity.activity_id))
 
 def _upload_fit_zip_to_coros(
-    current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
+    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
 ) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
     """
-
-    # TODO 先解压再压缩，继续测试
-    # 其实本身已经是 ZIP 文件了，不需要再解压重新压缩
-
-    if fit_data.startswith(b"PK"):
-        with zipfile.ZipFile(io.BytesIO(fit_data)) as zf:
-            fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
-            if fit_names:
-                file_data = zf.read(fit_names[0])
-
+    # 0. 刷新认证
+    coros_config = base_connect_service.perform_relogin(coros_config.id, db=db, current_user=current_user)
+    # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-    zip_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
+    file_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
 
-    memory_zip = io.BytesIO()
-    with zipfile.ZipFile(memory_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(f"{source_id}.fit", file_data)
+    with open(file_path, "wb") as fb:
+        fb.write(fit_data)
 
-    zip_content = memory_zip.getvalue()
+    # 计算文件大小与 MD5 校验码
+    filesize = os.path.getsize(file_path)
+    md5_hash = calculate_md5_file(file_path)
+    print(f"原始 ZIP 已保存: {file_path}, 大小: {filesize} 字节, MD5: {md5_hash}")
 
-    with open(zip_path, "wb") as f:
-        f.write(zip_content)
-
-    filesize = os.path.getsize(zip_path)
-    md5_hash = calculate_md5_file(zip_path)
-    print(f"准备上传 ZIP 文件: {zip_path}, 大小: {filesize}, MD5: {md5_hash}")
-
-    # 2. 上传到 OSS
+    # 2. 上传至 OSS (根据区域选择 阿里云 或 AWS)
     oss_path = f"fit_zip/{coros_config.guid}/{md5_hash}.zip"
-    # print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_auth.region}")
+    print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_config.region}")
 
-    if coros_config.region == 2:  # 中国区
-        oss_client = AliOssClient()
-    else:  # 国外/其他
-        oss_client = AwsOssClient()
 
     try:
-        oss_client.multipart_upload(zip_path, oss_path)
+        oss_client = None
+        if coros_config.region == 2 or coros_config.region == "2":
+            oss_client = AliOssClient()
+        else:
+            oss_client = AwsOssClient()
+        oss_client.multipart_upload(file_path, oss_path)
         print(f"成功上传到 OSS: {oss_path}")
     except Exception as e:
+        print(f"上传到 OSS 失败:{str(e)}")
         raise HTTPException(status_code=500, detail=f"上传到 OSS 失败: {str(e)}")
 
     # 3. 调用 Coros uploadActivity 接口
@@ -511,6 +508,7 @@ def _upload_fit_zip_to_coros(
         "serviceName": sts["service"],
         "oriFileName": f"{source_id}.zip",
     }
+    print(f" {upload_url} | { json.dumps(params)}")
     try:
         with log_request(
             current_user=current_user,
@@ -537,15 +535,10 @@ def _upload_fit_zip_to_coros(
         print("高驰 uploadActivity 异常:", e)
         return {"status": "error", "message": f"上传异常: {str(e)}"}
     if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
-        log_operation_async(
-            user_id=current_user.id,
-            log_type="UPLOAD",
-            module_name="coros",
-            op_desc="上传活动到高驰",
-        )
         return {"status": "success", "message": "已成功同步到高驰", "data": res}
-    return {
-        "status": "error",
-        "message": f"高驰导入失败: {res.get('message', '未知错误')}",
-        "details": res,
-    }
+    else:
+        return {
+            "status": "error",
+            "message": f"高驰导入失败: {res.get('message', '未知错误')}",
+            "details": res,
+        }

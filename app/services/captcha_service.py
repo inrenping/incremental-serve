@@ -54,12 +54,37 @@ def send_captcha_email(email: str, code: str) -> Dict[str, Any]:
             {
                 "from": settings.RESEND_EMAIL_FROM,
                 "to": [email],
-                "subject": f"[Incremental] Sudo email verification code",
+               "subject": "incremental.icu 一次性代码",
                 "html": f"""
-                <p>Here is your Incremental sudo authentication code:</p>
-                <p><strong>{code}</strong></p>
-                <p>This code is valid for 5 minutes and can only be used once.</p>
-                <p>Please don't share this code with anyone: we'll never ask for it on the phone or via email.</p>
+                <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 550px; margin: 0 auto; padding: 20px; color: #333333; line-height: 1.6;">
+                    <div style="padding: 10px 0; border-bottom: 1px solid #eee; margin-bottom: 20px;">
+                        <span style="font-size: 18px; font-weight: bold; color: #0078d4;">incremental.icu</span>
+                    </div>
+                    
+                    <p style="font-size: 14px; margin-bottom: 20px;">
+                        <strong>{email}</strong>，你好！
+                    </p>
+                    
+                    <p style="font-size: 14px;">
+                        我们已收到你要求获得 incremental.icu 所用的一次性代码的申请。
+                    </p>
+                    
+                    <p style="font-size: 14px; margin-top: 25px; margin-bottom: 10px;">
+                        你的一次性代码为: 
+                        <span style="font-size: 24px; font-weight: bold; color: #2b2b2b; letter-spacing: 2px; margin-left: 5px;">
+                            {code}
+                        </span>
+                    </p>
+                    
+                    <div style="background-color: #f8f9fa; border-left: 4px solid #ffb900; padding: 12px; margin: 25px 0; font-size: 13px; color: #666666;">
+                        仅在网站(incremental.icu)上输入此代码。该代码在 5 分钟内有效。不要与任何人共享。我们绝不会在网站之外（如电话或邮件）索要它，打死也不要告诉别人！
+                    </div>
+                    
+                    <p style="font-size: 14px; margin-top: 30px; line-height: 1.2;">
+                        谢谢，<br>
+                        <span style="color: #666666; font-weight: bold;">incremental.icu 团队</span>
+                    </p>
+                </div>
             """,
             }
         )

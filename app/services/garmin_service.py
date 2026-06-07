@@ -2,6 +2,8 @@ import os
 
 from pyasn1.type.univ import Boolean
 
+from app import db
+
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from garth.http import Client
@@ -519,8 +521,6 @@ def pull_full_garmin_activities(
             break
         start += limit
 
-    if total_fetched:
-        update_garmin_count(db, config.id, total_fetched)
     config.last_synced_at = datetime.now(timezone.utc)
     db.commit()
     return {
@@ -578,6 +578,9 @@ def get_garmin_activity_download_info(
     if not config:
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权")
 
+    # 刷新佳明数据源的认证
+    config = base_connect_service.perform_relogin(config.id, db, current_user)
+
     if config.region and config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
     else:
@@ -600,6 +603,7 @@ def get_garmin_activity_download_info(
             raise Exception("下载内容为空")
 
         file_data = raw
+
         if raw.startswith(b"PK"):
             with zipfile.ZipFile(io.BytesIO(raw)) as zf:
                 fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
@@ -607,6 +611,7 @@ def get_garmin_activity_download_info(
                     file_data = zf.read(fit_names[0])
         # 构造文件名
         filename = f"{activity.activity_id}.fit"
+        print(f"佳明文件下载成功 {filename}")
         return file_data, filename
 
     except Exception as e:
@@ -646,56 +651,50 @@ def parse_garmin_upload_response(
 
 
 def _upload_file_to_garmin(
-    current_user: User,
-    target_config: BaseConnect,
-    file_data: bytes,
-    filename: str,
-    op_desc: str,
+        db:Session,
+        current_user: User,
+        target_config: BaseConnect,
+        file_data: bytes,
+        filename: str,
+        op_desc: str,
 ) -> dict:
     """内部辅助方法：执行将文件上传到佳明服务器的通用逻辑。支持自动解压 zip 中的 fit 文件。"""
 
     upload_data = file_data
     upload_filename = filename
-
-    # --- 直接处理 ZIP ---
-    if filename.lower().endswith(".fit"):
-        try:
-            with zipfile.ZipFile(io.BytesIO(file_data)) as z:
-                # 获取 ZIP 压缩包内的第一个文件名
-                file_list = z.namelist()
-                if not file_list:
-                    return {"status": "error", "message": "Zip 为空"}
-
-                upload_filename = file_list[0]
-                upload_data = z.read(upload_filename)
-        except zipfile.BadZipFile:
-            return {"status": "error", "message": "无效的 Zip 文件"}
-
+    # 刷新认证
+    target_config = base_connect_service.perform_relogin(target_config.id, db=db, current_user=current_user)
     # --- 配置域名 ---
     domain = "garmin.cn" if (target_config.region or "").upper() == "CN" else "garmin.com"
     garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
 
     # --- 执行上传 ---
     try:
+        if target_config.region == "CN" or target_config.region == "cn":
+            domain = "garmin.cn"
+        else:
+            domain = "garmin.com"
         # 使用 garth 的 API 接口进行上传
-        files = {'file': (upload_filename, upload_data, 'application/octet-stream')}
-        response = garth.client.request("post", "upload-service", "upload", files=files)
-
+        garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+        upload_url = f"https://connectapi.{domain}/upload-service/upload"
+        files = {'file': (upload_filename, upload_data,'text/plain')}
+        headers = {
+            "Authorization": str(garth.client.oauth2_token)
+        }
+        response = requests.post(upload_url, headers=headers, files=files)
         result = response.json()
+        print(f"佳明上传完成：{result}")
         import_result = result.get("detailedImportResult", {})
-
         # 成功判断
         if response.status_code == 202 and import_result.get("uploadId"):
             return {"status": "SUCCESS", "uploadId": import_result.get("uploadId")}
-
         # 重复活动判断
         failures = import_result.get("failures", [])
-        if failures and "Duplicate" in str(failures[0]):
+        if response.status_code == 409 and "Duplicate" in str(failures[0]):
             return {"status": "DUPLICATE_ACTIVITY"}
-
         return {"status": "UPLOAD_FAILED", "message": str(result)}
-
     except Exception as e:
+        print(f"上传失败: {str(e)}")
         return {"status": "UPLOAD_EXCEPTION", "message": str(e)}
 
 
@@ -721,11 +720,11 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int,targ
     if not target_config:
         raise HTTPException(status_code=404, detail="目标区域未授权")
 
-    file_resp, filename = get_garmin_activity_download_info(
+    file_data, filename = get_garmin_activity_download_info(
         db, current_user, activity_id
     )
     return _upload_file_to_garmin(
-        current_user, target_config, file_resp.content, filename, "佳明上传运动"
+        db, current_user, target_config, file_data, filename, "佳明上传运动"
     )
 
 

@@ -102,42 +102,37 @@ def upload_activity_to_target(
     )
     target_connect = (
         db.query(BaseConnect).filter(BaseConnect.id == target_connect_id).first()
-    )
+    )   
     try:
         if not target_connect:
             return {"status": "error", "message": "未找到对应的目标账号"}
         # TODO 推送之前先去查一下目标记录是否已经存在（根据时间和距离判断）
         if source_connect.id == target_connect.id:
             return {"status": "error", "message": "源账号和目标账号不能相同"}
-
-        # 确认 token 可用。重新刷新一下登录认证
-        source_connect = base_connect_service.perform_relogin(
-            source_connect.id, db, current_user
-        )
-        target_connect = base_connect_service.perform_relogin(
-            target_connect.id, db, current_user
-        )
         # 开始分情况推送
         if (
             source_connect.source_type == "garmin"
             and target_connect.source_type == "coros"
         ):
-            coros_service.sync_garmin_to_coros(db, current_user, activity_id, target_connect.id)
+            return coros_service.sync_garmin_to_coros(db, current_user, activity_id, target_connect.id)
         elif (
             source_connect.source_type == "coros"
             and target_connect.source_type == "coros"
         ):
-            return None
+            return {
+            "status": "error",
+            "message": "高驰导入失败: 同一个平台的不需要同步",
+            }
         elif (
             source_connect.source_type == "garmin"
             and target_connect.source_type == "garmin"
         ):
-            garmin_service.sync_garmin_to_garmin(db, current_user, activity_id,target_connect.id)
+            return garmin_service.sync_garmin_to_garmin(db, current_user, activity_id,target_connect.id)
         elif (
             source_connect.source_type == "coros"
             and target_connect.source_type == "garmin"
         ):
-            garmin_service.sync_coros_to_garmin(db, current_user, activity_id,target_connect.id)
+            return garmin_service.sync_coros_to_garmin(db, current_user, activity_id,target_connect.id)
     except Exception as e:
         print(f"上传失败: {str(e)}")
         return {"status": "error", "message": str(e)}
