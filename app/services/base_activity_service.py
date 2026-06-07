@@ -102,28 +102,13 @@ def upload_activity_to_target(
     )
     target_connect = (
         db.query(BaseConnect).filter(BaseConnect.id == target_connect_id).first()
-    )
-    # 刷新 Token 有效性
-    source_connect = base_connect_service.perform_relogin(
-        source_connect.id, db, current_user
-    )
-    target_connect = base_connect_service.perform_relogin(
-        target_connect.id, db, current_user
-    )
+    )   
     try:
         if not target_connect:
             return {"status": "error", "message": "未找到对应的目标账号"}
         # TODO 推送之前先去查一下目标记录是否已经存在（根据时间和距离判断）
         if source_connect.id == target_connect.id:
             return {"status": "error", "message": "源账号和目标账号不能相同"}
-
-        # 确认 token 可用。重新刷新一下登录认证。但如果是佳明国际国内同步会出现问题，不要互相刷新
-        source_connect = base_connect_service.perform_relogin(
-            source_connect.id, db, current_user
-        )
-        target_connect = base_connect_service.perform_relogin(
-            target_connect.id, db, current_user
-        )
         # 开始分情况推送
         if (
             source_connect.source_type == "garmin"

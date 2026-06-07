@@ -6,6 +6,9 @@ import json
 from http import client
 
 import requests
+
+from app import db
+from app.services import base_connect_service
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from datetime import datetime, timezone
@@ -420,7 +423,8 @@ def sync_garmin_to_coros(
     )
     if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
-
+    # 刷新 佳明数据源的 认证
+    source_config = base_connect_service.perform_relogin(source_config.id, db, current_user)
     # 下载 Garmin 文件
     if source_config.region and source_config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
@@ -448,15 +452,17 @@ def sync_garmin_to_coros(
         raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
     print(f"成功下载 Garmin 活动 {activity.activity_id}，文件大小: {len(raw)} 字节")
 
-    return _upload_fit_zip_to_coros(current_user, target_config, raw, str(activity.activity_id))
+    return _upload_fit_zip_to_coros(db,current_user, target_config, raw, str(activity.activity_id))
 
 def _upload_fit_zip_to_coros(
-    current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
+    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
 ) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
     """
+    # 0. 刷新认证
+    coros_config = base_connect_service.perform_relogin(coros_config.id, db=db, current_user=current_user)
     # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
     file_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
@@ -480,7 +486,6 @@ def _upload_fit_zip_to_coros(
             oss_client = AliOssClient()
         else:
             oss_client = AwsOssClient()
-        # oss_client.multipart_upload(file_path, f"{coros_config.guid}/{md5_hash}.zip")
         oss_client.multipart_upload(file_path, oss_path)
         print(f"成功上传到 OSS: {oss_path}")
     except Exception as e:
