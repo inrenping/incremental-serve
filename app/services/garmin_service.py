@@ -1,9 +1,4 @@
 import os
-
-from pyasn1.type.univ import Boolean
-
-from app import db
-
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from garth.http import Client
@@ -691,7 +686,7 @@ def _upload_file_to_garmin(
         # 重复活动判断
         failures = import_result.get("failures", [])
         if response.status_code == 409 and "Duplicate" in str(failures[0]):
-            return {"status": "DUPLICATE_ACTIVITY"}
+            return {"status": "DUPLICATE_ACTIVITY","message":"DUPLICATE_ACTIVITY"}
         return {"status": "UPLOAD_FAILED", "message": str(result)}
     except Exception as e:
         print(f"上传失败: {str(e)}")

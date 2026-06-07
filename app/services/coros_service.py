@@ -1,13 +1,6 @@
 import os
-import io
-import zipfile
-import hashlib
 import json
-from http import client
-
 import requests
-
-from app import db
 from app.services import base_connect_service
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
