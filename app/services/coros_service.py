@@ -180,23 +180,16 @@ def pull_full_coros_activities(
             status_code=404, detail="未找到有效的高驰授权配置，请先绑定账号"
         )
 
-    # TODO 测试 token 有效性，如果无效则刷新 token
+    # 测试 token 有效性，如果无效则刷新 token
+    base_connect = base_connect_service.perform_relogin(base_connect.id,db=db,current_user=current_user)
 
-    if not test_coros_token(base_connect.id, db, current_user):
-        base_connect = perform_coros_login(
-            base_connect.id,
-            base_connect.account,
-            base_connect.encrypted_password,
-            db,
-            current_user,
-        )
     base_url = get_team_api_base(str(base_connect.region))
     headers = {
         "Accept": "application/json, text/plain, */*",
         "accesstoken": base_connect.access_token,
     }
 
-    page_size = 50
+    page_size = 100
     page_number = 1
 
     total_count = 0
@@ -280,7 +273,7 @@ def pull_full_coros_activities(
                 end_time_gmt=end_dt_gmt,
                 distance_meters=item.get("distance"),
                 duration_seconds=item.get("totalTime"),
-                moving_duration_seconds=item.get("movingTime"),
+                moving_duration_seconds=item.get("workoutTime"),
                 calories=item.get("calorie"),
                 average_hr=item.get("avgHr"),
                 max_hr=item.get("maxHr"),

@@ -161,7 +161,7 @@ def get_activity(
 
 @router.post("/pullFullActivities")
 def pull_full_activities(
-    connect_id: int = None,
+    connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -176,7 +176,7 @@ def pull_full_activities(
 
 @router.post("/pullNewActivities")
 def pull_new_activities(
-    connect_id: int = None,
+    connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
