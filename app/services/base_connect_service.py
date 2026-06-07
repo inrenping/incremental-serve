@@ -63,7 +63,7 @@ def perform_login(
         )
         return coros_auth
 
-    elif region == "garmin" or region.upper() == "CN":
+    elif region.upper() == "GLOBAL" or region.upper() == "CN":
         print(f"region:{region }")
         # 先刷新 secret_string
         updated_auth = garmin_service.get_garmin_secret_string(
