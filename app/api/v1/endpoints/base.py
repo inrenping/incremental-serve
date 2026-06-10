@@ -258,47 +258,66 @@ class TaskRequest(BaseModel):
     target_id: int
 
 @router.post("/execute")
-async def execute_task(request: TaskRequest):
+async def execute_task(
+    request: TaskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+    ):
     """测试 SSE """
-    print(f"🔔 收到终端构建请求 -> source_id: {request.source_id}, target_id: {request.target_id}")
+    print(f"🔔 收到数据同步请求 -> user_id: {current_user.id}, source_id: {request.source_id}, target_id: {request.target_id}")
     
     return StreamingResponse(
-        log_stream_generator(request.source_id, request.target_id),
+        log_stream_generator(request.source_id, request.target_id,current_user,db),
         media_type="text/event-stream"
     )
 
-async def log_stream_generator(source_id: int, target_id: int):
+async def log_stream_generator(
+        source_id: int, 
+        target_id: int, 
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)):
     """
     负责在长连接中，源源不断地 yield 推送数据给客户端。
     注意：这里必须遵循 SSE 格式 => data: <你的字符串数据>\n\n
     """
     try:
-        # 模拟真实的终端任务步骤
-        steps = [
-            {"level": "info", "message": f"🤖 [Task-{source_id}-{target_id}] 正在初始化构建环境，执行命令: npm run build..."},
-            {"level": "info", "message": "📦 [1/4] 正在拉取远程核心依赖组件包..."},
-            {"level": "warn", "message": "⚠️ 警告: 发现 3 个过时的依赖项，正在自动尝试兼容修复..."},
-            {"level": "info", "message": "🏗️ [2/4] 正在编译源代码并生成压缩混淆文件 (Chunking)..."},
-            {"level": "success", "message": "✨ 成功生成静态资产: assets/index-c4f82a.js (size: 512 KB)"},
-            {"level": "info", "message": "🚀 [3/4] 正在将构建产物分发至边缘 CDN 节点..."},
-            {"level": "info", "message": "🧹 [4/4] 正在清理本地编译产生的缓存垃圾文件..."},
-        ]
+        
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [0/10][Task-{current_user.id}-{source_id}-{target_id}] 正在构建同步任务"}, ensure_ascii=False)}\n\n"
 
-        for step in steps:
-            # 模拟每秒钟执行完一个步骤
-            await asyncio.sleep(1.2) 
-            
-            # 追加当前时间，让终端看起来更有真实感
-            step["message"] = f"{step['message']}"
-            
-            # 严格按照 SSE 规范格式化：data: JSON_STR\n\n
-            yield f"data: {json.dumps(step, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(2)       
+        
+        # 严格按照 SSE 规范格式化：data: JSON_STR\n\n
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [1/10]平台{ source_id } 鉴权"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [1/10]平台{ source_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [2/10]平台{ source_id } 增量同步数据"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [2/10]平台{ source_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"📦 [3/10]平台{ source_id } 获取最新 10 条数据"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "success", "message": f"📦 [3/10]平台{ source_id } 获取最新 10 条数据成功"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [4/10]比较两个平台数据"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [4/10]筛选之后得到 3 条上传数据"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [5/10]从平台 {source_id} 下载 3 条记录"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [5/10]从平台 {source_id} 下载 3 条记录"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [6/10]筛选之后得到 3 条上传数据"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🚀 [6/10]向平台 {target_id} 上传 3 条记录"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "success", "message": f"🚀 [6/10]向平台 {target_id} 上传 3 条记录成功"}, ensure_ascii=False)}\n\n"
 
         # 推送所有任务结束的暗号
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1)
         yield "data: [DONE]\n\n"
 
     except asyncio.CancelledError:
         # 极其重要：如果前端关闭了弹出框，或者刷新了浏览器，FastAPI 会抛出这个异常
         # 我们在这里捕获它，可以用来做清理工作（比如杀死底层的 Shell 子进程）
-        print(f"🛑 检测到客户端中断了连接，任务 [Task-{source_id}] 的流式推送已停止。")
+        print(f"🛑 检测到客户端中断了连接，任务 [Task-{current_user.id}-{source_id}-{target_id}] 的流式推送已停止。")
