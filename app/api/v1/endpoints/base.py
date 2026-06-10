@@ -57,6 +57,19 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
+    # 校验这个账号是不是已经录入过
+    existing_connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.account == login_request.email,
+            BaseConnect.region == login_request.region
+        )
+        .first()
+    )
+    if existing_connect:
+        return {"status": "error", "message": "该账号已存在，请不要重复录入。"}
+
     base_connect = base_connect_service.perform_login(
         id=login_request.id,
         email=login_request.email,

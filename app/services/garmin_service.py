@@ -638,10 +638,9 @@ def parse_garmin_upload_response(
             )
             if msg == "Duplicate Activity.":
                 return "DUPLICATE_ACTIVITY", result
-        except:
+        except Exception as e:
+            print(f"{str(e)}")
             pass
-        return "UPLOAD_CONFLICT", result
-
     return "UPLOAD_FAILED" if result else "UPLOAD_EXCEPTION", result
 
 
