@@ -66,6 +66,7 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
     print(f"测试coros token 有效性。{json.dumps(response.json())}")
     try:
         data_json = response.json()
+        print(f"测试coros token 有效性。{json.dumps(data_json)}")
     except ValueError:
         return False
 
