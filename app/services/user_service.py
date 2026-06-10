@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 from fastapi import HTTPException
 from app.models.user import User
 from app.models.user_social import UserSocial

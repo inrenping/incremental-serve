@@ -10,6 +10,7 @@ def get_connects(db: Session, current_user: User):
     connect_configs = (
         db.query(BaseConnect)
         .filter(BaseConnect.user_id == current_user.id, BaseConnect.is_active == True)
+        .order_by(BaseConnect.created_at.desc())
         .all()
     )
     return connect_configs

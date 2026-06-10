@@ -12,6 +12,7 @@ from app.models.base_connect import BaseConnect
 from app.models.user import User
 
 from app.services import base_connect_service, base_activity_service
+from app.utils.activity_type_config import ACTIVITY_CONFIG
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -27,7 +28,7 @@ class LoginRequest(BaseModel):
 
 
 @router.get("/getConnectConfigs")
-def get_connect_config(
+def get_connect_config( 
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
@@ -57,6 +58,19 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
+    # 校验这个账号是不是已经录入过
+    existing_connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.account == login_request.email,
+            BaseConnect.region == login_request.region
+        )
+        .first()
+    )
+    if existing_connect:
+        return {"status": "error", "message": "该账号已存在，请不要重复录入。"}
+
     base_connect = base_connect_service.perform_login(
         id=login_request.id,
         email=login_request.email,
@@ -96,12 +110,13 @@ def relogin_connect(
 
 @router.get("/getActivitiesByPage")
 def get_activities_by_page(
-    # 使用 Query(alias=...) 既能保持 Python 下划线规范，又能接收前端传的 pageSize
     connect_id: int,
     page_size: int = Query(10, alias="pageSize"),
-    page_count: int = Query(1, alias="pageCount"),
+    page_count: int = Query(1, alias="page"),
     start_date: Optional[str] = Query(None, alias="startDate"),
     end_date: Optional[str] = Query(None, alias="endDate"),
+    sport_types: Optional[str] = Query(None, alias="sport_type"),
+    search_name: Optional[str] = Query(None, alias="searchName"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -126,10 +141,30 @@ def get_activities_by_page(
     if end_date:
         query = query.filter(BaseActivity.start_time_local <= end_date)
 
-    # 4. 计算符合条件的总条数
+    # 4. 增加运动类型过滤 (支持多选，逗号分隔)
+    if sport_types:
+        key_list = [t.strip() for t in sport_types.split(",")]
+        # 从配置中查找对应的 key (整数)
+        key_list.extend([
+            item["name"] for item in ACTIVITY_CONFIG if item["key"] in key_list
+        ])
+        # 将 key 和 name 都放入查询条件 (满足任意一个即可)
+        query = query.filter(
+                BaseActivity.sport_type_raw.in_(key_list)
+        )
+
+    # 5. 增加名称模糊搜索 (同时匹配 name 和 activity_name)
+    if search_name:
+        search_pattern = f"%{search_name}%"
+        query = query.filter(
+                BaseActivity.activity_name.ilike(search_pattern)
+            
+        )
+
+    # 6. 计算符合条件的总条数
     total = query.count()
 
-    # 5. 执行分页与排序查询
+    # 7. 执行分页与排序查询
     result = (
         query.order_by(desc(BaseActivity.start_time_local))
         .limit(page_size)
@@ -161,7 +196,7 @@ def get_activity(
 
 @router.post("/pullFullActivities")
 def pull_full_activities(
-    connect_id: int = None,
+    connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -176,7 +211,7 @@ def pull_full_activities(
 
 @router.post("/pullNewActivities")
 def pull_new_activities(
-    connect_id: int = None,
+    connect_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

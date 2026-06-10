@@ -3,7 +3,6 @@ import requests
 from typing import Dict, Any
 from fastapi import HTTPException
 from app.core.config import settings
-from app.utils.logger_utils import log_request
 
 
 # ============ Google OAuth =============
