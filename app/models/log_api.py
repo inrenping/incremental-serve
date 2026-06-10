@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, BigInteger, Integer, DateTime, func
+from sqlalchemy import Column, ForeignKey, String, Text, BigInteger, Integer, DateTime, func
 from sqlalchemy.dialects.postgresql import JSONB, INET
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
@@ -13,7 +13,9 @@ class SysLog(Base):
     __tablename__ = "t_log_api"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
-    user_id = Column(String(100), nullable=True, comment="用户ID")
+    user_id = Column(
+            Integer, ForeignKey("t_users.id", ondelete="CASCADE"), nullable=False
+        )
     user_name = Column(String(100), nullable=True, comment="用户名")
     log_type = Column(String(50), nullable=False, comment="日志类型")
     module_name = Column(String(100), nullable=True, comment="模块名称")
