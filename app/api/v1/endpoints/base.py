@@ -293,20 +293,20 @@ async def log_stream_generator(
             yield f"data: {json.dumps({"level": "error", "message": f"❌ [1/10] 未找到源平台 {source_id} 的连接配置"}, ensure_ascii=False)}\n\n"
             return
                
-        yield f"data: {json.dumps({"level": "info", "message": f"[1/10]源平台{ source_id } 鉴权"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [1/10]源平台{ source_id } 鉴权"}, ensure_ascii=False)}\n\n"
         target_config = base_connect_service.perform_relogin(source_id, db, current_user)
         if not target_config:
             yield f"data: {json.dumps({"level": "error", "message": f"❌ [1/10]源平台{ source_id } 鉴权失败"}, ensure_ascii=False)}\n\n"
             return
-        yield f"data: {json.dumps({"level": "success", "message": f"[1/10]源平台{ source_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [1/10]源平台{ source_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
         await asyncio.sleep(1)
-        yield f"data: {json.dumps({"level": "info", "message": f"[2/10]源平台{ source_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"🏗️ [2/10]源平台{ source_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
         target_sync_result = base_activity_service.pull_full_activities(
             connect_id=source_id, incremental=True, db=db, current_user=current_user
         )
         await asyncio.sleep(10)
         if target_sync_result.get("status") == "success":
-          yield f"data: {json.dumps({"level": "success", "message": f"[2/10]源平台{ source_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
+          yield f"data: {json.dumps({"level": "success", "message": f"🏗️ [2/10]源平台{ source_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
         else:
           yield f"data: {json.dumps({"level": "error", "message": f"❌ [2/10]源平台{ source_id } 增量同步数据失败"}, ensure_ascii=False)}\n\n"
           return        
@@ -325,14 +325,14 @@ async def log_stream_generator(
         if not target_config:
             yield f"data: {json.dumps({"level": "error", "message": f"❌ [4/10]目标平台{ target_id } 鉴权失败"}, ensure_ascii=False)}\n\n"
             return
-        yield f"data: {json.dumps({"level": "success", "message": f"[4/10]目标平台{ target_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [4/10]目标平台{ target_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
         
-        yield f"data: {json.dumps({"level": "info", "message": f"[5/10]目标平台{ target_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"🏗️ [5/10]目标平台{ target_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
         target_sync_result = base_activity_service.pull_full_activities(
             connect_id=target_id, incremental=True, db=db, current_user=current_user
         )
         if target_sync_result.get("status") == "success":
-          yield f"data: {json.dumps({"level": "success", "message": f"[5/10]目标平台{ target_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
+          yield f"data: {json.dumps({"level": "success", "message": f"🏗️ [5/10]目标平台{ target_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
         else:
           yield f"data: {json.dumps({"level": "error", "message": f"❌ [5/10]目标平台{ target_id } 增量同步数据失败"}, ensure_ascii=False)}\n\n"
           return        
@@ -347,7 +347,7 @@ async def log_stream_generator(
         else:
           yield f"data: {json.dumps({"level": "success", "message": f"📦 [6/10]目标平台{ target_id } 获取最新 {count} 条数据成功"}, ensure_ascii=False)}\n\n"
 
-        yield f"data: {json.dumps({"level": "info", "message": f"[7/10]开始比较两个平台最新的 {count} 条数据"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]开始比较两个平台最新的 {count} 条数据"}, ensure_ascii=False)}\n\n"
 
         map_b = {item.activity_id: item for item in target_activities}
         # 相同特征的记录（交集）
@@ -371,21 +371,24 @@ async def log_stream_generator(
         diff_b = list(map_b.values())
 
         
-        yield f"data: {json.dumps({"level": "info", "message": f"[7/10]筛选之后得到 平台 {source_id} 有 {len(diff_a)} 条上传数据,平台 {target_id} 有 {len(diff_b)} 条上传数据"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]筛选之后得到 平台 {source_id} 有 {len(diff_a)} 条上传数据,平台 {target_id} 有 {len(diff_b)} 条上传数据"}, ensure_ascii=False)}\n\n"
 
         if len(diff_a) == 0 and len(diff_b) == 0:
-            yield f"data: {json.dumps({"level": "info", "message": f"[7/10]两个平台的数据完全一致"}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]两个平台的数据完全一致"}, ensure_ascii=False)}\n\n"
             return
+        if len(diff_a) > 0:
+            yield f"data: {json.dumps({"level": "info", "message": f"📦 [8/10]开始从源平台 {source_id} 下载 {len(diff_a)} 条记录"}, ensure_ascii=False)}\n\n"
 
-        yield f"data: {json.dumps({"level": "info", "message": f"[5/10]从平台 {source_id} 下载 3 条记录"}, ensure_ascii=False)}\n\n"
+      
+
         await asyncio.sleep(1)
-        yield f"data: {json.dumps({"level": "success", "message": f"[5/10]从平台 {source_id} 下载 3 条记录"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "success", "message": f"📦 [8/10]从平台 {source_id} 下载 {len(diff_a)} 条记录完成"}, ensure_ascii=False)}\n\n"
         await asyncio.sleep(1)
-        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [6/10]筛选之后得到 3 条上传数据"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [9/10]筛选之后得到 {len(diff_a)} 条上传数据"}, ensure_ascii=False)}\n\n"
         await asyncio.sleep(1)
-        yield f"data: {json.dumps({"level": "info", "message": f"🚀 [6/10]向平台 {target_id} 上传 3 条记录"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "info", "message": f"🚀 [10/10]向平台 {target_id} 上传 {len(diff_a)} 条记录"}, ensure_ascii=False)}\n\n"
         await asyncio.sleep(1)
-        yield f"data: {json.dumps({"level": "success", "message": f"🚀 [6/10]向平台 {target_id} 上传 3 条记录成功"}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({"level": "success", "message": f"🚀 [10/10]向平台 {target_id} 上传 {len(diff_a)} 条记录成功"}, ensure_ascii=False)}\n\n"
 
         # 推送所有任务结束的暗号
         await asyncio.sleep(1)
