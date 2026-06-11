@@ -355,19 +355,18 @@ async def log_stream_generator(
         diff_a = []        
         diff_b = []     
         for item_a in target_activities:
-            key = item_a.activity_id
-            
-            if key in map_b:
-                # 匹配成功：说明两边都有
-                item_b = map_b[key]
-                intersection.append({"target": item_a, "source": item_b})
-                
-                # 从 map_b 中删除，方便后续收集 source 端的差集
-                del map_b[key]
-            else:
-                # 匹配失败：说明这是 target 独有的
-                diff_a.append(item_a)
-        # 3. map_b 中剩下的就是 source 端独有的
+          key = item_a.activity_id
+          
+          if key in map_b:
+              item_b = map_b[key]
+              if base_activity_service.is_same_activity(item_a, item_b):
+                  intersection.append({"target": item_a, "source": item_b})
+                  # 从 map_b 中删除，方便后续收集 source 端的差集
+                  del map_b[key]
+          else:
+            # 匹配失败：说明这是 target 独有的
+            diff_a.append(item_a)
+        # map_b 中剩下的就是 source 端独有的
         diff_b = list(map_b.values())
 
         
