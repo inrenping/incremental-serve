@@ -442,7 +442,7 @@ def sync_garmin_to_coros(
     return _upload_fit_zip_to_coros(db,current_user, target_config, raw, str(activity.activity_id))
 
 def _upload_fit_zip_to_coros(
-    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
+    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, filename: str
 ) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
@@ -452,7 +452,7 @@ def _upload_fit_zip_to_coros(
     coros_config = base_connect_service.perform_relogin(coros_config.id, db=db, current_user=current_user)
     # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-    file_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
+    file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
 
     with open(file_path, "wb") as fb:
         fb.write(fit_data)
@@ -493,7 +493,7 @@ def _upload_fit_zip_to_coros(
         "size": filesize,
         "object": f"{oss_path}",
         "serviceName": sts["service"],
-        "oriFileName": f"{source_id}.zip",
+        "oriFileName": f"{filename}.zip",
     }
     print(f" {upload_url} | { json.dumps(params)}")
     try:

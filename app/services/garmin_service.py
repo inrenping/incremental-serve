@@ -650,7 +650,6 @@ def _upload_file_to_garmin(
         target_config: BaseConnect,
         file_data: bytes,
         filename: str,
-        op_desc: str,
 ) -> dict:
     """内部辅助方法：执行将文件上传到佳明服务器的通用逻辑。支持自动解压 zip 中的 fit 文件。"""
 
@@ -718,7 +717,7 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int,targ
         db, current_user, activity_id
     )
     return _upload_file_to_garmin(
-        db, current_user, target_config, file_data, filename, "佳明上传运动"
+        db, current_user, target_config, file_data, filename
     )
 
 
@@ -749,7 +748,7 @@ def sync_coros_to_garmin(
     )
 
     return _upload_file_to_garmin(
-        current_user, target_config, file_resp.content, filename, "上传佳明活动"
+        current_user=current_user,db=db, target_config=target_config, file_data=file_resp.content, filename=filename
     )
 
 
