@@ -91,7 +91,7 @@ def download_coros_activity(
     下载高驰运动记录的 FIT 文件。
     流程：1. 请求元数据获取下载 URL -> 2. 执行 StreamingResponse 流式下载文件。
     """
-    file_response, filename = coros_service.get_coros_activity_download_info(
+    file_response, filename = coros_service.download_coros_activity_response(
         db, current_user, activity_id
     )
     return StreamingResponse(

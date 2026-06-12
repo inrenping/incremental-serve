@@ -62,7 +62,7 @@ def download_activity(activity_id: int, db: Session, current_user: User):
         return {"status": "error", "message": "未找到对应的活动记录"}
     # 高驰下载
     if base_activity and base_activity.source_type == "coros":
-        file_response, filename = coros_service.get_coros_activity_download_info(
+        file_response, filename = coros_service.download_coros_activity_response(
             db, current_user,base_connect.id, activity_id
         )
         return StreamingResponse(

@@ -743,7 +743,7 @@ def sync_coros_to_garmin(
             status_code=404, detail=f"目标佳明区域 {target_connect_id} 未授权"
         )
 
-    file_resp, filename = coros_service.get_coros_activity_download_info(
+    file_resp, filename = coros_service.download_coros_activity_response(
         db, current_user, activity.base_connect_id,activity_id
     )
 
