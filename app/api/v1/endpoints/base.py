@@ -412,7 +412,7 @@ async def log_stream_generator(
 
         yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录"}, ensure_ascii=False)}\n\n"
         for source_file, filename in source_file_list:
-            if source_config.target_config == "coros":
+            if source_config.source_type == "coros":
                 coros_service._upload_fit_zip_to_coros(db,current_user,target_config, source_file, filename)
             else:
                 garmin_service._upload_file_to_garmin(current_user=current_user,db=db, target_config=target_config, file_data=source_file, filename=filename)
