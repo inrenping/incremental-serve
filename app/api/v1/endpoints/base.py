@@ -402,11 +402,11 @@ async def log_stream_generator(
         source_file_list = []
         for source_item in diff_source_only:
             if source_item.source_type == "coros" :
-                file_response, filename = coros_service.get_coros_activity_download_info(activity_id=source_item.activity_id,connect_id=source_id,db=db,current_user=current_user)
-                source_file_list.append((file_response, filename))
+                file_data, filename = coros_service.get_coros_activity_download_info(activity_id=source_item.id,connect_id=source_id,db=db,current_user=current_user)
+                source_file_list.append((file_data, filename))
             else:
-                file_response, filename = garmin_service.get_garmin_activity_download_info(garmin_activity_id=source_item.activity_id,db=db,current_user=current_user)
-                source_file_list.append((file_response, filename))
+                file_data, filename = garmin_service.get_garmin_activity_download_info(garmin_activity_id=source_item.id,db=db,current_user=current_user)
+                source_file_list.append((file_data, filename))
 
         yield f"data: {json.dumps({"level": "success", "message": f"📦 [8/10]从平台 {source_id} 下载 {len(diff_source_only)} 条记录完成"}, ensure_ascii=False)}\n\n"
 
@@ -424,19 +424,19 @@ async def log_stream_generator(
         target_file_list = []
         for target_item in diff_target_only:
             if target_item.source_type == "coros":
-                file_response, filename = coros_service.get_coros_activity_download_info(
-                    activity_id=target_item.activity_id, connect_id=target_id, db=db, current_user=current_user)
-                target_file_list.append((file_response, filename))
+                file_data, filename = coros_service.get_coros_activity_download_info(
+                    activity_id=target_item.id, connect_id=target_id, db=db, current_user=current_user)
+                target_file_list.append((file_data, filename))
             else:
-                file_response, filename = garmin_service.get_garmin_activity_download_info(
-                    garmin_activity_id=target_item.activity_id, db=db, current_user=current_user)
-                target_file_list.append((file_response, filename))
+                file_data, filename = garmin_service.get_garmin_activity_download_info(
+                    garmin_activity_id=target_item.id, db=db, current_user=current_user)
+                target_file_list.append((file_data, filename))
 
         yield f"data: {json.dumps({"level": "success", "message": f"📦 [8/10]从平台 {target_id} 下载 {len(diff_target_only)} 条记录完成"}, ensure_ascii=False)}\n\n"
 
         yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_target_only)} 条记录"}, ensure_ascii=False)}\n\n"
         for target_file, filename in target_file_list:
-            if target_config.target_type == "coros":
+            if target_config.source_type == "coros":
                 coros_service._upload_fit_zip_to_coros(db, current_user, source_config, target_file, filename)
             else:
                 garmin_service._upload_file_to_garmin(current_user=current_user, db=db, target_config=source_config,
