@@ -3,20 +3,21 @@ import json
 from typing import Optional
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, or_
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.sql.functions import random
 
-from app import db
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.base_activity import BaseActivity
 from app.models.base_connect import BaseConnect
 from app.models.user import User
 
-from app.services import base_connect_service, base_activity_service
+from app.services import base_connect_service, base_activity_service, coros_service, garmin_service
 from app.utils.activity_type_config import ACTIVITY_CONFIG
 from pydantic import BaseModel
+
 
 router = APIRouter()
 
@@ -31,7 +32,7 @@ class LoginRequest(BaseModel):
 
 
 @router.get("/getConnectConfigs")
-def get_connect_config( 
+def get_connect_config(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ):
     """
@@ -114,12 +115,12 @@ def relogin_connect(
 @router.get("/getActivitiesByPage")
 def get_activities_by_page(
     connect_id: int,
-    page_size: int = Query(10, alias="pageSize"),
-    page_count: int = Query(1, alias="page"),
-    start_date: Optional[str] = Query(None, alias="startDate"),
-    end_date: Optional[str] = Query(None, alias="endDate"),
-    sport_types: Optional[str] = Query(None, alias="sport_type"),
-    name: Optional[str] = Query(None, alias="name"),
+    page_size: int =10,
+    page_count: int = 1,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_types: Optional[str] = None,
+    name: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -161,7 +162,7 @@ def get_activities_by_page(
         search_pattern = f"%{name}%"
         query = query.filter(
                 BaseActivity.activity_name.ilike(search_pattern)
-            
+
         )
 
     # 6. 计算符合条件的总条数
@@ -208,7 +209,7 @@ def pull_full_activities(
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
     return base_activity_service.pull_full_activities(
-        connect_id, incremental=False, db=db, current_user=current_user
+        connect_id=connect_id, incremental=False, db=db, current_user=current_user
     )
 
 
@@ -223,7 +224,7 @@ def pull_new_activities(
     采用分页拉取逻辑，通过 labelId 进行去重判断。
     """
     return base_activity_service.pull_full_activities(
-        connect_id, incremental=True, db=db, current_user=current_user
+        connect_id=connect_id, incremental=True, db=db, current_user=current_user
     )
 
 
@@ -250,55 +251,202 @@ def upload_activity_to_target(
     从活动所属区域下载 FIT，上传到另一个账号
     """
     return base_activity_service.upload_activity_to_target(
-        activity_id, target_connect_id  , db, current_user
+        activity_id=activity_id, target_connect_id=target_connect_id, db=db, current_user=current_user
     )
 
 class TaskRequest(BaseModel):
     source_id: int
     target_id: int
+    count: int
 
 @router.post("/execute")
-async def execute_task(request: TaskRequest):
+async def execute_task(
+    request: TaskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+    ):
     """测试 SSE """
-    print(f"🔔 收到终端构建请求 -> source_id: {request.source_id}, target_id: {request.target_id}")
-    
+    print(f"🔔 收到数据同步请求 -> user_id: {current_user.id}, source_id: {request.source_id}, target_id: {request.target_id}")
+
     return StreamingResponse(
-        log_stream_generator(request.source_id, request.target_id),
+        log_stream_generator(request.source_id, request.target_id,request.count,current_user,db),
         media_type="text/event-stream"
     )
 
-async def log_stream_generator(source_id: int, target_id: int):
+async def log_stream_generator(
+        source_id: int,
+        target_id: int,
+        count:int=10,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)):
     """
     负责在长连接中，源源不断地 yield 推送数据给客户端。
     注意：这里必须遵循 SSE 格式 => data: <你的字符串数据>\n\n
     """
+    if source_id == target_id:
+        yield f"data: {json.dumps({"level": "info", "message": f"❌ 两个账号相同不需要同步"}, ensure_ascii=False)}\n\n"
+
+        return
     try:
-        # 模拟真实的终端任务步骤
-        steps = [
-            {"level": "info", "message": f"🤖 [Task-{source_id}-{target_id}] 正在初始化构建环境，执行命令: npm run build..."},
-            {"level": "info", "message": "📦 [1/4] 正在拉取远程核心依赖组件包..."},
-            {"level": "warn", "message": "⚠️ 警告: 发现 3 个过时的依赖项，正在自动尝试兼容修复..."},
-            {"level": "info", "message": "🏗️ [2/4] 正在编译源代码并生成压缩混淆文件 (Chunking)..."},
-            {"level": "success", "message": "✨ 成功生成静态资产: assets/index-c4f82a.js (size: 512 KB)"},
-            {"level": "info", "message": "🚀 [3/4] 正在将构建产物分发至边缘 CDN 节点..."},
-            {"level": "info", "message": "🧹 [4/4] 正在清理本地编译产生的缓存垃圾文件..."},
+
+        yield f"data: {json.dumps({"level": "info", "message": f"🔔 [0/10][[0/10][Task-{current_user.id}-{source_id}-{target_id}] 正在构建同步任务Task-{current_user.id}-{source_id}-{target_id}] 正在构建同步任务"}, ensure_ascii=False)}\n\n"
+
+        await asyncio.sleep(0.5)
+
+        source_config = db.query(BaseConnect).filter(BaseConnect.id == source_id, BaseConnect.user_id == current_user.id).first()
+        if not source_config:
+            yield f"data: {json.dumps({"level": "error", "message": f"❌ [1/10] 未找到源平台 {source_id} 的连接配置"}, ensure_ascii=False)}\n\n"
+            return
+
+        yield f"data: {json.dumps({"level": "info", "message": f"🤖 [1/10]源平台{ source_id } 鉴权"}, ensure_ascii=False)}\n\n"
+        source_config = base_connect_service.perform_relogin(source_id, db, current_user)
+        if not source_config:
+            yield f"data: {json.dumps({"level": "error", "message": f"❌ [1/10]源平台{ source_id } 鉴权失败"}, ensure_ascii=False)}\n\n"
+            return
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [1/10]源平台{ source_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
+        await asyncio.sleep(1)
+        yield f"data: {json.dumps({"level": "info", "message": f"🏗️ [2/10]源平台{ source_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
+        source_sync_result = base_activity_service.pull_full_activities(
+            connect_id=source_id, incremental=True, db=db, current_user=current_user
+        )
+        await asyncio.sleep(10)
+        if source_sync_result.get("status") == "success":
+          yield f"data: {json.dumps({"level": "success", "message": f"🏗️ [2/10]源平台{ source_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
+        else:
+          yield f"data: {json.dumps({"level": "error", "message": f"❌ [2/10]源平台{ source_id } 增量同步数据失败"}, ensure_ascii=False)}\n\n"
+          return
+        yield f"data: {json.dumps({"level": "info", "message": f"📦 [3/10]源平台{ source_id } 开始获取最新 {count} 条数据"}, ensure_ascii=False)}\n\n"
+        source_activities = db.query(BaseActivity).filter(
+            BaseActivity.base_connect_id == source_id,
+            BaseActivity.user_id == current_user.id
+        ).order_by(desc(BaseActivity.start_time_local)).limit(count).all()
+        if not source_activities:
+          yield f"data: {json.dumps({"level": "error", "message": f"❌ [3/10]源平台{ source_id } 获取最新 {count} 条数据失败"}, ensure_ascii=False)}\n\n"
+          return
+        else:
+          yield f"data: {json.dumps({"level": "success", "message": f"📦 [3/10]源平台{ source_id } 获取最新 {count} 条数据成功"}, ensure_ascii=False)}\n\n"
+
+        target_config = base_connect_service.perform_relogin(
+            target_id, db, current_user
+        )
+        if not target_config:
+            yield f"data: {json.dumps({"level": "error", "message": f"❌ [4/10]目标平台{ target_id } 鉴权失败"}, ensure_ascii=False)}\n\n"
+            return
+        yield f"data: {json.dumps({"level": "success", "message": f"🤖 [4/10]目标平台{ target_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({"level": "info", "message": f"🏗️ [5/10]目标平台{ target_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
+        target_sync_result = base_activity_service.pull_full_activities( connect_id=target_id, incremental=True, db=db, current_user=current_user )
+        if target_sync_result.get("status") == "success":
+          yield f"data: {json.dumps({"level": "success", "message": f"🏗️ [5/10]目标平台{ target_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
+        else:
+          yield f"data: {json.dumps({"level": "error", "message": f"❌ [5/10]目标平台{ target_id } 增量同步数据失败"}, ensure_ascii=False)}\n\n"
+          return
+        yield f"data: {json.dumps({"level": "info", "message": f"📦 [6/10]目标平台{ target_id } 开始获取最新 {count} 条数据"}, ensure_ascii=False)}\n\n"
+        target_activities = db.query(BaseActivity).filter(
+            BaseActivity.base_connect_id == target_id,
+            BaseActivity.user_id == current_user.id
+        ).order_by(desc(BaseActivity.start_time_local)).limit(count).all()
+        if not target_activities:
+          yield f"data: {json.dumps({"level": "error", "message": f"❌ [6/10]目标平台{ target_id } 获取最新 {count} 条数据失败"}, ensure_ascii=False)}\n\n"
+          return
+        else:
+          yield f"data: {json.dumps({"level": "success", "message": f"📦 [6/10]目标平台{ target_id } 获取最新 {count} 条数据成功"}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]开始比较两个平台最新的 {count} 条数据"}, ensure_ascii=False)}\n\n"
+
+        intersection = []  # 两个平台都有且运动特征一致的记录（交集）
+        diff_source_only = []  # 源平台独有，需要同步到目标平台的数据
+
+        # 用一个集合来记录目标平台中哪些数据已经被成功匹配了
+        matched_target_ids = set()
+
+        # 外层循环：遍历源平台
+        for item_a in source_activities:
+            is_matched = False
+
+            # 内层循环：遍历目标平台
+            for item_b in target_activities:
+                # 如果目标平台的这条记录已经被别的运动匹配过了，直接跳过
+                if item_b.activity_id in matched_target_ids:
+                    continue
+
+                if base_activity_service.is_same_activity(item_a, item_b):
+                    print(f"✨ 属性比对成功：源平台[{item_a.activity_id}] 与 目标平台[{item_b.activity_id}] 为同一运动")
+                    intersection.append({"source": item_a, "target": item_b})
+
+                    # 标记这条目标平台数据已被消耗
+                    matched_target_ids.add(item_b.activity_id)
+                    is_matched = True
+                    break
+
+            # 如果内层循环全部跑完，源平台这条数据依然没有找到匹配的目标，说明是源平台独有的
+            if not is_matched:
+                print(f"📌 源平台[{item_a.activity_id}] 在目标平台没有找到匹配的运动，归为源平台 {source_id} 独有")
+                diff_source_only.append(item_a)
+
+        # 💡 剩下的就是目标平台独有的：遍历目标平台，只要 ID 不在已匹配的集合里就是独有的
+        diff_target_only = [
+            item for item in target_activities
+            if item.activity_id not in matched_target_ids
         ]
 
-        for step in steps:
-            # 模拟每秒钟执行完一个步骤
-            await asyncio.sleep(1.2) 
-            
-            # 追加当前时间，让终端看起来更有真实感
-            step["message"] = f"{step['message']}"
-            
-            # 严格按照 SSE 规范格式化：data: JSON_STR\n\n
-            yield f"data: {json.dumps(step, ensure_ascii=False)}\n\n"
 
+        yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]筛选之后得到 平台 {source_id} 有 {len(diff_source_only)} 条上传数据,平台 {target_id} 有 {len(diff_target_only)} 条上传数据"}, ensure_ascii=False)}\n\n"
+
+        if len(diff_source_only) == 0 and len(diff_target_only) == 0:
+            yield f"data: {json.dumps({"level": "info", "message": f"✨ [7/10]两个平台的数据完全一致，完成同步"}, ensure_ascii=False)}\n\n"
+            return
+        if len(diff_source_only) > 0:
+            yield f"data: {json.dumps({"level": "info", "message": f"📦 [8/10]开始从源平台 {source_id} 下载 {len(diff_source_only)} 条记录"}, ensure_ascii=False)}\n\n"
+
+        source_file_list = []
+        for source_item in diff_source_only:
+            if source_item.source_type == "coros" :
+                file_data,filename = coros_service.download_coros_activity_response(activity_id=source_item.id, connect_id=source_id, db=db, current_user=current_user)
+                source_file_list.append((file_data.content, filename))
+            else:
+                file_data = coros_service._download_garmin_activity(activity=source_item,garmin_config=source_config,current_user=current_user)
+                source_file_list.append((file_data, str(source_item.activity_id)))
+
+        yield f"data: {json.dumps({"level": "success", "message": f"📦 [8/10]从平台 {source_id} 下载 {len(diff_source_only)} 条记录完成"}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录"}, ensure_ascii=False)}\n\n"
+        for source_file, filename in source_file_list:
+            if source_config.source_type == "coros":
+                coros_service._upload_fit_zip_to_coros(db,current_user,target_config, source_file, filename)
+            else:
+                garmin_service._upload_file_to_garmin(current_user=current_user,db=db, target_config=target_config, file_data=source_file, filename=filename)
+        yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
+
+        if len(diff_target_only) > 0:
+            yield f"data: {json.dumps({"level": "info", "message": f"📦 [8/10]开始从目标平台 {target_id} 下载 {len(diff_target_only)} 条记录"}, ensure_ascii=False)}\n\n"
+
+        target_file_list = []
+        for target_item in diff_target_only:
+            if target_item.source_type == "coros":
+                file_data, filename = coros_service.download_coros_activity_response(
+                    activity_id=target_item.id, connect_id=target_id, db=db, current_user=current_user)
+                target_file_list.append((file_data.content, filename))
+            else:
+                file_data = coros_service._download_garmin_activity(
+                    activity=target_item,garmin_config=target_config,current_user=current_user)
+                target_file_list.append((file_data, str(target_item.activity_id)))
+
+        yield f"data: {json.dumps({"level": "success", "message": f"📦 [8/10]从平台 {target_id} 下载 {len(diff_target_only)} 条记录完成"}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_target_only)} 条记录"}, ensure_ascii=False)}\n\n"
+        for target_file, filename in target_file_list:
+            if source_config.source_type == "coros":
+                coros_service._upload_fit_zip_to_coros(db, current_user, source_config, target_file, filename)
+            else:
+                garmin_service._upload_file_to_garmin(current_user=current_user, db=db, target_config=source_config,
+                                                      file_data=target_file, filename=filename)
+        yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向源平台 {source_id} 上传 {len(diff_target_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
         # 推送所有任务结束的暗号
-        await asyncio.sleep(0.5)
+
         yield "data: [DONE]\n\n"
 
     except asyncio.CancelledError:
         # 极其重要：如果前端关闭了弹出框，或者刷新了浏览器，FastAPI 会抛出这个异常
         # 我们在这里捕获它，可以用来做清理工作（比如杀死底层的 Shell 子进程）
-        print(f"🛑 检测到客户端中断了连接，任务 [Task-{source_id}] 的流式推送已停止。")
+        print(f"🛑 检测到客户端中断了连接，任务 [Task-{current_user.id}-{source_id}-{target_id}] 的流式推送已停止。")

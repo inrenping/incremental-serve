@@ -303,8 +303,7 @@ def pull_full_coros_activities(
         "new_saved_count": new_saved_count,
     }
 
-
-def get_coros_activity_download_info(
+def download_coros_activity_response(
     db: Session, current_user: User, connect_id: int, activity_id: int
 ) -> Tuple[requests.Response, str]:
     """获取高驰运动记录的文件流及建议的文件名。"""
@@ -441,8 +440,37 @@ def sync_garmin_to_coros(
 
     return _upload_fit_zip_to_coros(db,current_user, target_config, raw, str(activity.activity_id))
 
+def _download_garmin_activity( current_user: User,garmin_config:BaseConnect, activity: BaseActivity) -> bytes:
+    if garmin_config.region and garmin_config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
+
+    download_url = "/download-service/files/activity"
+    url = f"{download_url}/{activity.activity_id}"
+    try:
+        with log_request(
+            current_user=current_user,
+            req_url=url,
+            req_method="POST",
+            req_params=None,
+            log_type="download",
+            module_name="garmin",
+            op_desc="下载佳明运动文件",
+        ) as ctx:
+            raw = garth.client.download(url)
+            print("raw 的类型是:", type(raw))
+            if not raw:
+                raise Exception("下载内容为空")
+    except Exception as e:
+        print(f"佳明文件下载失败: {e}")
+        raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
+    print(f"成功下载 Garmin 活动 {activity.activity_id}，文件大小: {len(raw)} 字节")
+    return raw
+
+
 def _upload_fit_zip_to_coros(
-    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, source_id: str
+    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, filename: str
 ) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
@@ -452,7 +480,7 @@ def _upload_fit_zip_to_coros(
     coros_config = base_connect_service.perform_relogin(coros_config.id, db=db, current_user=current_user)
     # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-    file_path = os.path.join(GARMIN_FIT_DIR, f"{source_id}.zip")
+    file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
 
     with open(file_path, "wb") as fb:
         fb.write(fit_data)
@@ -493,7 +521,7 @@ def _upload_fit_zip_to_coros(
         "size": filesize,
         "object": f"{oss_path}",
         "serviceName": sts["service"],
-        "oriFileName": f"{source_id}.zip",
+        "oriFileName": f"{filename}.zip",
     }
     print(f" {upload_url} | { json.dumps(params)}")
     try:

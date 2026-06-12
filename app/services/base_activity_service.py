@@ -9,7 +9,7 @@ from app.services import base_connect_service, garmin_service, coros_service
 
 
 def pull_full_activities(
-    connect_id: int, db: Session, current_user: User, incremental: bool = False
+     current_user: User, db: Session, connect_id: int, incremental: bool = False
 ) -> dict:
     """全量/增量拉取数据。"""
     base_connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
@@ -62,7 +62,7 @@ def download_activity(activity_id: int, db: Session, current_user: User):
         return {"status": "error", "message": "未找到对应的活动记录"}
     # 高驰下载
     if base_activity and base_activity.source_type == "coros":
-        file_response, filename = coros_service.get_coros_activity_download_info(
+        file_response, filename = coros_service.download_coros_activity_response(
             db, current_user,base_connect.id, activity_id
         )
         return StreamingResponse(
@@ -139,24 +139,30 @@ def upload_activity_to_target(
 
 
 def is_same_activity(
-    source_activity: BaseActivity,
-    target_activity: BaseActivity,
+        source_activity: BaseActivity,
+        target_activity: BaseActivity,
 ) -> bool:
-    """粗略判断是不是同一个运动记录。"""
-    if source_activity.start_time and target_activity.start_time:
-        # 时间校验：差异在 5 分钟 (300秒) 以内
-        time_diff = abs(
-            (source_activity.start_time - target_activity.start_time).total_seconds()
-        )
-        if time_diff <= 300:
-            return True
+    """判断是不是同一个运动记录（必须同时满足时间和距离条件）。"""
 
-        # 距离校验：差异在 5% 以内
-        s_dist = float(source_activity.distance_meters or 0)
-        t_dist = float(target_activity.distance_meters or 0)
-        if s_dist > 0 or t_dist > 0:
-            max_dist = max(s_dist, t_dist)
-            if (abs(s_dist - t_dist) / max_dist) <= 0.05:
-                return True
+    # 1. 基础前置校验：如果两边缺少时间，无法比对，直接判定为不是同一条
+    if not source_activity.start_time_gmt or not target_activity.start_time_gmt:
+        return False
 
-    return False
+    # 2. 校验条件一：时间差异必须在 5 分钟 (300秒) 以内
+    time_diff = abs((source_activity.start_time_gmt - target_activity.start_time_gmt).total_seconds())
+    if time_diff > 300:
+        return False
+
+    # 3. 校验条件二：距离差异必须在 5% 以内
+    s_dist = float(source_activity.distance_meters or 0)
+    t_dist = float(target_activity.distance_meters or 0)
+
+    # 如果两个平台记录的距离都为 0（比如某些无距离数据的静态冥想或纯时间健身），则认为距离条件默认通过
+    if s_dist > 0 or t_dist > 0:
+        max_dist = max(s_dist, t_dist)
+        dist_diff_ratio = abs(s_dist - t_dist) / max_dist
+        if dist_diff_ratio > 0.05:
+            return False  # 距离不及格，直接淘汰
+
+    # 4. （时间OK 且 距离OK），才能返回 True
+    return True
