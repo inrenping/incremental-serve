@@ -3,10 +3,9 @@ import json
 from typing import Optional
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc
+from sqlalchemy import desc, text
 from sqlalchemy.orm import Session
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.sql.functions import random
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.security import get_current_user
 from app.db.session import get_db
@@ -30,6 +29,17 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+@router.get("/health")
+def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "UP", "database": "OK"}
+    except Exception as e:
+        # 如果数据库连接断开或报错，直接抛出 500 异常
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database connection failed: {str(e)}"
+        )
 
 @router.get("/getConnectConfigs")
 def get_connect_config(
