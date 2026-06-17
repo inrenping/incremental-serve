@@ -285,3 +285,95 @@ COMMENT ON COLUMN public.t_log_operation.log_type IS '业务操作动作分类 (
 COMMENT ON COLUMN public.t_log_operation.module_name IS '关联的功能模块名称 (示例: Device=设备关联, Activity=运动管理)';
 COMMENT ON COLUMN public.t_log_operation.op_desc IS '操作行为的具体业务语义描述 (示例: 用户解绑了佳明渠道授权)';
 COMMENT ON COLUMN public.t_log_operation.created_at IS '业务操作发生的时间（带时区）';
+
+
+-- ==========================================
+-- 1. 创建任务表 (t_task) 及注释
+-- ==========================================
+CREATE TABLE public.t_task (
+    id bigserial NOT NULL,
+    user_id bigint NOT NULL,
+    connect_source_id bigint NOT NULL,
+    connect_target_id bigint NOT NULL,
+    hour int4 NOT NULL,
+    is_active bool DEFAULT true NULL,
+    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+    updated_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+    CONSTRAINT t_task_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_task_user_id FOREIGN KEY (user_id) REFERENCES public.t_users(id),
+    CONSTRAINT fk_task_connect_source FOREIGN KEY (connect_source_id) REFERENCES public.t_base_connect(id),
+    CONSTRAINT fk_task_connect_target FOREIGN KEY (connect_target_id) REFERENCES public.t_base_connect(id)
+);
+
+-- 创建索引
+CREATE INDEX idx_t_task_user_active ON public.t_task USING btree (user_id, is_active);
+
+-- 添加表和字段注释
+COMMENT ON TABLE public.t_task IS '数据同步/推送任务主表';
+COMMENT ON COLUMN public.t_task.id IS '自增主键';
+COMMENT ON COLUMN public.t_task.user_id IS '用户ID，关联 t_users.id';
+COMMENT ON COLUMN public.t_task.connect_source_id IS '源端连接配置ID，关联 t_base_connect.id';
+COMMENT ON COLUMN public.t_task.connect_target_id IS '目标端连接配置ID，关联 t_base_connect.id';
+COMMENT ON COLUMN public.t_task.hour IS '任务执行时间点（如：小时，0-23）或执行周期';
+COMMENT ON COLUMN public.t_task.is_active IS '任务是否启用（true: 启用，false: 停用）';
+COMMENT ON COLUMN public.t_task.created_at IS '任务创建时间';
+COMMENT ON COLUMN public.t_task.updated_at IS '任务更新时间';
+
+
+-- ==========================================
+-- 2. 创建任务结果表 (t_task_result) 及注释
+-- ==========================================
+CREATE TABLE public.t_task_result (
+    id bigserial NOT NULL,
+    task_id bigint NOT NULL,
+    type int4 NOT NULL,
+    message text NULL,
+    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+    CONSTRAINT t_task_result_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_task_result_task_id FOREIGN KEY (task_id) REFERENCES public.t_task(id)
+);
+
+-- 创建索引
+CREATE INDEX idx_t_task_result_task_id ON public.t_task_result USING btree (task_id);
+
+-- 添加表和字段注释
+COMMENT ON TABLE public.t_task_result IS '任务历史执行结果表';
+COMMENT ON COLUMN public.t_task_result.id IS '自增主键';
+COMMENT ON COLUMN public.t_task_result.task_id IS '任务ID，关联 t_task.id';
+COMMENT ON COLUMN public.t_task_result.type IS '结果类型/状态码（例如：1-成功，2-部分成功，3-失败）';
+COMMENT ON COLUMN public.t_task_result.message IS '执行总结信息或全局错误提示';
+COMMENT ON COLUMN public.t_task_result.created_at IS '执行记录生成时间';
+
+
+-- ==========================================
+-- 3. 创建任务结果详情表 (t_task_result_detail) 及注释
+-- ==========================================
+CREATE TABLE public.t_task_result_detail (
+    id bigserial NOT NULL,
+    task_result_id bigint NOT NULL,
+    source_activity_id bigint NOT NULL,
+    target_activity_id bigint NULL,
+    success bool DEFAULT false NOT NULL,
+    result varchar(400) NULL,
+    result_text text NULL,
+    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+    CONSTRAINT t_task_result_detail_pkey PRIMARY KEY (id),
+    CONSTRAINT fk_detail_task_result_id FOREIGN KEY (task_result_id) REFERENCES public.t_task_result(id),
+    CONSTRAINT fk_detail_source_activity FOREIGN KEY (source_activity_id) REFERENCES public.t_base_activity(id),
+    CONSTRAINT fk_detail_target_activity FOREIGN KEY (target_activity_id) REFERENCES public.t_base_activity(id)
+);
+
+-- 创建索引
+CREATE INDEX idx_detail_result_id ON public.t_task_result_detail USING btree (task_result_id);
+CREATE INDEX idx_detail_source_act_id ON public.t_task_result_detail USING btree (source_activity_id);
+
+-- 添加表和字段注释
+COMMENT ON TABLE public.t_task_result_detail IS '任务执行明细表（单条运动数据同步详情）';
+COMMENT ON COLUMN public.t_task_result_detail.id IS '自增主键';
+COMMENT ON COLUMN public.t_task_result_detail.task_result_id IS '任务结果ID，关联 t_task_result.id';
+COMMENT ON COLUMN public.t_task_result_detail.source_activity_id IS '源端运动原始ID，关联 t_base_activity.id';
+COMMENT ON COLUMN public.t_task_result_detail.target_activity_id IS '目的端同步成功后的新运动ID，关联 t_base_activity.id（同步失败时为NULL）';
+COMMENT ON COLUMN public.t_task_result_detail.success IS '单条数据是否同步成功（true: 成功，false: 失败）';
+COMMENT ON COLUMN public.t_task_result_detail.result IS '执行结果状态简码/标签（如：SUCCESS, FAILED, SKIP）';
+COMMENT ON COLUMN public.t_task_result_detail.result_text IS '详细的同步反馈、接口返回报文或错误堆栈信息';
+COMMENT ON COLUMN public.t_task_result_detail.created_at IS '明细记录创建时间';
