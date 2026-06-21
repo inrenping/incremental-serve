@@ -1,5 +1,6 @@
 import asyncio
 import json
+from enum import Enum
 from typing import Optional
 
 from fastapi.responses import StreamingResponse
@@ -25,6 +26,11 @@ from pydantic import BaseModel
 router = APIRouter()
 
 
+class ActionType(str, Enum):
+    ADD = "add"
+    UPDATE = "update"
+
+
 class LoginRequest(BaseModel):
     """登录请求模型"""
 
@@ -32,6 +38,7 @@ class LoginRequest(BaseModel):
     region: str
     email: str
     password: str
+    action: ActionType
     master: Optional[bool] = False
 
 
@@ -79,7 +86,7 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
-    # 校验这个账号是不是已经录入过
+    # 查找现有连接（通过用户ID、账号和区域）
     existing_connect = (
         db.query(BaseConnect)
         .filter(
@@ -89,9 +96,18 @@ def login(
         )
         .first()
     )
-    if existing_connect:
-        return {"status": "error", "message": "该账号已存在，请不要重复录入。"}
 
+    # 根据 action 执行不同的逻辑
+    if login_request.action == ActionType.ADD:
+        # add 场景：校验是否已存在，存在则拦截
+        if existing_connect:
+            return {"status": "error", "message": "该账号已存在，请不要重复添加。"}
+    elif login_request.action == ActionType.UPDATE:
+        # update 场景：校验是否已存在，不存在则拦截
+        if not existing_connect:
+            return {"status": "error", "message": "该账号不存在，无法执行更新操作。"}
+
+    # 执行登录操作
     base_connect = base_connect_service.perform_login(
         id=login_request.id,
         email=login_request.email,
