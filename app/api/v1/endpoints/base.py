@@ -32,6 +32,7 @@ class LoginRequest(BaseModel):
     region: str
     email: str
     password: str
+    master: Optional[bool] = False
 
 
 @router.get("/health")
@@ -101,7 +102,12 @@ def login(
     )
     if not base_connect:
         return {"status": "error", "message": "登录失败"}
-    return {"status": "success", "message": "登录成功", "data": base_connect.id}
+    else:
+        # 更新是否主数据源字段  TODO 把该账号的其他账号置为 False
+        base_connect.master = login_request.master
+        db.commit()
+        db.refresh(base_connect)
+        return {"status": "success", "message": "登录成功", "data": base_connect.id}
 
 
 @router.post("/relogin")
