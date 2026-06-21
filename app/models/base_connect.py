@@ -67,6 +67,12 @@ class BaseConnect(Base):
         nullable=True,
         comment="绑定是否激活/有效（对应建表语句的通用状态设计）",
     )
+    master = Column(
+        Boolean,
+        default=False,
+        nullable=True,
+        comment="是否为该用户的主数据源",
+    )
     total_count = Column(
         Integer,
         default=0,

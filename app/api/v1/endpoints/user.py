@@ -39,6 +39,7 @@ def read_users_me(current_user: User = Depends(get_current_user)):
             "id": current_user.id,
             "username": current_user.user_name,
             "email": current_user.user_email,
+            "updated_at": current_user.updated_at,
         },
     }
 
