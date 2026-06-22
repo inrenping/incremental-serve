@@ -119,7 +119,12 @@ def login(
     if not base_connect:
         return {"status": "error", "message": "登录失败"}
     else:
-        # 更新是否主数据源字段  TODO 把该账号的其他账号置为 False
+        # 先把其他账号的 master 置为 False
+        db.query(BaseConnect).filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id != base_connect.id,
+        ).update({"master": False}, synchronize_session=False)
+        # 更新是否主数据源字段
         base_connect.master = login_request.master
         db.commit()
         db.refresh(base_connect)
