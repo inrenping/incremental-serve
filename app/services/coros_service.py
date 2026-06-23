@@ -2,6 +2,7 @@ import os
 import json
 import requests
 from app.services import base_connect_service
+
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from datetime import datetime, timezone
@@ -182,7 +183,9 @@ def pull_full_coros_activities(
         )
 
     # 测试 token 有效性，如果无效则刷新 token
-    base_connect = base_connect_service.perform_relogin(base_connect.id,db=db,current_user=current_user)
+    base_connect = base_connect_service.perform_relogin(
+        base_connect.id, db=db, current_user=current_user
+    )
 
     base_url = get_team_api_base(str(base_connect.region))
     headers = {
@@ -303,6 +306,7 @@ def pull_full_coros_activities(
         "new_saved_count": new_saved_count,
     }
 
+
 def download_coros_activity_response(
     db: Session, current_user: User, connect_id: int, activity_id: int
 ) -> Tuple[requests.Response, str]:
@@ -349,6 +353,7 @@ def download_coros_activity_response(
         )
 
     download_url = meta_res.get("data", {}).get("fileUrl")
+    # 接口调用日志
     with log_request(
         current_user=current_user,
         req_url=download_url,
@@ -356,18 +361,21 @@ def download_coros_activity_response(
         req_params=None,
         log_type="fileUrl",
         module_name="coros",
-        op_desc="下载高驰运动文件",
+        op_desc=f"下载高驰运动文件coros_activity_{activity.activity_id}.fit",
     ) as ctx:
+        # 下载文件
         file_response = requests.get(download_url, stream=True, timeout=30)
         ctx["response"] = None
+    # 操作日志
     log_operation_async(
         user_id=current_user.id,
         log_type="DOWNLOAD",
         module_name="coros",
-        op_desc="下载高驰运动文件",
+        op_desc=f"下载高驰运动文件coros_activity_{activity.activity_id}.fit",
     )
     file_response.raise_for_status()
     return file_response, f"coros_activity_{activity.activity_id}.fit"
+
 
 def sync_garmin_to_coros(
     db: Session, current_user: User, garmin_activity_id: int, connect_id: int
@@ -384,7 +392,7 @@ def sync_garmin_to_coros(
     )
     if not activity:
         raise HTTPException(status_code=404, detail="未找到有效的佳明记录或授权")
-    #查询 Garmin 授权
+    # 查询 Garmin 授权
 
     source_config = (
         db.query(BaseConnect)
@@ -410,7 +418,9 @@ def sync_garmin_to_coros(
     if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
     # 刷新 佳明数据源的 认证
-    source_config = base_connect_service.perform_relogin(source_config.id, db, current_user)
+    source_config = base_connect_service.perform_relogin(
+        source_config.id, db, current_user
+    )
     # 下载 Garmin 文件
     if source_config.region and source_config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
@@ -427,7 +437,7 @@ def sync_garmin_to_coros(
             req_params=None,
             log_type="download",
             module_name="garmin",
-            op_desc="下载佳明运动文件",
+            op_desc=f"下载佳明运动文件{activity.activity_id}",
         ) as ctx:
             raw = garth.client.download(url)
             print("raw 的类型是:", type(raw))
@@ -438,9 +448,14 @@ def sync_garmin_to_coros(
         raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
     print(f"成功下载 Garmin 活动 {activity.activity_id}，文件大小: {len(raw)} 字节")
 
-    return _upload_fit_zip_to_coros(db,current_user, target_config, raw, str(activity.activity_id))
+    return _upload_fit_zip_to_coros(
+        db, current_user, target_config, raw, str(activity.activity_id)
+    )
 
-def _download_garmin_activity( current_user: User,garmin_config:BaseConnect, activity: BaseActivity) -> bytes:
+
+def _download_garmin_activity(
+    current_user: User, garmin_config: BaseConnect, activity: BaseActivity
+) -> bytes:
     if garmin_config.region and garmin_config.region.upper() == "CN":
         garth.client.configure(domain="garmin.cn", ssl_verify=False)
     else:
@@ -456,7 +471,7 @@ def _download_garmin_activity( current_user: User,garmin_config:BaseConnect, act
             req_params=None,
             log_type="download",
             module_name="garmin",
-            op_desc="下载佳明运动文件",
+            op_desc=f"下载佳明运动文件{activity.activity_id}",
         ) as ctx:
             raw = garth.client.download(url)
             print("raw 的类型是:", type(raw))
@@ -470,14 +485,20 @@ def _download_garmin_activity( current_user: User,garmin_config:BaseConnect, act
 
 
 def _upload_fit_zip_to_coros(
-    db:Session,current_user: User, coros_config: BaseConnect, fit_data: bytes, filename: str
+    db: Session,
+    current_user: User,
+    coros_config: BaseConnect,
+    fit_data: bytes,
+    filename: str,
 ) -> dict:
     """
     内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
     包含打包 ZIP、上传 OSS 及调用导入接口。
     """
     # 0. 刷新认证
-    coros_config = base_connect_service.perform_relogin(coros_config.id, db=db, current_user=current_user)
+    coros_config = base_connect_service.perform_relogin(
+        coros_config.id, db=db, current_user=current_user
+    )
     # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
     file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
@@ -493,7 +514,6 @@ def _upload_fit_zip_to_coros(
     # 2. 上传至 OSS (根据区域选择 阿里云 或 AWS)
     oss_path = f"fit_zip/{coros_config.guid}/{md5_hash}.zip"
     print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_config.region}")
-
 
     try:
         oss_client = None
@@ -532,7 +552,7 @@ def _upload_fit_zip_to_coros(
             req_params=params,
             log_type="upload",
             module_name="coros",
-            op_desc="高驰上传运动文件",
+            op_desc=f"高驰上传运动文件{filename}",
         ) as ctx:
             res = requests.post(
                 upload_url,

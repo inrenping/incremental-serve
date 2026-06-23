@@ -1,4 +1,5 @@
 import os
+
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
 from garth.http import Client
@@ -19,11 +20,18 @@ from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
 from app.utils.logger_utils import log_request
 
-def get_garmin_connect(connect_id: int, db: Session, current_user: User) -> type[BaseConnect]|None:
+
+def get_garmin_connect(
+    connect_id: int, db: Session, current_user: User
+) -> type[BaseConnect] | None:
     """获取指定用户的指定的佳明授权配置。"""
     if not connect_id:
         print(f"NOT FOUND GARMIN CONNECT {connect_id}")
-    connect = db.query(BaseConnect).filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id).first()
+    connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
+        .first()
+    )
     if connect:
         return connect
     else:
@@ -552,7 +560,7 @@ def get_garmin_activity_download_info(
         db.query(BaseActivity)
         .filter(
             BaseActivity.user_id == current_user.id,
-            BaseActivity.id == garmin_activity_id
+            BaseActivity.id == garmin_activity_id,
         )
         .first()
     )
@@ -566,7 +574,7 @@ def get_garmin_activity_download_info(
         .filter(
             BaseConnect.user_id == current_user.id,
             BaseConnect.is_active == True,
-            BaseConnect.id == activity.base_connect_id
+            BaseConnect.id == activity.base_connect_id,
         )
         .first()
     )
@@ -585,13 +593,13 @@ def get_garmin_activity_download_info(
     url = f"{download_url}/{activity.activity_id}"
     try:
         with log_request(
-                current_user=current_user,
-                req_url=url,
-                req_method="POST",
-                req_params=None,
-                log_type="download",
-                module_name="garmin",
-                op_desc="下载佳明运动文件",
+            current_user=current_user,
+            req_url=url,
+            req_method="POST",
+            req_params=None,
+            log_type="download",
+            module_name="garmin",
+            op_desc=f"下载佳明运动文件，{activity.activity_id}",
         ):
             raw = garth.client.download(url)
         if not raw:
@@ -611,7 +619,7 @@ def get_garmin_activity_download_info(
 
     except Exception as e:
         print(f"佳明文件下载失败 {garmin_activity_id}: {e}")
-        raise HTTPException(status_code=500,detail=f"佳明文件下载失败:{str(e)}")
+        raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
 
 
 def parse_garmin_upload_response(
@@ -645,20 +653,24 @@ def parse_garmin_upload_response(
 
 
 def _upload_file_to_garmin(
-        db:Session,
-        current_user: User,
-        target_config: BaseConnect,
-        file_data: bytes,
-        filename: str,
+    db: Session,
+    current_user: User,
+    target_config: BaseConnect,
+    file_data: bytes,
+    filename: str,
 ) -> dict:
     """内部辅助方法：执行将文件上传到佳明服务器的通用逻辑。支持自动解压 zip 中的 fit 文件。"""
 
     upload_data = file_data
     upload_filename = filename
     # 刷新认证
-    target_config = base_connect_service.perform_relogin(target_config.id, db=db, current_user=current_user)
+    target_config = base_connect_service.perform_relogin(
+        target_config.id, db=db, current_user=current_user
+    )
     # --- 配置域名 ---
-    domain = "garmin.cn" if (target_config.region or "").upper() == "CN" else "garmin.com"
+    domain = (
+        "garmin.cn" if (target_config.region or "").upper() == "CN" else "garmin.com"
+    )
     garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
 
     # --- 执行上传 ---
@@ -670,10 +682,8 @@ def _upload_file_to_garmin(
         # 使用 garth 的 API 接口进行上传
         garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
         upload_url = f"https://connectapi.{domain}/upload-service/upload"
-        files = {'file': (upload_filename, upload_data,'text/plain')}
-        headers = {
-            "Authorization": str(garth.client.oauth2_token)
-        }
+        files = {"file": (upload_filename, upload_data, "text/plain")}
+        headers = {"Authorization": str(garth.client.oauth2_token)}
         response = requests.post(upload_url, headers=headers, files=files)
         result = response.json()
         print(f"佳明上传完成：{result}")
@@ -684,15 +694,16 @@ def _upload_file_to_garmin(
         # 重复活动判断
         failures = import_result.get("failures", [])
         if response.status_code == 409 and "Duplicate" in str(failures[0]):
-            return {"status": "DUPLICATE_ACTIVITY","message":"DUPLICATE_ACTIVITY"}
+            return {"status": "DUPLICATE_ACTIVITY", "message": "DUPLICATE_ACTIVITY"}
         return {"status": "UPLOAD_FAILED", "message": str(result)}
     except Exception as e:
         print(f"上传失败: {str(e)}")
         return {"status": "UPLOAD_EXCEPTION", "message": str(e)}
 
 
-
-def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int,target_connect_id:int) -> dict:
+def sync_garmin_to_garmin(
+    db: Session, current_user: User, activity_id: int, target_connect_id: int
+) -> dict:
     """佳明之间同步逻辑。"""
     activity = (
         db.query(BaseActivity)
@@ -716,9 +727,7 @@ def sync_garmin_to_garmin(db: Session, current_user: User, activity_id: int,targ
     file_data, filename = get_garmin_activity_download_info(
         db, current_user, activity_id
     )
-    return _upload_file_to_garmin(
-        db, current_user, target_config, file_data, filename
-    )
+    return _upload_file_to_garmin(db, current_user, target_config, file_data, filename)
 
 
 def sync_coros_to_garmin(
@@ -744,17 +753,21 @@ def sync_coros_to_garmin(
         )
 
     file_resp, filename = coros_service.download_coros_activity_response(
-        db, current_user, activity.base_connect_id,activity_id
+        db, current_user, activity.base_connect_id, activity_id
     )
 
     return _upload_file_to_garmin(
-        current_user=current_user,db=db, target_config=target_config, file_data=file_resp.content, filename=filename
+        current_user=current_user,
+        db=db,
+        target_config=target_config,
+        file_data=file_resp.content,
+        filename=filename,
     )
 
 
 def refresh_garmin_activity_count(db: Session) -> None:
     """刷新所有用户的佳明活动总数统计。"""
-    connects =  db.query(BaseConnect).filter(BaseConnect.source_type == "garmin").all()
+    connects = db.query(BaseConnect).filter(BaseConnect.source_type == "garmin").all()
     for connect in connects:
         connect_id = connect.id
         query = db.query(BaseActivity).filter(
@@ -762,4 +775,3 @@ def refresh_garmin_activity_count(db: Session) -> None:
         )
         activity_count = query.count()
         update_garmin_count(db, connect_id, activity_count)
-
