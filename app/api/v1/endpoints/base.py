@@ -1,4 +1,4 @@
-import asyncio
+import time
 import json
 from enum import Enum
 from typing import Optional
@@ -321,7 +321,7 @@ async def execute_task(
     )
 
 
-async def log_stream_generator(
+def log_stream_generator(
     source_id: int,
     target_id: int,
     count: int = 10,
@@ -340,7 +340,7 @@ async def log_stream_generator(
 
         yield f"data: {json.dumps({"level": "info", "message": f"🔔 [0/10][[0/10][Task-{current_user.id}-{source_id}-{target_id}] 正在构建同步任务Task-{current_user.id}-{source_id}-{target_id}] 正在构建同步任务"}, ensure_ascii=False)}\n\n"
 
-        await asyncio.sleep(0.5)
+        time.sleep(0.5)
 
         source_config = (
             db.query(BaseConnect)
@@ -359,12 +359,12 @@ async def log_stream_generator(
             yield f"data: {json.dumps({"level": "error", "message": f"❌ [1/10]源平台{ source_id } 鉴权失败"}, ensure_ascii=False)}\n\n"
             return
         yield f"data: {json.dumps({"level": "success", "message": f"🤖 [1/10]源平台{ source_id } 鉴权通过"}, ensure_ascii=False)}\n\n"
-        await asyncio.sleep(1)
+        time.sleep(1)
         yield f"data: {json.dumps({"level": "info", "message": f"🏗️ [2/10]源平台{ source_id } 开始增量同步数据"}, ensure_ascii=False)}\n\n"
         source_sync_result = base_activity_service.pull_full_activities(
             connect_id=source_id, incremental=True, db=db, current_user=current_user
         )
-        await asyncio.sleep(10)
+        time.sleep(10)
         if source_sync_result.get("status") == "success":
             yield f"data: {json.dumps({"level": "success", "message": f"🏗️ [2/10]源平台{ source_id } 增量同步数据成功"}, ensure_ascii=False)}\n\n"
         else:
@@ -552,7 +552,7 @@ async def log_stream_generator(
 
         yield "data: [DONE]\n\n"
 
-    except asyncio.CancelledError:
+    except GeneratorExit:
         # 极其重要：如果前端关闭了弹出框，或者刷新了浏览器，FastAPI 会抛出这个异常
         # 我们在这里捕获它，可以用来做清理工作（比如杀死底层的 Shell 子进程）
         print(
