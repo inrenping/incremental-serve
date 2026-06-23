@@ -766,7 +766,7 @@ def sync_coros_to_garmin(
 
 
 def refresh_garmin_activity_count(db: Session) -> None:
-    """刷新所有用户的佳明活动总数统计。"""
+    """定时任务触发，刷新所有用户的佳明活动总数统计。"""
     connects = db.query(BaseConnect).filter(BaseConnect.source_type == "garmin").all()
     for connect in connects:
         connect_id = connect.id
@@ -775,3 +775,62 @@ def refresh_garmin_activity_count(db: Session) -> None:
         )
         activity_count = query.count()
         update_garmin_count(db, connect_id, activity_count)
+
+
+def get_garmin_daily_heart_rate(
+    connect_id: int,
+    date: str,
+    db: Session,
+    current_user: User,
+    display_name: str = "inrenping",
+) -> dict:
+    """
+    从 Garmin 获取指定日期的全天心率数据。
+
+    调用 Garmin wellness 接口获取该日期每5分钟的心率时间序列数据。
+    :param connect_id: base_connect ID
+    :param date: 日期字符串，格式 'YYYY-MM-DD'
+    :param db: 数据库会话
+    :param current_user: 当前用户
+    :param display_name: Garmin 用户显示名称
+    :return: Garmin API 返回的心率数据
+    """
+    config = get_garmin_connect(connect_id, db, current_user)
+    if not config:
+        raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
+    if test_garmin_token(config.id, db, current_user):
+        base_connect = config
+    else:
+        try:
+            # 通过 secret_string 来刷新认证
+            base_connect = refresh_garmin_secret_string(config.id, db, current_user)
+            config = base_connect
+        except HTTPException:
+            base_connect = refresh_garmin_access_token(config.id, db, current_user)
+            config = base_connect
+
+    if config.region and config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
+
+    api_path = "/wellness-service/wellness/dailyHeartRate"
+    params = {"date": date}
+
+    try:
+        with log_request(
+            current_user=current_user,
+            req_url=f"https://connect.{garth.client.domain}{api_path}",
+            req_method="GET",
+            req_params=params,
+            log_type="query",
+            module_name="garmin",
+            op_desc=f"获取 Garmin {date} 心率数据",
+        ):
+            response = garth.connectapi(api_path, params=params)
+            return response
+    except Exception as e:
+        print(f"获取 Garmin 心率数据失败: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"获取 Garmin 心率数据失败: {str(e)}"
+        )
