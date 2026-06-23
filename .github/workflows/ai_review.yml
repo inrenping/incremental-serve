@@ -9,13 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # 允许发评论
+      pull-requests: write
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2 # 这样才能拿到代码差异
+          fetch-depth: 2
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,39 +30,46 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. 自动获取当前 PR 的代码改动差异
           git diff HEAD~1 HEAD > pr_diff.txt
 
-          # 如果改动为空，直接退出
           if [ ! -s pr_diff.txt ]; then
             echo "No code changes found."
             exit 0
           fi
 
-          # 2. 用 Python 调用 Gemini 官方库进行审查并发表评论
           python - <<EOF
           import os
+          import time
           from google import genai
+          from google.genai import errors
 
-          # 获取差异内容
           with open("pr_diff.txt", "r") as f:
               diff_content = f.read()
 
-          # 初始化 Google 官方 Gemini 客户端
           client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
           prompt = f"你是一个资深的代码审查专家。请对以下代码改动（Git Diff）进行严格的代码评审，指出潜在的 Bug、性能漏洞或优化建议，用中文回复：\n\n{diff_content}"
 
-          print("正在请求 Gemini 2.5-flash...")
-          response = client.models.generate_content(
-              model='gemini-2.5-flash',
-              contents=prompt,
-          )
-
-          # 将 AI 评审意见写入临时文件
-          with open("review_result.txt", "w") as f:
-              f.write(response.text)
+          # 自动重试逻辑，最多尝试 3 次
+          for attempt in range(3):
+              try:
+                  print(f"正在请求 Gemini 模型 (第 {attempt + 1} 次尝试)...")
+                  response = client.models.generate_content(
+                      # 换用空闲且理解能力更强的 pro 模型
+                      model='gemini-1.5-pro',
+                      contents=prompt,
+                  )
+                  
+                  with open("review_result.txt", "w") as f:
+                      f.write(response.text)
+                  print("Gemini 审查成功！")
+                  break
+              except errors.APIError as e:
+                  if e.code == 503 and attempt < 2:
+                      print("服务器正忙，5秒后自动重试...")
+                      time.sleep(5)
+                  else:
+                      raise e
           EOF
 
-          # 3. 使用 GitHub 自带的官方命令行工具 gh，直接将意见作为一条大评论发表在 PR 页面
           gh pr comment ${{ github.event.pull_request.number }} --body-file review_result.txt
