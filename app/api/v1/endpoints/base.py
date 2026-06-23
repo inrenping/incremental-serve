@@ -303,7 +303,7 @@ class TaskRequest(BaseModel):
 
 
 @router.post("/execute")
-async def execute_task(
+def execute_task(
     request: TaskRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -553,8 +553,7 @@ def log_stream_generator(
         yield "data: [DONE]\n\n"
 
     except GeneratorExit:
-        # 极其重要：如果前端关闭了弹出框，或者刷新了浏览器，FastAPI 会抛出这个异常
-        # 我们在这里捕获它，可以用来做清理工作（比如杀死底层的 Shell 子进程）
         print(
             f"🛑 检测到客户端中断了连接，任务 [Task-{current_user.id}-{source_id}-{target_id}] 的流式推送已停止。"
         )
+        raise
