@@ -506,7 +506,7 @@ def log_stream_generator(
                     file_data=source_file,
                     filename=filename,
                 )
-            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果", "upload_result": upload_result}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果: {json.dumps(upload_result, ensure_ascii=False)}"}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
 
         if len(diff_target_only) > 0:
@@ -546,7 +546,7 @@ def log_stream_generator(
                     file_data=target_file,
                     filename=filename,
                 )
-            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果", "upload_result": upload_result}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果: {json.dumps(upload_result, ensure_ascii=False)}"}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向源平台 {source_id} 上传 {len(diff_target_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
         # 推送所有任务结束的暗号
 
