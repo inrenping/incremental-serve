@@ -1,0 +1,68 @@
+name: Gemini AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # 允许发评论
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # 这样才能拿到代码差异
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Gemini SDK
+        run: pip install google-genai
+
+      - name: Get Code Diff and Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. 自动获取当前 PR 的代码改动差异
+          git diff HEAD~1 HEAD > pr_diff.txt
+
+          # 如果改动为空，直接退出
+          if [ ! -s pr_diff.txt ]; then
+            echo "No code changes found."
+            exit 0
+          fi
+
+          # 2. 用 Python 调用 Gemini 官方库进行审查并发表评论
+          python - <<EOF
+          import os
+          from google import genai
+
+          # 获取差异内容
+          with open("pr_diff.txt", "r") as f:
+              diff_content = f.read()
+
+          # 初始化 Google 官方 Gemini 客户端
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+          prompt = f"你是一个资深的代码审查专家。请对以下代码改动（Git Diff）进行严格的代码评审，指出潜在的 Bug、性能漏洞或优化建议，用中文回复：\n\n{diff_content}"
+
+          print("正在请求 Gemini 2.5-flash...")
+          response = client.models.generate_content(
+              model='gemini-2.5-flash',
+              contents=prompt,
+          )
+
+          # 将 AI 评审意见写入临时文件
+          with open("review_result.txt", "w") as f:
+              f.write(response.text)
+          EOF
+
+          # 3. 使用 GitHub 自带的官方命令行工具 gh，直接将意见作为一条大评论发表在 PR 页面
+          gh pr comment ${{ github.event.pull_request.number }} --body-file review_result.txt
