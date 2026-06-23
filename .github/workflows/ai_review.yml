@@ -1,0 +1,75 @@
+name: Gemini AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Gemini SDK
+        run: pip install google-genai
+
+      - name: Get Code Diff and Review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git diff HEAD~1 HEAD > pr_diff.txt
+
+          if [ ! -s pr_diff.txt ]; then
+            echo "No code changes found."
+            exit 0
+          fi
+
+          python - <<EOF
+          import os
+          import time
+          from google import genai
+          from google.genai import errors
+
+          with open("pr_diff.txt", "r") as f:
+              diff_content = f.read()
+
+          client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+          prompt = f"你是一个资深的代码审查专家。请对以下代码改动（Git Diff）进行严格的代码评审，指出潜在的 Bug、性能漏洞或优化建议，用中文回复：\n\n{diff_content}"
+
+          # 自动重试逻辑，最多尝试 3 次
+          for attempt in range(3):
+              try:
+                  print(f"正在请求 Gemini 模型 (第 {attempt + 1} 次尝试)...")
+                  response = client.models.generate_content(
+                      # 换用空闲且理解能力更强的 pro 模型
+                      model='gemini-1.5-pro',
+                      contents=prompt,
+                  )
+                  
+                  with open("review_result.txt", "w") as f:
+                      f.write(response.text)
+                  print("Gemini 审查成功！")
+                  break
+              except errors.APIError as e:
+                  if e.code == 503 and attempt < 2:
+                      print("服务器正忙，5秒后自动重试...")
+                      time.sleep(5)
+                  else:
+                      raise e
+          EOF
+
+          gh pr comment ${{ github.event.pull_request.number }} --body-file review_result.txt
