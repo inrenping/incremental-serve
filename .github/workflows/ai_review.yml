@@ -50,12 +50,11 @@ jobs:
 
           prompt = f"你是一个资深的代码审查专家。请对以下代码改动（Git Diff）进行严格的代码评审，指出潜在的 Bug、性能漏洞或优化建议，用中文回复：\n\n{diff_content}"
 
-          # 自动重试逻辑，最多尝试 3 次
-          for attempt in range(3):
+          # 增加到 4 次尝试，全面对抗频控
+          for attempt in range(4):
               try:
                   print(f"正在请求 Gemini 模型 (第 {attempt + 1} 次尝试)...")
                   response = client.models.generate_content(
-                      # 换用空闲且理解能力更强的 pro 模型
                       model='gemini-2.0-flash',
                       contents=prompt,
                   )
@@ -65,9 +64,11 @@ jobs:
                   print("Gemini 审查成功！")
                   break
               except errors.APIError as e:
-                  if e.code == 503 and attempt < 2:
-                      print("服务器正忙，5秒后自动重试...")
-                      time.sleep(5)
+                  # 如果是 429 触发频控，或者 503 服务器忙
+                  if (e.code == 429 or e.code == 503) and attempt < 3:
+                      wait_time = 25 if e.code == 429 else 5
+                      print(f"触发限制 ({e.code})，为了安全绕过频控，原地等待 {wait_time} 秒后自动重试...")
+                      time.sleep(wait_time)
                   else:
                       raise e
           EOF
