@@ -120,3 +120,6 @@ Incremental Serv
     sudo systemctl daemon-reload
     sudo systemctl start incremental-serve.service
     sudo systemctl status incremental-serve.service
+
+
+> 需要在 PR 里评论 /gemini-review 才会触发 AI Review
