@@ -495,17 +495,18 @@ async def log_stream_generator(
         yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录"}, ensure_ascii=False)}\n\n"
         for source_file, filename in source_file_list:
             if source_config.source_type == "coros":
-                coros_service._upload_fit_zip_to_coros(
+                upload_result = coros_service._upload_fit_zip_to_coros(
                     db, current_user, target_config, source_file, filename
                 )
             else:
-                garmin_service._upload_file_to_garmin(
+                upload_result = garmin_service._upload_file_to_garmin(
                     current_user=current_user,
                     db=db,
                     target_config=target_config,
                     file_data=source_file,
                     filename=filename,
                 )
+            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果", "upload_result": upload_result}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
 
         if len(diff_target_only) > 0:
@@ -534,17 +535,18 @@ async def log_stream_generator(
         yield f"data: {json.dumps({"level": "info", "message": f"🚀 [9/10]向目标平台 {target_id} 上传 {len(diff_target_only)} 条记录"}, ensure_ascii=False)}\n\n"
         for target_file, filename in target_file_list:
             if source_config.source_type == "coros":
-                coros_service._upload_fit_zip_to_coros(
+                upload_result = coros_service._upload_fit_zip_to_coros(
                     db, current_user, source_config, target_file, filename
                 )
             else:
-                garmin_service._upload_file_to_garmin(
+                upload_result = garmin_service._upload_file_to_garmin(
                     current_user=current_user,
                     db=db,
                     target_config=source_config,
                     file_data=target_file,
                     filename=filename,
                 )
+            yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果", "upload_result": upload_result}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [9/10]向源平台 {source_id} 上传 {len(diff_target_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
         # 推送所有任务结束的暗号
 
