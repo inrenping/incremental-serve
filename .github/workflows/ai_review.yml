@@ -1,26 +1,28 @@
 name: AI Code Review
 
 on:
-  pull_request:
-    types: [opened, synchronize] # 当 PR 新建或更新代码时触发
+  issue_comment:
+    types: [created] # 在 PR 中评论 /gemini-review 时触发
 
 jobs:
   review:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # 赋予机器人写评论的权限
+      pull-requests: write
+
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/gemini-review')
 
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
       - name: AI PR Reviewer
-        # 使用社区优秀的开源 AI 评审插件
-        uses: anc95/ChatGPT-CodeReview@main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的临时特殊 Token，无需手动配置
-          OPENAI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # 填入你刚才在 Settings 里存的 Key
-          # 如果用的是 Gemini 或其他兼容 OpenAI 格式的接口，通常需要配置下面的 API 基地
-          OPENAI_API_BASE: https://generativelanguage.googleapis.com/v1beta/openai/
-          MODEL: gemini-2.5-flash # 选用性价比极高或免费的轻量模型
+        uses: truongnh1992/gemini-ai-code-reviewer@v9.1.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          EXCLUDE: "*.md,*.txt,package-lock.json,*.yml,*.yaml"
