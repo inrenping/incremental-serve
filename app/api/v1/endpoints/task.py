@@ -74,6 +74,60 @@ def save_task(
     return {"status": "success", "data": task}
 
 
+@router.post("/cron-execute")
+def cron_execute(
+    db: Session = Depends(get_db),
+):
+    """
+    定时任务回调接口（无认证，仅内部/定时任务调用）。
+    遍历所有有效 task，若当前小时匹配 task.hour，则执行同步逻辑，
+    并将 SSE 输出记录到 task_result 中。
+    """
+    import json
+    from datetime import datetime, timezone
+    from app.api.v1.endpoints.base import log_stream_generator
+
+    now_hour = datetime.now(timezone.utc).hour
+    tasks = db.query(Task).filter(Task.is_active == True).all()
+
+    executed_count = 0
+    for task in tasks:
+        if task.hour != now_hour:
+            continue
+
+        user = db.query(User).filter(User.id == task.user_id).first()
+        if not user:
+            continue
+
+        messages = []
+        try:
+            for sse_data in log_stream_generator(
+                source_id=task.connect_source_id,
+                target_id=task.connect_target_id,
+                count=10,
+                current_user=user,
+                db=db,
+            ):
+                messages.append(sse_data)
+        except Exception as e:
+            messages.append(
+                f"data: {json.dumps({'level': 'error', 'message': f'执行异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            )
+
+        task_result = TaskResult(
+            task_id=task.id,
+            task_messages="\n".join(messages),
+        )
+        db.add(task_result)
+        executed_count += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"已检查 {len(tasks)} 个任务，匹配当前小时 {now_hour} 并执行了 {executed_count} 个",
+    }
+
+
 @router.get("/{task_id}")
 def get_task_results(
     task_id: int,
