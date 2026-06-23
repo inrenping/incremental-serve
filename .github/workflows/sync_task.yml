@@ -3,16 +3,22 @@ name: 定时接口调用
 # 定义触发事件
 on:
   schedule:
-    # 使用 cron 表达式，例如每天上午9点
-    - cron: "0 1 * * *" # UTC 时间，这里是每天 09:00 CST = 01:00 UTC
+    # 每小时执行一次
+    - cron: "0 * * * *"
   workflow_dispatch: # 可手动触发
 
 jobs:
   call-api:
     runs-on: ubuntu-latest
     steps:
-      - name: 调用接口
+      - name: 刷新 Garmin 活动计数
         run: |
-          echo "开始调用接口..."
+          echo "开始刷新 Garmin 活动计数..."
           RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/refreshGarminActivityCount" -H "Content-Type: application/json")
+          echo "接口返回: $RESPONSE"
+
+      - name: 定时任务执行
+        run: |
+          echo "开始执行定时任务..."
+          RESPONSE=$(curl -s -X POST "https://i.incremental.icu/api/v1/task/cron-execute" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
