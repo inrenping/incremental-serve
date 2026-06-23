@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
@@ -209,3 +210,28 @@ def upload_coros_activity_to_garmin(
     return garmin_service.sync_coros_to_garmin(
         db, current_user, id, target_connect_id=region
     )
+
+
+@router.get("/dailyHeartRate")
+def get_daily_heart_rate(
+    connect_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    获取指定 base_connect 对应的昨天一整天的 Garmin 心率数据。
+
+    调用 Garmin wellness 接口返回昨天全天的心率时间序列（每5分钟一个采样点）。
+    """
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    data = garmin_service.get_garmin_daily_heart_rate(
+        connect_id=connect_id,
+        date=yesterday,
+        db=db,
+        current_user=current_user,
+    )
+    return {
+        "status": "success",
+        "date": yesterday,
+        "data": data,
+    }
