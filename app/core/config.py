@@ -7,9 +7,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(env_path)
 
-# 调试用：在生产环境日志中确认加载路径 (发布后可删除)
-print(f"Loading config from: {env_path}")
-
 class Settings:
     ENV = os.getenv("APP_ENV", "development")
     DATABASE_URL = os.getenv("DATABASE_URL")
