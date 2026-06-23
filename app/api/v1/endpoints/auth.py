@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -41,6 +41,10 @@ class GitHubLoginRequest(BaseModel):
     refreshToken: Optional[str] = None
 
 
+class GitHubCodeRequest(BaseModel):
+    code: str
+
+
 @router.post("/register")
 def register(
     username: str,
@@ -67,6 +71,8 @@ def google_login(
     """Google OAuth 登录"""
     # 优先使用 idToken，如果没有则使用 accessToken
     token_to_verify = payload.idToken or payload.accessToken
+    if not token_to_verify:
+        raise HTTPException(status_code=400, detail="必须提供 idToken 或 accessToken")
     verify_google_token(token_to_verify, payload.googleId, payload.email)
 
     # 2. 处理 OAuth 用户（自动创建或绑定账户）
@@ -95,11 +101,10 @@ def google_login(
     }
 
 
-@router.post("/github-login")
-def github_login(
-    payload: GitHubLoginRequest, request: Request, db: Session = Depends(get_db)
-):
-    """GitHub OAuth 登录"""
+def _perform_github_login(
+    payload: GitHubLoginRequest, request: Request, db: Session
+) -> dict:
+    """GitHub OAuth 登录核心逻辑（供端点和内部调用复用）"""
     # 1. 校验 GitHub accessToken 与 githubId
     verify_github_access_token(payload.accessToken, payload.githubId, payload.email)
 
@@ -129,32 +134,41 @@ def github_login(
     }
 
 
+@router.post("/github-login")
+def github_login(
+    payload: GitHubLoginRequest, request: Request, db: Session = Depends(get_db)
+):
+    """GitHub OAuth 登录"""
+    return _perform_github_login(payload, request, db)
+
+
 @router.post("/github-login-by-code")
-def github_login_by_code(code: str, request: Request, db: Session = Depends(get_db)):
+def github_login_by_code(payload: GitHubCodeRequest, request: Request, db: Session = Depends(get_db)):
     """
     专门给前端 callback 页面调用的接口
     接收前端传来的 code，换取用户信息并返回 JSON
     """
     # 1. 用 code 换 GitHub 的 access_token
     # 必须是 https://i.incremental.icu/login/callback
-    github_access_token = exchange_github_code(code)
+    github_access_token = exchange_github_code(payload.code)
 
     # 2. 获取 GitHub 用户信息
     github_user = fetch_github_user_info(github_access_token)
+    email = github_user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="无法获取用户邮箱，登录失败")
 
     # 3. 构造 LoginRequest（复用你之前的 Pydantic 模型）
     payload = GitHubLoginRequest(
-        email=github_user["email"],
+        email=email,
         name=github_user.get("name") or github_user.get("login") or "GitHub User",
         avatar=github_user.get("avatar_url"),
         githubId=str(github_user["id"]),
         accessToken=github_access_token,
     )
 
-    # 4. 直接调用你写好的 github_login 逻辑
-    # 它会处理 handle_oauth_user 和 generate_user_tokens
-    # 最终返回类似 {"access_token": "...", "user": {...}} 的 JSON
-    return github_login(payload, request, db)
+    # 4. 执行 GitHub OAuth 登录核心逻辑
+    return _perform_github_login(payload, request, db)
 
 
 @router.get("/github/callback")
@@ -166,14 +180,17 @@ def github_callback(code: str, request: Request, db: Session = Depends(get_db)):
     """
     access_token = exchange_github_code(code)
     github_user = fetch_github_user_info(access_token)
+    email = github_user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="无法获取用户邮箱，登录失败")
     payload = GitHubLoginRequest(
-        email=github_user["email"],
+        email=email,
         name=github_user.get("name") or github_user.get("login") or "GitHub User",
         avatar=github_user.get("avatar_url"),
         githubId=str(github_user["id"]),
         accessToken=access_token,
     )
-    return github_login(payload, request, db)
+    return _perform_github_login(payload, request, db)
 
 
 @router.post("/send-captcha")

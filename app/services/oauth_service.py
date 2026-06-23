@@ -46,6 +46,10 @@ def verify_google_token(token: str, google_id: str, email: str) -> None:
     if remote_email != email:
         raise HTTPException(status_code=400, detail="Token 中的邮箱不匹配")
 
+    # 3. 校验邮箱是否已验证（ID Token 和 Access Token 接口均返回此字段）
+    if not payload.get("email_verified"):
+        raise HTTPException(status_code=400, detail="Google 邮箱未验证，无法登录")
+
 
 # ============ GitHub OAuth =============
 
