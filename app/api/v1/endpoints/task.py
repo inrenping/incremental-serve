@@ -85,18 +85,22 @@ def cron_execute(
     """
     import json
     from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
     from app.api.v1.endpoints.base import log_stream_generator
 
-    now_hour = datetime.now(timezone.utc).hour
+    now_utc = datetime.now(timezone.utc)
     tasks = db.query(Task).filter(Task.is_active == True).all()
 
     executed_count = 0
     for task in tasks:
-        if task.hour != now_hour:
-            continue
-
         user = db.query(User).filter(User.id == task.user_id).first()
         if not user:
+            continue
+
+        # 根据用户的时区计算当前本地小时
+        user_tz = user.timezone or "Asia/Shanghai"
+        local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
+        if task.hour != local_hour:
             continue
 
         messages = []
@@ -124,7 +128,7 @@ def cron_execute(
     db.commit()
     return {
         "status": "success",
-        "message": f"已检查 {len(tasks)} 个任务，匹配当前小时 {now_hour} 并执行了 {executed_count} 个",
+        "message": f"已检查 {len(tasks)} 个任务，匹配当前小时并执行了 {executed_count} 个",
     }
 
 

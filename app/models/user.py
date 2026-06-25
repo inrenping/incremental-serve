@@ -15,6 +15,7 @@ class User(Base):
         created_at (datetime): 记录创建的时间戳（带时区）。
         updated_at (datetime): 记录最后一次更新的时间戳（带时区）。
         active (bool): 账户激活状态。默认为 False，需通过验证后激活。
+        timezone (str): 用户时区，如 "Asia/Shanghai"。
     """
 
     __tablename__ = "t_users"
@@ -25,3 +26,4 @@ class User(Base):
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
     active = Column(Boolean, default=False)
+    timezone = Column(String, default="Asia/Shanghai")

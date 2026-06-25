@@ -1,14 +1,21 @@
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, Query, HTTPException
+from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 
 from app.db.session import get_db
+from app.models.heart_rate_daily import HeartRateDaily
+from app.models.heart_rate_detail import HeartRateDetail
+from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
+from app.services.user_service import get_user_by_username
 
 router = APIRouter()
 
@@ -212,26 +219,144 @@ def upload_coros_activity_to_garmin(
     )
 
 
-@router.get("/dailyHeartRate")
+@router.get("/syncDailyHeartRate")
 def get_daily_heart_rate(
-    connect_id: int,
-    current_user: User = Depends(get_current_user),
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
     db: Session = Depends(get_db),
 ):
     """
-    获取指定 base_connect 对应的昨天一整天的 Garmin 心率数据。
+    获取并保存指定日期的 Garmin 心率数据到数据库。
 
-    调用 Garmin wellness 接口返回昨天全天的心率时间序列（每5分钟一个采样点）。
+    从 Garmin 获取心率汇总和明细数据，存入 t_heart_rate_daily 和 t_heart_rate_detail 表。
+    如果数据库中已有同名用户同一天的数据，则更新；否则插入新记录。
     """
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    data = garmin_service.get_garmin_daily_heart_rate(
-        connect_id=connect_id,
-        date=yesterday,
+    current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
+        raise HTTPException(status_code=404, detail="User 'inrenping' not found")
+
+    connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.source_type == "garmin",
+            func.lower(BaseConnect.region) == "cn",
+            BaseConnect.is_active == True,
+        )
+        .first()
+    )
+    if connect is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No active Garmin CN connect found for user 'inrenping'",
+        )
+
+    if date is None:
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    garmin_service.save_garmin_daily_heart_rate(
+        connect_id=connect.id,
+        date=date,
         db=db,
         current_user=current_user,
     )
+    return {"status": "success"}
+
+
+@router.get("/getDailyHeartRate")
+def get_daily_heart_rate(
+    date_str: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
+    db: Session = Depends(get_db),
+):
+    """
+    获取指定日期的当天心率数据，包含每日汇总（HeartRateDaily）和心率明细（HeartRateDetail）。
+
+    心率明细根据用户时区（user.timezone）确定一天的起止 UTC 范围，直接从 detail 表按采样时间查询。
+    """
+    if date_str is None:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        query_date = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="日期格式错误，请使用 YYYY-MM-DD 格式",
+        )
+
+    current_user = get_user_by_username(db, "inrenping")
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户 inrenping 不存在",
+        )
+
+    # 确定用户时区
+    user_tz = (
+        ZoneInfo(current_user.timezone)
+        if current_user.timezone
+        else ZoneInfo("Asia/Shanghai")
+    )
+
+    # 计算该日期在用户时区下的 UTC 起止时间
+    start_of_day = datetime.combine(query_date, time.min, tzinfo=user_tz).astimezone(
+        timezone.utc
+    )
+    end_of_day = datetime.combine(query_date, time.max, tzinfo=user_tz).astimezone(
+        timezone.utc
+    )
+
+    # 直接从 detail 表按 UTC 时间范围查询
+    detail_records = (
+        db.query(HeartRateDetail)
+        .filter(
+            HeartRateDetail.sample_time.between(start_of_day, end_of_day),
+        )
+        .order_by(HeartRateDetail.sample_time)
+        .all()
+    )
+
+    # 查询每日心率汇总（calendar_date 是 Date 类型，无时区问题）
+    daily_record = (
+        db.query(HeartRateDaily)
+        .filter(
+            HeartRateDaily.user_id == current_user.id,
+            HeartRateDaily.calendar_date == query_date,
+        )
+        .first()
+    )
+
     return {
         "status": "success",
-        "date": yesterday,
-        "data": data,
+        "data": {
+            "daily": (
+                {
+                    "id": daily_record.id,
+                    "user_id": daily_record.user_id,
+                    "calendar_date": daily_record.calendar_date.isoformat(),
+                    "max_heart_rate": daily_record.max_heart_rate,
+                    "min_heart_rate": daily_record.min_heart_rate,
+                    "resting_heart_rate": daily_record.resting_heart_rate,
+                    "last_seven_days_avg_resting_heart_rate": daily_record.last_seven_days_avg_resting_heart_rate,
+                    "created_at": (
+                        daily_record.created_at.isoformat()
+                        if daily_record.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        daily_record.updated_at.isoformat()
+                        if daily_record.updated_at
+                        else None
+                    ),
+                }
+                if daily_record
+                else None
+            ),
+            "details": [
+                {
+                    "sample_time": detail.sample_time.isoformat(),
+                    "heart_rate": detail.heart_rate,
+                }
+                for detail in detail_records
+            ],
+        },
     }
