@@ -1,11 +1,15 @@
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, time, timezone, timedelta
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, Query, HTTPException
+from zoneinfo import ZoneInfo
+
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.db.session import get_db
+from app.models.heart_rate_daily import HeartRateDaily
+from app.models.heart_rate_detail import HeartRateDetail
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
@@ -235,3 +239,99 @@ def get_daily_heart_rate(
         current_user=current_user,
     )
     return {"status": "success"}
+
+
+@router.get("/getDailyHeartRate")
+def get_daily_heart_rate(
+    date_str: str = Query(..., description="日期，格式 YYYY-MM-DD，例如 2026-05-28"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    获取指定日期的当天心率数据，包含每日汇总（HeartRateDaily）和心率明细（HeartRateDetail）。
+
+    心率明细根据用户时区（user.timezone）确定一天的起止 UTC 范围，直接从 detail 表按采样时间查询。
+    """
+    try:
+        query_date = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="日期格式错误，请使用 YYYY-MM-DD 格式",
+        )
+
+    # 确定用户时区
+    user_tz = (
+        ZoneInfo(current_user.timezone)
+        if current_user.timezone
+        else ZoneInfo("Asia/Shanghai")
+    )
+
+    # 计算该日期在用户时区下的 UTC 起止时间
+    start_of_day = datetime.combine(query_date, time.min, tzinfo=user_tz).astimezone(
+        timezone.utc
+    )
+    end_of_day = datetime.combine(query_date, time.max, tzinfo=user_tz).astimezone(
+        timezone.utc
+    )
+
+    # 直接从 detail 表按 UTC 时间范围查询
+    detail_records = (
+        db.query(HeartRateDetail)
+        .filter(
+            HeartRateDetail.sample_time.between(start_of_day, end_of_day),
+        )
+        .order_by(HeartRateDetail.sample_time)
+        .all()
+    )
+
+    # 查询每日心率汇总（calendar_date 是 Date 类型，无时区问题）
+    daily_record = (
+        db.query(HeartRateDaily)
+        .filter(
+            HeartRateDaily.user_id == current_user.id,
+            HeartRateDaily.calendar_date == query_date,
+        )
+        .first()
+    )
+
+    return {
+        "status": "success",
+        "data": {
+            "daily": (
+                {
+                    "id": daily_record.id,
+                    "user_id": daily_record.user_id,
+                    "calendar_date": daily_record.calendar_date.isoformat(),
+                    "max_heart_rate": daily_record.max_heart_rate,
+                    "min_heart_rate": daily_record.min_heart_rate,
+                    "resting_heart_rate": daily_record.resting_heart_rate,
+                    "last_seven_days_avg_resting_heart_rate": daily_record.last_seven_days_avg_resting_heart_rate,
+                    "created_at": (
+                        daily_record.created_at.isoformat()
+                        if daily_record.created_at
+                        else None
+                    ),
+                    "updated_at": (
+                        daily_record.updated_at.isoformat()
+                        if daily_record.updated_at
+                        else None
+                    ),
+                }
+                if daily_record
+                else None
+            ),
+            "details": [
+                {
+                    # "id": detail.id,
+                    # "daily_id": detail.daily_id,
+                    "sample_time": detail.sample_time.isoformat(),
+                    "heart_rate": detail.heart_rate,
+                    # "created_at": (
+                    #     detail.created_at.isoformat() if detail.created_at else None
+                    # ),
+                }
+                for detail in detail_records
+            ],
+        },
+    }
