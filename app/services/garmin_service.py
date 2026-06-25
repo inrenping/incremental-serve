@@ -8,13 +8,15 @@ import zipfile
 import json
 import base64
 import requests
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.base_connect import BaseConnect
 from app.models.base_activity import BaseActivity
+from app.models.heart_rate_daily import HeartRateDaily
+from app.models.heart_rate_detail import HeartRateDetail
 from app.models.user import User
 from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
@@ -834,3 +836,125 @@ def get_garmin_daily_heart_rate(
         raise HTTPException(
             status_code=500, detail=f"获取 Garmin 心率数据失败: {str(e)}"
         )
+
+
+def _parse_date(date_str: str) -> date:
+    """将 'YYYY-MM-DD' 格式的字符串转换为 date 对象。"""
+    parts = date_str.split("-")
+    return date(int(parts[0]), int(parts[1]), int(parts[2]))
+
+
+def save_garmin_daily_heart_rate(
+    connect_id: int,
+    date: str,
+    db: Session,
+    current_user: User,
+) -> dict:
+    """
+    从 Garmin 获取指定日期的心率数据，并保存到数据库。
+
+    1. 调用 Garmin API 获取心率数据
+    2. 将汇总数据 upsert 到 t_heart_rate_daily
+    3. 将明细采样数据 upsert 到 t_heart_rate_detail
+    4. 返回保存后的数据
+    """
+    # 1. 从 Garmin 获取原始数据
+    raw_data = get_garmin_daily_heart_rate(
+        connect_id=connect_id,
+        date=date,
+        db=db,
+        current_user=current_user,
+    )
+
+    if not raw_data or not isinstance(raw_data, dict):
+        raise HTTPException(
+            status_code=500, detail="Garmin 返回的心率数据为空或格式异常"
+        )
+
+    calendar_date = _parse_date(raw_data.get("calendarDate", date))
+
+    # 2. Upsert HeartRateDaily（每日汇总）
+    daily_record = (
+        db.query(HeartRateDaily)
+        .filter(
+            HeartRateDaily.user_id == current_user.id,
+            HeartRateDaily.calendar_date == calendar_date,
+        )
+        .first()
+    )
+
+    if daily_record:
+        # 更新已有记录
+        daily_record.max_heart_rate = raw_data.get("maxHeartRate")
+        daily_record.min_heart_rate = raw_data.get("minHeartRate")
+        daily_record.resting_heart_rate = raw_data.get("restingHeartRate")
+        daily_record.last_seven_days_avg_resting_heart_rate = raw_data.get(
+            "lastSevenDaysAvgRestingHeartRate"
+        )
+    else:
+        # 创建新记录
+        daily_record = HeartRateDaily(
+            user_id=current_user.id,
+            calendar_date=calendar_date,
+            max_heart_rate=raw_data.get("maxHeartRate"),
+            min_heart_rate=raw_data.get("minHeartRate"),
+            resting_heart_rate=raw_data.get("restingHeartRate"),
+            last_seven_days_avg_resting_heart_rate=raw_data.get(
+                "lastSevenDaysAvgRestingHeartRate"
+            ),
+        )
+        db.add(daily_record)
+
+    db.flush()  # 获取 daily_record.id
+
+    # 3. Upsert HeartRateDetail（心率采样明细）
+    heart_rate_values: list = raw_data.get("heartRateValues", []) or []
+    for hr_value in heart_rate_values:
+        if not isinstance(hr_value, (list, tuple)) or len(hr_value) < 2:
+            continue
+
+        timestamp_ms, heart_rate = hr_value[0], hr_value[1]
+        if heart_rate is None:
+            continue
+
+        sample_time = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+
+        detail_record = (
+            db.query(HeartRateDetail)
+            .filter(
+                HeartRateDetail.daily_id == daily_record.id,
+                HeartRateDetail.sample_time == sample_time,
+            )
+            .first()
+        )
+
+        if detail_record:
+            # 更新已有采样点
+            detail_record.heart_rate = heart_rate
+        else:
+            # 插入新采样点
+            detail_record = HeartRateDetail(
+                daily_id=daily_record.id,
+                sample_time=sample_time,
+                heart_rate=heart_rate,
+            )
+            db.add(detail_record)
+
+    db.commit()
+
+    # 4. 构造返回数据
+    return {
+        "id": daily_record.id,
+        "userProfilePK": raw_data.get("userProfilePK"),
+        "calendarDate": raw_data.get("calendarDate"),
+        "startTimestampGMT": raw_data.get("startTimestampGMT"),
+        "endTimestampGMT": raw_data.get("endTimestampGMT"),
+        "startTimestampLocal": raw_data.get("startTimestampLocal"),
+        "endTimestampLocal": raw_data.get("endTimestampLocal"),
+        "maxHeartRate": daily_record.max_heart_rate,
+        "minHeartRate": daily_record.min_heart_rate,
+        "restingHeartRate": daily_record.resting_heart_rate,
+        "lastSevenDaysAvgRestingHeartRate": daily_record.last_seven_days_avg_resting_heart_rate,
+        "heartRateValueDescriptors": raw_data.get("heartRateValueDescriptors"),
+        "sampleCount": len(heart_rate_values),
+    }

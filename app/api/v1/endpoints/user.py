@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Body
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -40,6 +40,7 @@ def read_users_me(current_user: User = Depends(get_current_user)):
             "username": current_user.user_name,
             "email": current_user.user_email,
             "updated_at": current_user.updated_at,
+            "timezone": current_user.timezone,
         },
     }
 
@@ -64,3 +65,23 @@ def delete_user(
     current_user.updated_at = datetime.now(timezone.utc)
     db.commit()
     return {"status": "success", "message": "User account has been deactivated"}
+
+
+@router.put("/timezone")
+def update_timezone(
+    tz: str = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    更新当前登录用户的时区设置。
+
+    - **timezone**: 时区字符串，如 "Asia/Shanghai"、"America/New_York" 等
+    """
+    current_user.timezone = tz
+    current_user.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {
+        "status": "success",
+        "timezone": current_user.timezone,
+    }

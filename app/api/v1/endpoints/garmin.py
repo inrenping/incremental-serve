@@ -212,26 +212,26 @@ def upload_coros_activity_to_garmin(
     )
 
 
-@router.get("/dailyHeartRate")
+@router.get("/syncDailyHeartRate")
 def get_daily_heart_rate(
     connect_id: int,
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为昨天"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    获取指定 base_connect 对应的昨天一整天的 Garmin 心率数据。
+    获取并保存指定日期的 Garmin 心率数据到数据库。
 
-    调用 Garmin wellness 接口返回昨天全天的心率时间序列（每5分钟一个采样点）。
+    从 Garmin 获取心率汇总和明细数据，存入 t_heart_rate_daily 和 t_heart_rate_detail 表。
+    如果数据库中已有同名用户同一天的数据，则更新；否则插入新记录。
     """
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
-    data = garmin_service.get_garmin_daily_heart_rate(
+    if date is None:
+        date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    garmin_service.save_garmin_daily_heart_rate(
         connect_id=connect_id,
-        date=yesterday,
+        date=date,
         db=db,
         current_user=current_user,
     )
-    return {
-        "status": "success",
-        "date": yesterday,
-        "data": data,
-    }
+    return {"status": "success"}
