@@ -13,6 +13,7 @@ from app.models.heart_rate_detail import HeartRateDetail
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
+from app.services.user_service import get_user_by_username
 
 router = APIRouter()
 
@@ -219,8 +220,7 @@ def upload_coros_activity_to_garmin(
 @router.get("/syncDailyHeartRate")
 def get_daily_heart_rate(
     connect_id: int,
-    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为昨天"),
-    current_user: User = Depends(get_current_user),
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
     db: Session = Depends(get_db),
 ):
     """
@@ -229,8 +229,12 @@ def get_daily_heart_rate(
     从 Garmin 获取心率汇总和明细数据，存入 t_heart_rate_daily 和 t_heart_rate_detail 表。
     如果数据库中已有同名用户同一天的数据，则更新；否则插入新记录。
     """
+    current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
+        raise HTTPException(status_code=404, detail="User 'inrenping' not found")
+
     if date is None:
-        date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     garmin_service.save_garmin_daily_heart_rate(
         connect_id=connect_id,
@@ -243,8 +247,7 @@ def get_daily_heart_rate(
 
 @router.get("/getDailyHeartRate")
 def get_daily_heart_rate(
-    date_str: str = Query(..., description="日期，格式 YYYY-MM-DD，例如 2026-05-28"),
-    current_user: User = Depends(get_current_user),
+    date_str: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
     db: Session = Depends(get_db),
 ):
     """
@@ -252,12 +255,22 @@ def get_daily_heart_rate(
 
     心率明细根据用户时区（user.timezone）确定一天的起止 UTC 范围，直接从 detail 表按采样时间查询。
     """
+    if date_str is None:
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
     try:
         query_date = date.fromisoformat(date_str)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="日期格式错误，请使用 YYYY-MM-DD 格式",
+        )
+
+    current_user = get_user_by_username(db, "inrenping")
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户 inrenping 不存在",
         )
 
     # 确定用户时区
@@ -323,13 +336,8 @@ def get_daily_heart_rate(
             ),
             "details": [
                 {
-                    # "id": detail.id,
-                    # "daily_id": detail.daily_id,
                     "sample_time": detail.sample_time.isoformat(),
                     "heart_rate": detail.heart_rate,
-                    # "created_at": (
-                    #     detail.created_at.isoformat() if detail.created_at else None
-                    # ),
                 }
                 for detail in detail_records
             ],
