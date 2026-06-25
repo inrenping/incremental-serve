@@ -17,10 +17,15 @@ jobs:
           RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/refreshGarminActivityCount" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
 
-      - name: 同步每日心率
+      - name: 同步每日心率（昨天和今天）
         run: |
-          echo "开始同步每日心率..."
-          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate" -H "Content-Type: application/json")
+          YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
+          TODAY=$(date '+%Y-%m-%d')
+          echo "同步昨天 ($YESTERDAY) 心率..."
+          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$YESTERDAY" -H "Content-Type: application/json")
+          echo "接口返回: $RESPONSE"
+          echo "同步今天 ($TODAY) 心率..."
+          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$TODAY" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
 
       - name: 定时任务执行
