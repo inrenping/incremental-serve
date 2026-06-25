@@ -5,11 +5,13 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from pydantic import BaseModel
 
 from app.db.session import get_db
 from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
+from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import garmin_service
@@ -219,7 +221,6 @@ def upload_coros_activity_to_garmin(
 
 @router.get("/syncDailyHeartRate")
 def get_daily_heart_rate(
-    connect_id: int,
     date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
     db: Session = Depends(get_db),
 ):
@@ -233,11 +234,27 @@ def get_daily_heart_rate(
     if current_user is None:
         raise HTTPException(status_code=404, detail="User 'inrenping' not found")
 
+    connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.source_type == "garmin",
+            func.lower(BaseConnect.region) == "cn",
+            BaseConnect.is_active == True,
+        )
+        .first()
+    )
+    if connect is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No active Garmin CN connect found for user 'inrenping'",
+        )
+
     if date is None:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     garmin_service.save_garmin_daily_heart_rate(
-        connect_id=connect_id,
+        connect_id=connect.id,
         date=date,
         db=db,
         current_user=current_user,
