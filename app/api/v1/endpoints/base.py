@@ -676,40 +676,9 @@ def get_running_total(
     yearly_target = 2026  # 年目标 2026 公里
     monthly_target = yearly_target / 12  # 月目标
 
-    # 计算时间进度
-    # 计算本年度已经过去的百分比
-    start_of_year = datetime(current_year, 1, 1)
-    end_of_year = datetime(current_year, 12, 31)
-    total_days_in_year = (end_of_year - start_of_year).days + 1
-    days_passed_in_year = (now - start_of_year).days
-    year_progress = (days_passed_in_year / total_days_in_year) * 100
-
-    # 计算本月已经过去的百分比
-    start_of_month = datetime(current_year, current_month, 1)
-    # 计算下个月的第一天
-    if current_month == 12:
-        start_of_next_month = datetime(current_year + 1, 1, 1)
-    else:
-        start_of_next_month = datetime(current_year, current_month + 1, 1)
-    total_days_in_month = (start_of_next_month - start_of_month).days
-    days_passed_in_month = (now - start_of_month).days
-    month_progress = (days_passed_in_month / total_days_in_month) * 100
-
     # 转换为公里
     monthly_total_km = monthly_total / 1000 if monthly_total else 0
     yearly_total_km = yearly_total / 1000 if yearly_total else 0
-
-    # 计算完成度
-    yearly_completion = (
-        (yearly_total_km / yearly_target * 100)
-        if yearly_target > 0 and yearly_total_km is not None
-        else 0
-    )
-    monthly_completion = (
-        (monthly_total_km / monthly_target * 100)
-        if monthly_target > 0 and monthly_total_km is not None
-        else 0
-    )
 
     return {
         "status": "success",
@@ -718,21 +687,17 @@ def get_running_total(
                 monthly_total_km or 0, 2
             ),  # 月跑量（公里，保留2位小数）
             "monthly_target": round(monthly_target, 2),  # 月目标（公里，保留2位小数）
-            "monthly_completion": f"{round(monthly_completion or 0, 3)}%",  # 月完成度（保留3位小数）
             "monthly_count": monthly_count,  # 月跑步次数
             "monthly_duration": round(
                 monthly_duration or 0, 2
             ),  # 月累计时间（小时，保留2位小数）
-            "monthly_progress": f"{round(month_progress, 3)}%",  # 本月已过百分比（保留3位小数）
             "yearly_total": round(
                 yearly_total_km or 0, 2
             ),  # 年跑量（公里，保留2位小数）
             "yearly_target": yearly_target,  # 年目标（2026公里）
-            "yearly_completion": f"{round(yearly_completion or 0, 3)}%",  # 年完成度（保留3位小数）
             "yearly_count": yearly_count,  # 年跑步次数
             "yearly_duration": round(
                 yearly_duration or 0, 2
             ),  # 年累计时间（小时，保留2位小数）
-            "yearly_progress": f"{round(year_progress, 3)}%",  # 本年已过百分比（保留3位小数）
         },
     }
