@@ -2,9 +2,10 @@ import time
 import json
 from enum import Enum
 from typing import Optional
+from datetime import datetime, timedelta
 
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, text
+from sqlalchemy import desc, text, func
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -557,3 +558,181 @@ def log_stream_generator(
             f"🛑 检测到客户端中断了连接，任务 [Task-{current_user.id}-{source_id}-{target_id}] 的流式推送已停止。"
         )
         raise
+
+
+@router.get("/getRunningTotal")
+def get_running_total(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    获取当前用户的月跑量和年跑量
+    只统计主账号（BaseConnect.master = True）的跑步数据
+    跑步类型包括：running, treadmill_running, trail_running, track_running, indoor_running
+    """
+    # 1. 获取当前用户的主账号连接
+    master_connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.master == True,
+        )
+        .first()
+    )
+
+    if not master_connect:
+        return {
+            "status": "success",
+            "data": {
+                "monthly_total": 0,
+                "yearly_total": 0,
+            },
+        }
+
+    # 2. 定义跑步类型列表
+    running_types = [
+        "running",
+        "treadmill_running",
+        "trail_running",
+        "track_running",
+        "indoor_running",
+        "100",
+        "101",
+        "102",
+        "103",
+    ]
+
+    # 3. 获取当前时间
+    now = datetime.now()
+    current_year = now.year
+    current_month = now.month
+
+    # 4. 查询年跑量（当前年所有跑步数据）
+    yearly_activities = (
+        db.query(BaseActivity)
+        .filter(
+            BaseActivity.user_id == current_user.id,
+            BaseActivity.base_connect_id == master_connect.id,
+            BaseActivity.sport_type_raw.in_(running_types),
+            func.extract("year", BaseActivity.start_time_local) == current_year,
+        )
+        .all()
+    )
+
+    yearly_total = (
+        sum(
+            float(activity.distance_meters)
+            for activity in yearly_activities
+            if activity.distance_meters is not None
+        )
+        or 0
+    )
+    yearly_count = len(yearly_activities)  # 年跑步次数
+    yearly_duration = (
+        sum(
+            float(activity.duration_seconds)
+            for activity in yearly_activities
+            if activity.duration_seconds is not None
+        )
+        / 3600
+        if yearly_activities
+        else 0
+    )  # 年累计时间（小时）
+
+    # 5. 查询月跑量（当前月所有跑步数据）
+    monthly_activities = (
+        db.query(BaseActivity)
+        .filter(
+            BaseActivity.user_id == current_user.id,
+            BaseActivity.base_connect_id == master_connect.id,
+            BaseActivity.sport_type_raw.in_(running_types),
+            func.extract("year", BaseActivity.start_time_local) == current_year,
+            func.extract("month", BaseActivity.start_time_local) == current_month,
+        )
+        .all()
+    )
+
+    monthly_total = (
+        sum(
+            float(activity.distance_meters)
+            for activity in monthly_activities
+            if activity.distance_meters is not None
+        )
+        or 0
+    )
+    monthly_count = len(monthly_activities)  # 月跑步次数
+    monthly_duration = (
+        sum(
+            float(activity.duration_seconds)
+            for activity in monthly_activities
+            if activity.duration_seconds is not None
+        )
+        / 3600
+        if monthly_activities
+        else 0
+    )  # 月累计时间（小时）
+
+    # 6. 计算目标和完成度（公里为单位）
+    yearly_target = 2026  # 年目标 2026 公里
+    monthly_target = yearly_target / 12  # 月目标
+
+    # 计算时间进度
+    # 计算本年度已经过去的百分比
+    start_of_year = datetime(current_year, 1, 1)
+    end_of_year = datetime(current_year, 12, 31)
+    total_days_in_year = (end_of_year - start_of_year).days + 1
+    days_passed_in_year = (now - start_of_year).days
+    year_progress = (days_passed_in_year / total_days_in_year) * 100
+
+    # 计算本月已经过去的百分比
+    start_of_month = datetime(current_year, current_month, 1)
+    # 计算下个月的第一天
+    if current_month == 12:
+        start_of_next_month = datetime(current_year + 1, 1, 1)
+    else:
+        start_of_next_month = datetime(current_year, current_month + 1, 1)
+    total_days_in_month = (start_of_next_month - start_of_month).days
+    days_passed_in_month = (now - start_of_month).days
+    month_progress = (days_passed_in_month / total_days_in_month) * 100
+
+    # 转换为公里
+    monthly_total_km = monthly_total / 1000 if monthly_total else 0
+    yearly_total_km = yearly_total / 1000 if yearly_total else 0
+
+    # 计算完成度
+    yearly_completion = (
+        (yearly_total_km / yearly_target * 100)
+        if yearly_target > 0 and yearly_total_km is not None
+        else 0
+    )
+    monthly_completion = (
+        (monthly_total_km / monthly_target * 100)
+        if monthly_target > 0 and monthly_total_km is not None
+        else 0
+    )
+
+    return {
+        "status": "success",
+        "data": {
+            "monthly_total": round(
+                monthly_total_km or 0, 2
+            ),  # 月跑量（公里，保留2位小数）
+            "monthly_target": round(monthly_target, 2),  # 月目标（公里，保留2位小数）
+            "monthly_completion": f"{round(monthly_completion or 0, 3)}%",  # 月完成度（保留3位小数）
+            "monthly_count": monthly_count,  # 月跑步次数
+            "monthly_duration": round(
+                monthly_duration or 0, 2
+            ),  # 月累计时间（小时，保留2位小数）
+            "monthly_progress": f"{round(month_progress, 3)}%",  # 本月已过百分比（保留3位小数）
+            "yearly_total": round(
+                yearly_total_km or 0, 2
+            ),  # 年跑量（公里，保留2位小数）
+            "yearly_target": yearly_target,  # 年目标（2026公里）
+            "yearly_completion": f"{round(yearly_completion or 0, 3)}%",  # 年完成度（保留3位小数）
+            "yearly_count": yearly_count,  # 年跑步次数
+            "yearly_duration": round(
+                yearly_duration or 0, 2
+            ),  # 年累计时间（小时，保留2位小数）
+            "yearly_progress": f"{round(year_progress, 3)}%",  # 本年已过百分比（保留3位小数）
+        },
+    }
