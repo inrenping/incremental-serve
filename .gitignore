@@ -219,3 +219,6 @@ __marimo__/
 .idea
 
 .cursor
+
+credentials/
+*.json
