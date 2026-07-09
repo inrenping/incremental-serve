@@ -1,3 +1,4 @@
+import base64
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -7,16 +8,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 env_path = os.path.join(BASE_DIR, ".env")
 load_dotenv(env_path)
 
+
 class Settings:
     ENV = os.getenv("APP_ENV", "development")
     DATABASE_URL = os.getenv("DATABASE_URL")
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL is not set in environment variables")
-        
+
     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
     if ENV == "production" and not GOOGLE_CLIENT_ID:
         # 生产环境下如果缺失关键变量，提前抛出异常防止服务带着错误配置运行
         raise ValueError("GOOGLE_CLIENT_ID must be set in production")
+    GOOGLE_ACCOUNT_SERVICE_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
+    if ENV == "production" and not GOOGLE_ACCOUNT_SERVICE_JSON:
+        GOOGLE_ACCOUNT_SERVICE_JSON = base64.b64decode(
+            os.environ["GOOGLE_SERVICE_ACCOUNT_B64"]
+        ).decode("utf-8")
 
     # SCHEMA = os.getenv("SCHEMA")
     SECRET_KEY = os.getenv("SECRET_KEY")
@@ -26,5 +33,6 @@ class Settings:
     # GITHUB 不允许 GITHUB_ 开头的变量，改成 GIT_HUB_ 开头
     GIT_HUB_CLIENT_ID = os.getenv("GIT_HUB_CLIENT_ID")
     GIT_HUB_CLIENT_SECRET = os.getenv("GIT_HUB_CLIENT_SECRET")
+
 
 settings = Settings()
