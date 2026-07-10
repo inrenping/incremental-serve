@@ -31,15 +31,16 @@ def _get_service_account_info() -> dict:
 
 @router.get("/events")
 def get_calendar_events(
-    start_date: str = Query(..., description="开始日期，格式 YYYY-MM-DD"),
-    end_date: str = Query(..., description="结束日期，格式 YYYY-MM-DD"),
     calendar_id: str = Query("primary", description="日历 ID，默认为 primary"),
 ):
     """
-    获取 Google Calendar 指定日期范围内的事件。
+    获取 Google Calendar 的事件。
 
+    查询范围：当月1号 ~ 6个月后。
     使用服务账号访问日历，需要将目标日历共享给服务账号邮箱。
     """
+    from datetime import datetime, timedelta
+
     from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
 
@@ -52,8 +53,14 @@ def get_calendar_events(
 
     service = build("calendar", "v3", credentials=credentials)
 
-    time_min = f"{start_date}T00:00:00Z"
-    time_max = f"{end_date}T23:59:59Z"
+    now = datetime.utcnow()
+    time_min = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    six_months_later = now + timedelta(days=6 * 30)
+    time_max = six_months_later.replace(
+        hour=23, minute=59, second=59, microsecond=0
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     try:
         events_result = (
