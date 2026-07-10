@@ -88,6 +88,7 @@ jobs:
             GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
             GIT_HUB_CLIENT_ID=${GIT_HUB_CLIENT_ID}
             GIT_HUB_CLIENT_SECRET=${GIT_HUB_CLIENT_SECRET}
+            GOOGLE_SERVICE_ACCOUNT_B64=${GOOGLE_SERVICE_ACCOUNT_B64}
             EOF
 
             # 3. 安装依赖 (使用 venv 里的 Python)
