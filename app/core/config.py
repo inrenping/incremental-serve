@@ -19,17 +19,14 @@ class Settings:
     if ENV == "production" and not GOOGLE_CLIENT_ID:
         # 生产环境下如果缺失关键变量，提前抛出异常防止服务带着错误配置运行
         raise ValueError("GOOGLE_CLIENT_ID must be set in production")
-    GOOGLE_ACCOUNT_SERVICE_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
-    if ENV == "production" and not GOOGLE_ACCOUNT_SERVICE_JSON:
-        google_account_b64 = os.getenv("GOOGLE_SERVICE_ACCOUNT_B64")
-        if not google_account_b64:
-            raise ValueError(
-                "GOOGLE_SERVICE_ACCOUNT_B64 must be set in production "
-                "when GOOGLE_SERVICE_ACCOUNT_FILE is not set"
-            )
-        GOOGLE_ACCOUNT_SERVICE_JSON = base64.b64decode(
-            google_account_b64
-        ).decode("utf-8")
+    google_account_b64 = os.getenv("GOOGLE_SERVICE_ACCOUNT_B64")
+    if ENV == "production" and not google_account_b64:
+        raise ValueError("GOOGLE_SERVICE_ACCOUNT_B64 must be set in production")
+    GOOGLE_ACCOUNT_SERVICE_JSON = (
+        base64.b64decode(google_account_b64).decode("utf-8")
+        if google_account_b64
+        else None
+    )
 
     # SCHEMA = os.getenv("SCHEMA")
     SECRET_KEY = os.getenv("SECRET_KEY")
