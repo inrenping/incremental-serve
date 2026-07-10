@@ -1,5 +1,4 @@
 import json
-import os
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -11,21 +10,15 @@ router = APIRouter()
 def _get_service_account_info() -> dict:
     """
     从配置中获取 Google 服务账号信息。
-
-    支持两种方式：
-    1. GOOGLE_SERVICE_ACCOUNT_FILE 指向本地 JSON 文件路径
-    2. GOOGLE_SERVICE_ACCOUNT_B64 传入 Base64 编码的 JSON 字符串
+    通过 GOOGLE_SERVICE_ACCOUNT_B64 环境变量传入 Base64 编码的 JSON 字符串。
     """
     sa = settings.GOOGLE_ACCOUNT_SERVICE_JSON
     if not sa:
         raise HTTPException(
             status_code=500,
-            detail="Google 服务账号未配置，请设置 GOOGLE_SERVICE_ACCOUNT_FILE 或 GOOGLE_SERVICE_ACCOUNT_B64",
+            detail="Google 服务账号未配置，请设置 GOOGLE_SERVICE_ACCOUNT_B64",
         )
 
-    if os.path.isfile(sa):
-        with open(sa) as f:
-            return json.load(f)
     return json.loads(sa)
 
 

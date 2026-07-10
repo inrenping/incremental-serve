@@ -20,7 +20,6 @@ jobs:
       GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
       GIT_HUB_CLIENT_ID: ${{ secrets.GIT_HUB_CLIENT_ID }}
       GIT_HUB_CLIENT_SECRET: ${{ secrets.GIT_HUB_CLIENT_SECRET }}
-      GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
     strategy:
       matrix:
         python-version: [3.11, 3.12]
@@ -63,13 +62,12 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GIT_HUB_CLIENT_ID: ${{ secrets.GIT_HUB_CLIENT_ID }}
           GIT_HUB_CLIENT_SECRET: ${{ secrets.GIT_HUB_CLIENT_SECRET }}
-          GOOGLE_SERVICE_ACCOUNT_B64: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_B64 }}
         with:
           host: ${{ secrets.REMOTE_HOST }}
           username: ${{ secrets.REMOTE_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          envs: DATABASE_URL,SECRET_KEY,RESEND_API_KEY,RESEND_EMAIL_FROM,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GIT_HUB_CLIENT_ID,GIT_HUB_CLIENT_SECRET,GOOGLE_SERVICE_ACCOUNT_B64
+          envs: DATABASE_URL,SECRET_KEY,RESEND_API_KEY,RESEND_EMAIL_FROM,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GIT_HUB_CLIENT_ID,GIT_HUB_CLIENT_SECRET
           script: |
             echo "Connected to $(hostname)"
             cd /var/www/incremental-serve || exit 1
@@ -88,7 +86,6 @@ jobs:
             GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
             GIT_HUB_CLIENT_ID=${GIT_HUB_CLIENT_ID}
             GIT_HUB_CLIENT_SECRET=${GIT_HUB_CLIENT_SECRET}
-            GOOGLE_SERVICE_ACCOUNT_B64=${GOOGLE_SERVICE_ACCOUNT_B64}
             EOF
 
             # 3. 安装依赖 (使用 venv 里的 Python)
