@@ -21,8 +21,14 @@ class Settings:
         raise ValueError("GOOGLE_CLIENT_ID must be set in production")
     GOOGLE_ACCOUNT_SERVICE_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE")
     if ENV == "production" and not GOOGLE_ACCOUNT_SERVICE_JSON:
+        google_account_b64 = os.getenv("GOOGLE_SERVICE_ACCOUNT_B64")
+        if not google_account_b64:
+            raise ValueError(
+                "GOOGLE_SERVICE_ACCOUNT_B64 must be set in production "
+                "when GOOGLE_SERVICE_ACCOUNT_FILE is not set"
+            )
         GOOGLE_ACCOUNT_SERVICE_JSON = base64.b64decode(
-            os.environ["GOOGLE_SERVICE_ACCOUNT_B64"]
+            google_account_b64
         ).decode("utf-8")
 
     # SCHEMA = os.getenv("SCHEMA")
