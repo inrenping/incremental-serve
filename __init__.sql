@@ -520,3 +520,31 @@ IS '同一日同一采样时间唯一约束';
 COMMENT ON CONSTRAINT fk_t_heart_rate_detail_daily
 ON public.t_heart_rate_detail
 IS '关联每日心率汇总表';
+
+
+-- ── OAuth 2.0 授权码表 ──────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.t_oauth_authorization_codes (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES t_users(id) ON DELETE CASCADE,
+    code VARCHAR(64) NOT NULL UNIQUE,
+    client_id VARCHAR(50) NOT NULL,
+    redirect_uri VARCHAR(500),
+    scope VARCHAR(200),
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_oauth_code ON public.t_oauth_authorization_codes(code);
+
+COMMENT ON TABLE public.t_oauth_authorization_codes IS 'OAuth 2.0 授权码表，存储 GPT Actions 等第三方应用的临时授权码';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.id IS '自增主键';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.user_id IS '用户 ID，关联 t_users 表';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.code IS '授权码，唯一标识，用于换取 Access Token';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.client_id IS '第三方客户端标识，如 gpt-actions';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.redirect_uri IS '授权后回调地址';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.scope IS '授权范围，如 read';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.expires_at IS '授权码过期时间（创建后 10 分钟有效）';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.used IS '是否已使用（一次性使用，用完标记）';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.created_at IS '记录创建时间';
