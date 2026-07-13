@@ -243,6 +243,16 @@ OpenAI GPT Actions 配置示例
           type: http
           scheme: bearer
 
-然后在 GPT Actions 的 **Authentication** 中选择 ``Bearer`` 类型，
-填入你的 JWT Token（通过 OAuth 登录获取，见下方认证说明）。
+然后在 GPT Actions 的 **Authentication** 中配置 OAuth 2.0：
+
+  - **Auth Method**: OAuth
+  - **Grant Type**: Authorization Code (PKCE)
+  - **Authorization URL**: ``https://incremental.icu/oauth/authorize``
+  - **Token URL**: ``https://incremental.icu/oauth/token``
+  - **Client ID**: ``gpt-actions``
+  - **Scope**: ``read``
+  - **Authorization Request Parameter**: 留空
+
+  用户在 ChatGPT 中首次使用插件时，会跳转到 ``incremental.icu`` 进行登录授权，
+  输入邮箱验证码后确认授权，即可永久使用。系统会签发 **365 天有效** 的 Access Token。
 
