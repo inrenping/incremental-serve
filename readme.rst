@@ -256,3 +256,30 @@ OpenAI GPT Actions 配置示例
   用户在 ChatGPT 中首次使用插件时，会跳转到 ``incremental.icu`` 进行登录授权，
   输入邮箱验证码后确认授权，即可永久使用。系统会签发 **365 天有效** 的 Access Token。
 
+ChatGPT MCP Plugin 配置
+--------------------------
+
+ChatGPT 支持通过 MCP 协议直接连接，支持完整的 OAuth 2.0 Authorization Code Flow（PKCE）。
+
+**配置方式：**
+
+1. 在 ChatGPT 的 New Plugin 页面，填入以下信息：
+
+   - **Connection URL**: ``https://i.incremental.icu/mcp``
+
+2. ChatGPT 会自动检测到 OAuth 支持，引导用户进行登录授权
+
+**认证流程：**
+
+#. ChatGPT 打开 ``https://i.incremental.icu/mcp/authorize`` 进行授权
+#. 用户被引导到 ``https://i.incremental.icu/mcp-auth/login`` 输入邮箱和验证码
+#. 验证通过后看到授权确认页面，点击"允许"
+#. 跳转回 ChatGPT，完成认证
+#. ChatGPT 持有 365 天有效的 Access Token，可永久使用
+
+**MCP 工具（工具调用时自动注入用户身份）**：
+
+- ``get_activities`` — 查询运动活动明细
+- ``get_activity_stats`` — 查询运动统计汇总
+- ``get_heart_rate_data`` — 查询每日心率数据
+
