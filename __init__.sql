@@ -1,3 +1,7 @@
+-- public.t_users definition
+
+-- Drop table
+
 -- DROP TABLE public.t_users;
 
 CREATE TABLE public.t_users (
@@ -8,11 +12,11 @@ CREATE TABLE public.t_users (
 	updated_at timestamptz NULL,
 	active bool DEFAULT false NULL,
 	vip bool DEFAULT false NULL,
+	timezone varchar DEFAULT 'Asia/Shanghai'::character varying NULL,
 	CONSTRAINT t_users_pkey PRIMARY KEY (id),
 	CONSTRAINT t_users_user_email_key UNIQUE (user_email),
 	CONSTRAINT t_users_user_name_key UNIQUE (user_name)
 );
-
 CREATE INDEX idx_t_users_user_email ON public.t_users USING btree (user_email);
 
 -- 表与字段的属性元数据注释
@@ -25,6 +29,10 @@ COMMENT ON COLUMN public.t_users.updated_at IS '账号资料最后更新时间�
 COMMENT ON COLUMN public.t_users.active IS '账号激活状态：true=已激活，false=未激活';
 COMMENT ON COLUMN public.t_users.vip IS '会员状态：true=VIP会员，false=普通用户';
 
+
+-- public.t_base_connect definition
+
+-- Drop table
 
 -- DROP TABLE public.t_base_connect;
 
@@ -48,11 +56,14 @@ CREATE TABLE public.t_base_connect (
 	updated_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
 	is_active bool DEFAULT true NULL,
 	last_synced_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
-	CONSTRAINT t_base_connect_pkey PRIMARY KEY (id),
-	CONSTRAINT fk_base_user_id FOREIGN KEY (user_id) REFERENCES public.t_users(id)
+	master bool DEFAULT false NULL,
+	CONSTRAINT t_base_connect_pkey PRIMARY KEY (id)
 );
-
 CREATE INDEX idx_base_user_source ON public.t_base_connect USING btree (user_id, source_type);
+
+-- public.t_base_connect foreign keys
+
+ALTER TABLE public.t_base_connect ADD CONSTRAINT fk_base_user_id FOREIGN KEY (user_id) REFERENCES public.t_users(id);
 
 -- 表与字段的属性元数据注释
 COMMENT ON TABLE public.t_base_connect IS '三方渠道授权连接表：管理用户与外部运动健康平台的 OAuth 凭证及同步状态';
