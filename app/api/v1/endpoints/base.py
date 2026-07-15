@@ -488,11 +488,11 @@ def log_stream_generator(
 
         yield f"data: {json.dumps({"level": "info", "message": f"🚀 [7/7]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录"}, ensure_ascii=False)}\n\n"
         for source_file, filename in source_file_list:
-            if source_config.source_type == "coros":
+            if target_config.source_type == "coros":
                 upload_result = coros_service._upload_fit_zip_to_coros(
                     db, current_user, target_config, source_file, filename
                 )
-            else:
+            elif target_config.source_type == "garmin":
                 upload_result = garmin_service._upload_file_to_garmin(
                     current_user=current_user,
                     db=db,
@@ -500,6 +500,8 @@ def log_stream_generator(
                     file_data=source_file,
                     filename=filename,
                 )
+            else:
+                upload_result = {"status": "error", "message": f"不支持的目标平台类型: {target_config.source_type}"}
             yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果: {json.dumps(upload_result, ensure_ascii=False)}"}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [7/7]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
         # 推送所有任务结束的暗号
