@@ -9,7 +9,6 @@ from app.api.v1.endpoints import (
     base,
     task,
     google,
-    mcp_openai,
 )
 
 api_router = APIRouter()
@@ -31,5 +30,3 @@ api_router.include_router(log.router, prefix="/log", tags=["Log"])
 api_router.include_router(task.router, prefix="/task", tags=["Task"])
 
 api_router.include_router(google.router, prefix="/google", tags=["Google"])
-
-api_router.include_router(mcp_openai.router, prefix="", tags=["OpenAI MCP"])
