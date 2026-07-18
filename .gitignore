@@ -222,3 +222,5 @@ __marimo__/
 
 credentials/
 *.json
+
+.python-version
