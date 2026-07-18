@@ -520,13 +520,17 @@ def log_stream_generator(
 
 @router.get("/batchUploadFitToStorage")
 def batch_upload_fit_to_storage(
+    limit: int = None,
     db: Session = Depends(get_db),
 ):
     """
     批量上传所有 VIP 用户的 FIT 文件到对象存储。
     已存在的文件会跳过。
+
+    Args:
+        limit: 限制上传数量，不传则上传所有
     """
-    return base_activity_service.batch_upload_fit_to_storage(db)
+    return base_activity_service.batch_upload_fit_to_storage(db, limit)
 
 
 @router.get("/getRunningTotal")

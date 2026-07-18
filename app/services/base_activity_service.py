@@ -216,13 +216,17 @@ def is_same_activity(
     return True
 
 
-def batch_upload_fit_to_storage(db: Session) -> dict:
+def batch_upload_fit_to_storage(db: Session, limit: int = None) -> dict:
     """
     批量上传所有 VIP 用户的 FIT 文件到对象存储。
     已存在的文件会跳过。
     为避免被源平台封号，添加限流机制：
     - 每个下载请求间隔 2 秒
     - 每处理 10 个文件后额外等待 10 秒
+
+    Args:
+        db: 数据库会话
+        limit: 限制上传数量，None 表示上传所有
     """
     from app.models.user import User
 
@@ -254,6 +258,10 @@ def batch_upload_fit_to_storage(db: Session) -> dict:
         total += len(activities)
 
         for activity in activities:
+            # 检查是否达到限制
+            if limit is not None and success_count >= limit:
+                print(f"[批量上传] 已达到限制 {limit}，停止上传")
+                break
             oss_key = oss_service.generate_fit_oss_key(activity.activity_id)
 
             # 检查是否已存在
