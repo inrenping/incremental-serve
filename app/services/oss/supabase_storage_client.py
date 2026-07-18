@@ -11,7 +11,7 @@ class SupabaseStorageClient:
 
     def __init__(
         self,
-        bucket: str = "storage",
+        bucket: Optional[str] = None,
         endpoint_url: Optional[str] = None,
         access_key_id: Optional[str] = None,
         secret_access_key: Optional[str] = None,
@@ -21,13 +21,13 @@ class SupabaseStorageClient:
         初始化 Supabase Storage 客户端
 
         Args:
-            bucket: 存储桶名称
+            bucket: 存储桶名称（从环境变量 SUPABASE_STORAGE_BUCKET 读取）
             endpoint_url: Supabase Storage S3 兼容端点（从环境变量 SUPABASE_STORAGE_ENDPOINT 读取）
             access_key_id: 访问密钥 ID（从环境变量 SUPABASE_ACCESS_KEY_ID 读取）
             secret_access_key: 访问密钥（从环境变量 SUPABASE_SECRET_ACCESS_KEY 读取）
             region: AWS 区域
         """
-        self.bucket = bucket
+        self.bucket = bucket or os.getenv("SUPABASE_STORAGE_BUCKET")
         self.endpoint_url = endpoint_url or os.getenv("SUPABASE_STORAGE_ENDPOINT")
         self.access_key_id = access_key_id or os.getenv("SUPABASE_ACCESS_KEY_ID")
         self.secret_access_key = secret_access_key or os.getenv(
@@ -39,6 +39,8 @@ class SupabaseStorageClient:
             else os.getenv("SUPABASE_STORAGE_REGION", "us-east-1")
         )
 
+        if not self.bucket:
+            raise ValueError("未配置 SUPABASE_STORAGE_BUCKET 环境变量")
         if not self.endpoint_url:
             raise ValueError("未配置 SUPABASE_STORAGE_ENDPOINT 环境变量")
         if not self.access_key_id:
