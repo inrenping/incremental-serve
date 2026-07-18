@@ -59,7 +59,8 @@ def download_activity(activity_id: int, db: Session, current_user: User):
     if not base_activity:
         return {"status": "error", "message": "未找到对应的活动记录"}
 
-    oss_key = oss_service.generate_fit_oss_key(activity_id)
+    # 使用源平台的 activity_id 生成 oss_key
+    oss_key = oss_service.generate_fit_oss_key(base_activity.activity_id)
 
     # VIP 用户优先从对象存储获取
     if current_user.vip:
@@ -69,14 +70,14 @@ def download_activity(activity_id: int, db: Session, current_user: User):
                 user_id=current_user.id,
                 log_type="STORAGE_DOWNLOAD",
                 module_name="oss",
-                op_desc=f"从存储获取: {activity_id}.fit",
+                op_desc=f"从存储获取: {base_activity.activity_id}.fit",
             )
             stream = io.BytesIO(file_data)
             return StreamingResponse(
                 stream,
                 media_type="application/octet-stream",
                 headers={
-                    "Content-Disposition": f'attachment; filename="{activity_id}.fit"'
+                    "Content-Disposition": f'attachment; filename="{base_activity.activity_id}.fit"'
                 },
             )
 
@@ -113,7 +114,7 @@ def download_activity(activity_id: int, db: Session, current_user: User):
             user_id=current_user.id,
             log_type="STORAGE_UPLOAD",
             module_name="oss",
-            op_desc=f"上传到存储: {activity_id}.fit",
+            op_desc=f"上传到存储: {base_activity.activity_id}.fit",
         )
 
     stream = io.BytesIO(file_data)
@@ -262,6 +263,7 @@ def batch_upload_fit_to_storage(db: Session, limit: int = None) -> dict:
             if limit is not None and success_count >= limit:
                 print(f"[批量上传] 已达到限制 {limit}，停止上传")
                 break
+            # 使用源平台的 activity_id 生成 oss_key
             oss_key = oss_service.generate_fit_oss_key(activity.activity_id)
 
             # 检查是否已存在
@@ -280,12 +282,12 @@ def batch_upload_fit_to_storage(db: Session, limit: int = None) -> dict:
 
                 if activity.source_type == "coros":
                     file_response, _ = coros_service.download_coros_activity_response(
-                        db, user, base_connect.id, activity.activity_id
+                        db, user, base_connect.id, activity.id
                     )
                     file_data = file_response.content
                 elif activity.source_type == "garmin":
                     file_data, _ = garmin_service.get_garmin_activity_download_info(
-                        db, user, activity.activity_id
+                        db, user, activity.id
                     )
                 else:
                     fail_count += 1
