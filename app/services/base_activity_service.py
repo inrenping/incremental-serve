@@ -216,105 +216,121 @@ def is_same_activity(
     return True
 
 
-def batch_upload_fit_to_storage(current_user: User, db: Session) -> dict:
+def batch_upload_fit_to_storage(db: Session) -> dict:
     """
-    批量上传所有 FIT 文件到对象存储。
+    批量上传所有 VIP 用户的 FIT 文件到对象存储。
     已存在的文件会跳过。
     为避免被源平台封号，添加限流机制：
     - 每个下载请求间隔 2 秒
     - 每处理 10 个文件后额外等待 10 秒
     """
-    # 获取用户所有活动记录
-    activities = (
-        db.query(BaseActivity).filter(BaseActivity.user_id == current_user.id).all()
-    )
+    from app.models.user import User
 
-    total = len(activities)
-    if total == 0:
+    # 获取所有 VIP 用户
+    vip_users = db.query(User).filter(User.vip == True, User.active == True).all()
+
+    if not vip_users:
         return {
             "status": "success",
-            "message": "没有找到任何活动记录",
+            "message": "没有找到任何 VIP 用户",
             "data": {"total": 0, "success": 0, "skip": 0, "fail": 0},
         }
 
+    total = 0
     success_count = 0
     skip_count = 0
     fail_count = 0
     download_count = 0  # 实际下载次数
     errors = []
 
-    for idx, activity in enumerate(activities, 1):
-        oss_key = oss_service.generate_fit_oss_key(activity.id)
+    for user in vip_users:
+        print(f"[批量上传] 处理用户: {user.user_name} (ID: {user.id})")
 
-        # 检查是否已存在
-        if oss_service.check_fit_file_exists(oss_key):
-            skip_count += 1
-            continue
+        # 获取用户所有活动记录
+        activities = (
+            db.query(BaseActivity).filter(BaseActivity.user_id == user.id).all()
+        )
 
-        # 下载 FIT 文件
-        try:
-            file_data = None
-            base_connect = (
-                db.query(BaseConnect)
-                .filter(BaseConnect.id == activity.base_connect_id)
-                .first()
-            )
+        total += len(activities)
 
-            if activity.source_type == "coros":
-                file_response, _ = coros_service.download_coros_activity_response(
-                    db, current_user, base_connect.id, activity.id
-                )
-                file_data = file_response.content
-            elif activity.source_type == "garmin":
-                file_data, _ = garmin_service.get_garmin_activity_download_info(
-                    db, current_user, activity.id
-                )
-            else:
-                fail_count += 1
-                errors.append(
-                    f"{activity.id}.fit: 不支持的平台类型 {activity.source_type}"
-                )
+        for activity in activities:
+            oss_key = oss_service.generate_fit_oss_key(activity.activity_id)
+
+            # 检查是否已存在
+            if oss_service.check_fit_file_exists(oss_key):
+                skip_count += 1
                 continue
 
-            # 记录实际下载次数
-            download_count += 1
-
-            # 限流：每次下载后等待 2 秒
-            time.sleep(2)
-
-            # 每下载 10 个文件后额外等待 10 秒，避免触发风控
-            if download_count % 10 == 0:
-                print(f"[批量上传] 已下载 {download_count} 个文件，等待 10 秒...")
-                time.sleep(10)
-
-            # 上传到 OSS
-            if oss_service.upload_fit_bytes(file_data, oss_key):
-                success_count += 1
-                log_operation_async(
-                    user_id=current_user.id,
-                    log_type="STORAGE_UPLOAD",
-                    module_name="oss",
-                    op_desc=f"批量上传成功: {activity.id}.fit",
+            # 下载 FIT 文件
+            try:
+                file_data = None
+                base_connect = (
+                    db.query(BaseConnect)
+                    .filter(BaseConnect.id == activity.base_connect_id)
+                    .first()
                 )
-            else:
+
+                if activity.source_type == "coros":
+                    file_response, _ = coros_service.download_coros_activity_response(
+                        db, user, base_connect.id, activity.activity_id
+                    )
+                    file_data = file_response.content
+                elif activity.source_type == "garmin":
+                    file_data, _ = garmin_service.get_garmin_activity_download_info(
+                        db, user, activity.activity_id
+                    )
+                else:
+                    fail_count += 1
+                    errors.append(
+                        f"{activity.activity_id}.fit: 不支持的平台类型 {activity.source_type}"
+                    )
+                    continue
+
+                # 记录实际下载次数
+                download_count += 1
+
+                # 限流：每次下载后等待 2 秒
+                time.sleep(2)
+
+                # 每下载 10 个文件后额外等待 10 秒，避免触发风控
+                if download_count % 10 == 0:
+                    print(f"[批量上传] 已下载 {download_count} 个文件，等待 10 秒...")
+                    time.sleep(10)
+
+                # 上传到 OSS
+                if oss_service.upload_fit_bytes(file_data, oss_key):
+                    success_count += 1
+                    print(
+                        f"[批量上传] 成功: {activity.activity_id}.fit (用户: {user.user_name})"
+                    )
+                    log_operation_async(
+                        user_id=user.id,
+                        log_type="STORAGE_UPLOAD",
+                        module_name="oss",
+                        op_desc=f"批量上传成功: {activity.activity_id}.fit",
+                    )
+                else:
+                    fail_count += 1
+                    errors.append(f"{activity.activity_id}.fit: 上传失败")
+                    print(
+                        f"[批量上传] 失败: {activity.activity_id}.fit (用户: {user.user_name})"
+                    )
+                    log_operation_async(
+                        user_id=user.id,
+                        log_type="STORAGE_UPLOAD",
+                        module_name="oss",
+                        op_desc=f"批量上传失败: {activity.activity_id}.fit",
+                    )
+
+            except Exception as e:
                 fail_count += 1
-                errors.append(f"{activity.id}.fit: 上传失败")
+                errors.append(f"{activity.activity_id}.fit: {str(e)}")
                 log_operation_async(
-                    user_id=current_user.id,
+                    user_id=user.id,
                     log_type="STORAGE_UPLOAD",
                     module_name="oss",
-                    op_desc=f"批量上传失败: {activity.id}.fit",
+                    op_desc=f"批量上传异常: {activity.activity_id}.fit - {str(e)}",
                 )
-
-        except Exception as e:
-            fail_count += 1
-            errors.append(f"{activity.id}.fit: {str(e)}")
-            log_operation_async(
-                user_id=current_user.id,
-                log_type="STORAGE_UPLOAD",
-                module_name="oss",
-                op_desc=f"批量上传异常: {activity.id}.fit - {str(e)}",
-            )
 
     return {
         "status": "success",

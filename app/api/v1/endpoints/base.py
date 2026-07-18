@@ -501,7 +501,10 @@ def log_stream_generator(
                     filename=filename,
                 )
             else:
-                upload_result = {"status": "error", "message": f"不支持的目标平台类型: {target_config.source_type}"}
+                upload_result = {
+                    "status": "error",
+                    "message": f"不支持的目标平台类型: {target_config.source_type}",
+                }
             yield f"data: {json.dumps({"level": "info", "message": f"上传文件 {filename} 结果: {json.dumps(upload_result, ensure_ascii=False)}"}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({"level": "success", "message": f"🚀 [7/7]向目标平台 {target_id} 上传 {len(diff_source_only)} 条记录成功"}, ensure_ascii=False)}\n\n"
         # 推送所有任务结束的暗号
@@ -517,14 +520,13 @@ def log_stream_generator(
 
 @router.get("/batchUploadFitToStorage")
 def batch_upload_fit_to_storage(
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    批量上传所有 FIT 文件到对象存储。
+    批量上传所有 VIP 用户的 FIT 文件到对象存储。
     已存在的文件会跳过。
     """
-    return base_activity_service.batch_upload_fit_to_storage(current_user, db)
+    return base_activity_service.batch_upload_fit_to_storage(db)
 
 
 @router.get("/getRunningTotal")
