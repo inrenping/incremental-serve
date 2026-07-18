@@ -26,4 +26,5 @@ class User(Base):
     created_at = Column(DateTime(timezone=True))
     updated_at = Column(DateTime(timezone=True))
     active = Column(Boolean, default=False)
+    vip = Column(Boolean, default=False)
     timezone = Column(String, default="Asia/Shanghai")

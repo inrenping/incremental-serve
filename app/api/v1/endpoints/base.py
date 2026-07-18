@@ -515,6 +515,18 @@ def log_stream_generator(
         raise
 
 
+@router.get("/batchUploadFitToStorage")
+def batch_upload_fit_to_storage(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    批量上传所有 FIT 文件到对象存储。
+    已存在的文件会跳过。
+    """
+    return base_activity_service.batch_upload_fit_to_storage(current_user, db)
+
+
 @router.get("/getRunningTotal")
 def get_running_total(
     current_user: User = Depends(get_current_user),
