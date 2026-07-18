@@ -128,11 +128,15 @@ class SupabaseStorageClient:
             key: 对象路径
 
         Returns:
-            True 上传成功
+            True 上传成功，False 上传失败
         """
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=data,
-        )
-        return True
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=data,
+            )
+            return True
+        except Exception as e:
+            print(f"上传文件到 Supabase Storage 失败: {key}, 错误: {e}")
+            return False
