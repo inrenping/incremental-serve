@@ -1,4 +1,5 @@
 import io
+import time
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -219,6 +220,9 @@ def batch_upload_fit_to_storage(current_user: User, db: Session) -> dict:
     """
     批量上传所有 FIT 文件到对象存储。
     已存在的文件会跳过。
+    为避免被源平台封号，添加限流机制：
+    - 每个下载请求间隔 2 秒
+    - 每处理 10 个文件后额外等待 10 秒
     """
     # 获取用户所有活动记录
     activities = (
@@ -236,6 +240,7 @@ def batch_upload_fit_to_storage(current_user: User, db: Session) -> dict:
     success_count = 0
     skip_count = 0
     fail_count = 0
+    download_count = 0  # 实际下载次数
     errors = []
 
     for idx, activity in enumerate(activities, 1):
@@ -269,13 +274,18 @@ def batch_upload_fit_to_storage(current_user: User, db: Session) -> dict:
                 errors.append(
                     f"{activity.id}.fit: 不支持的平台类型 {activity.source_type}"
                 )
-                log_operation_async(
-                    user_id=current_user.id,
-                    log_type="STORAGE_UPLOAD",
-                    module_name="oss",
-                    op_desc=f"批量上传跳过: {activity.id}.fit 不支持的平台类型 {activity.source_type}",
-                )
                 continue
+
+            # 记录实际下载次数
+            download_count += 1
+
+            # 限流：每次下载后等待 2 秒
+            time.sleep(2)
+
+            # 每下载 10 个文件后额外等待 10 秒，避免触发风控
+            if download_count % 10 == 0:
+                print(f"[批量上传] 已下载 {download_count} 个文件，等待 10 秒...")
+                time.sleep(10)
 
             # 上传到 OSS
             if oss_service.upload_fit_bytes(file_data, oss_key):
