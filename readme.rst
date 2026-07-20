@@ -2,10 +2,14 @@
 Incremental Serv
 ================
 
-这是 `incremental.icu <https://github.com/inrenping/incremental.icu>`_ 的后端接口，代码基本通过 Google Gemini Assist 生成。
+这是 `incremental.icu <https://github.com/inrenping/incremental.icu>`前端对应的后端接口。通过 Github Actions 自动部署。
 
 快速开始
 ========
+
+注意
+
+> garth 的可用版本不支持 python 3.14 以上的版本，如果您使用的新版本的 python，请用 uv 管理使用 3.12 版本运行。
 
 安装服务
 --------
@@ -19,6 +23,9 @@ Incremental Serv
 
     pip install -r requirements.txt
     pip install gunicorn
+    # 如果是用 uv 管理
+    uv pip install -r requirements.txt
+    uv pip install gunicorn
 
 *记得配置好环境变量*
 
@@ -28,7 +35,9 @@ Incremental Serv
 .. code-block:: bash
 
     # uvicorn app.main:app --reload
-    python -m uvicorn app.main:app --reload
+    python -m uvicorn app.main:app
+    # 如果是用 uv 管理
+    uv run uvicorn app.main:app --reload
 
 更新 requirements.txt
 ---------------------
