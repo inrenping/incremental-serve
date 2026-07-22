@@ -28,6 +28,12 @@ jobs:
           RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$TODAY" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
 
+      - name: 定时备份 FIT 文件到存储
+        run: |
+          echo "开始备份 FIT 文件到对象存储..."
+          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/base/batchUploadFitToStorage?limit=5" -H "Content-Type: application/json")
+          echo "接口返回: $RESPONSE"
+
       - name: 定时任务执行
         run: |
           echo "开始执行定时任务..."

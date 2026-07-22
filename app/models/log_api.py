@@ -1,21 +1,32 @@
-from sqlalchemy import Column, ForeignKey, String, Text, BigInteger, Integer, DateTime, func
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    String,
+    Text,
+    BigInteger,
+    Integer,
+    DateTime,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, INET
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
 from app.db.session import Base
 
+
 class SysLog(Base):
     """
     系统操作日志实体类
     映射表名: blunt.t_log_api
     """
+
     __tablename__ = "t_log_api"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键ID")
     user_id = Column(
-            Integer, ForeignKey("t_users.id", ondelete="CASCADE"), nullable=False
-        )
+        Integer, ForeignKey("t_users.id", ondelete="CASCADE"), nullable=False
+    )
     user_name = Column(String(100), nullable=True, comment="用户名")
     log_type = Column(String(50), nullable=False, comment="日志类型")
     module_name = Column(String(100), nullable=True, comment="模块名称")
@@ -26,7 +37,7 @@ class SysLog(Base):
     ip_address = Column(INET, nullable=True, comment="IP地址")
     user_agent = Column(Text, nullable=True, comment="浏览器标识")
     duration_ms = Column(Integer, nullable=False, comment="耗时(毫秒)")
-    created_at = Column(DateTime(timezone=True),nullable=False,comment="创建时间")
+    created_at = Column(DateTime(timezone=True), nullable=False, comment="创建时间")
     resp_data = Column(String, nullable=True, comment="响应数据")
 
     def __repr__(self):
