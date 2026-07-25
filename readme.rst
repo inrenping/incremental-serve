@@ -4,7 +4,9 @@ Incremental Serv
 
 这是 `incremental.icu <https://github.com/inrenping/incremental.icu>`前端对应的后端接口。通过 Github Actions 自动部署。
 
-快速开始
+注意：服务器的内存需大于 1GB，否则安装相关依赖不足。
+
+`快速部署`
 ========
 
 注意
@@ -89,6 +91,30 @@ Incremental Serv
 
 使用 Systemd 运行
 -----------------
+
+在服务器上生成 SSH 密钥对：
+
+.. code-block:: bash
+
+    ssh-keygen -t ed25519 -f ~/.ssh/github_actions_deploy -C "github-actions"
+
+把公钥添加到服务器域名：
+
+.. code-block:: bash
+
+ssh-copy-id -i ~/.ssh/github_actions_deploy.pub root@你的服务器IP
+
+在服务器上 git clone 本项目，并按照直接运行的方式先跑一遍确定可以运行：
+
+.. code-block:: bash
+
+    git clone <repository-url> /var/www/incremental-serve
+    cd /var/www/incremental-serve
+    # 手动配置 .env 文件。
+    # 安装依赖
+    pip install -r requirements.txt
+    # 启动服务
+    uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 创建服务文件：
 
