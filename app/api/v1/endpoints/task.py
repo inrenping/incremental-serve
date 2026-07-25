@@ -59,8 +59,12 @@ def save_task(
         task.is_active = request.is_active
     else:
         count = db.query(Task).filter(Task.user_id == current_user.id).count()
-        if count >= 3:
-            return {"status": "error", "message": "每个用户最多只能创建 3 个任务"}
+        max_tasks = 10 if current_user.vip else 3
+        if count >= max_tasks:
+            return {
+                "status": "error",
+                "message": f"每个用户最多只能创建 {max_tasks} 个任务",
+            }
         task = Task(
             user_id=current_user.id,
             connect_source_id=request.connect_source_id,
