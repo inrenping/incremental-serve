@@ -335,25 +335,31 @@ COMMENT ON COLUMN public.t_task.updated_at IS '任务更新时间';
 -- ==========================================
 -- 2. 创建任务结果表 (t_task_result) 及注释
 -- ==========================================
-CREATE TABLE public.t_task_result (
-    id bigserial NOT NULL,
-    task_id bigint NOT NULL,
-    type int4 NOT NULL,
-    message text NULL,
-    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
-    CONSTRAINT t_task_result_pkey PRIMARY KEY (id),
-    CONSTRAINT fk_task_result_task_id FOREIGN KEY (task_id) REFERENCES public.t_task(id)
-);
+-- public.t_task_result definition
 
+-- Drop table
+
+-- DROP TABLE public.t_task_result;
+
+CREATE TABLE public.t_task_result (
+	id bigserial NOT NULL,
+	task_id int8 NOT NULL,
+	task_messages text NULL,
+	created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+	CONSTRAINT t_task_result_pkey PRIMARY KEY (id)
+);
 -- 创建索引
 CREATE INDEX idx_t_task_result_task_id ON public.t_task_result USING btree (task_id);
+
+-- public.t_task_result foreign keys
+
+ALTER TABLE public.t_task_result ADD CONSTRAINT fk_task_result_task_id FOREIGN KEY (task_id) REFERENCES public.t_task(id);
 
 -- 添加表和字段注释
 COMMENT ON TABLE public.t_task_result IS '任务历史执行结果表';
 COMMENT ON COLUMN public.t_task_result.id IS '自增主键';
 COMMENT ON COLUMN public.t_task_result.task_id IS '任务ID，关联 t_task.id';
-COMMENT ON COLUMN public.t_task_result.type IS '结果类型/状态码（例如：1-成功，2-部分成功，3-失败）';
-COMMENT ON COLUMN public.t_task_result.message IS '执行总结信息或全局错误提示';
+COMMENT ON COLUMN public.t_task_result.task_messages IS '执行总结信息或全局错误提示';
 COMMENT ON COLUMN public.t_task_result.created_at IS '执行记录生成时间';
 
 
