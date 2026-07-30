@@ -549,6 +549,8 @@ CREATE TABLE IF NOT EXISTS public.t_oauth_authorization_codes (
     client_id VARCHAR(50) NOT NULL,
     redirect_uri VARCHAR(500),
     scope VARCHAR(200),
+    code_challenge VARCHAR(128),
+    code_challenge_method VARCHAR(10),
     expires_at TIMESTAMPTZ NOT NULL,
     used BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -563,6 +565,8 @@ COMMENT ON COLUMN public.t_oauth_authorization_codes.code IS '授权码，唯一
 COMMENT ON COLUMN public.t_oauth_authorization_codes.client_id IS '第三方客户端标识，如 gpt-actions';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.redirect_uri IS '授权后回调地址';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.scope IS '授权范围，如 read';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.code_challenge IS 'PKCE code_challenge';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.code_challenge_method IS 'PKCE 方法，如 S256';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.expires_at IS '授权码过期时间（创建后 10 分钟有效）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.used IS '是否已使用（一次性使用，用完标记）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.created_at IS '记录创建时间';

@@ -14,6 +14,8 @@ class OAuthAuthorizationCode(Base):
     client_id = Column(String(50), nullable=False)
     redirect_uri = Column(String(500), nullable=True)
     scope = Column(String(200), nullable=True)
+    code_challenge = Column(String(128), nullable=True)
+    code_challenge_method = Column(String(10), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     used = Column(Boolean, default=False)
     created_at = Column(
