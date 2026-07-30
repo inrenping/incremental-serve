@@ -1,5 +1,7 @@
-"""OAuth 2.0 Authorization Code Flow endpoints for GPT Actions integration."""
+"""OAuth 2.1 Authorization Code + PKCE flow for MCP / GPT Actions integration."""
 
+import base64
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
@@ -17,10 +19,10 @@ from app.core.security import create_access_token, create_refresh_token
 
 router = APIRouter(prefix="/oauth", tags=["OAuth"])
 
-# Built-in OAuth client for GPT Actions
+# Built-in OAuth client for GPT Actions / ChatGPT MCP
 OAUTH_CLIENTS = {
     "gpt-actions": {
-        "client_name": "ChatGPT GPT Actions",
+        "client_name": "ChatGPT GPT Actions / MCP",
         "redirect_uris": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
     }
 }
@@ -35,6 +37,7 @@ class TokenRequest(BaseModel):
     code: str
     redirect_uri: str | None = None
     client_id: str | None = None
+    code_verifier: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -44,6 +47,17 @@ class TokenResponse(BaseModel):
     refresh_token: str | None = None
     scope: str | None = None
 
+
+def _verify_pkce(code_verifier: str, code_challenge: str, method: str = "S256") -> bool:
+    """Verify a PKCE code_verifier against the stored code_challenge."""
+    if method != "S256":
+        return False
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return computed == code_challenge
+
+
+# ---------- HTML pages ----------
 
 LOGIN_PAGE = """<!DOCTYPE html>
 <html lang="zh-CN">
@@ -78,6 +92,10 @@ LOGIN_PAGE = """<!DOCTYPE html>
             <input type="hidden" name="redirect_uri" value="{redirect_uri}">
             <input type="hidden" name="scope" value="{scope}">
             <input type="hidden" name="response_type" value="code">
+            <input type="hidden" name="code_challenge" value="{code_challenge}">
+            <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+            <input type="hidden" name="resource" value="{resource}">
+            <input type="hidden" name="state" value="{state}">
             <label>邮箱</label>
             <input type="email" name="email" placeholder="your@email.com" value="{email}" required>
             <label>验证码</label>
@@ -141,6 +159,10 @@ CONSENT_PAGE = """<!DOCTYPE html>
                 <input type="hidden" name="scope" value="{scope}">
                 <input type="hidden" name="user_id" value="{user_id}">
                 <input type="hidden" name="token" value="{token}">
+                <input type="hidden" name="code_challenge" value="{code_challenge}">
+                <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+                <input type="hidden" name="resource" value="{resource}">
+                <input type="hidden" name="state" value="{state}">
                 <button type="submit" name="action" value="deny" class="btn btn-deny">拒绝</button>
             </form>
             <form method="post" action="/oauth/consent" style="flex:1;">
@@ -149,6 +171,10 @@ CONSENT_PAGE = """<!DOCTYPE html>
                 <input type="hidden" name="scope" value="{scope}">
                 <input type="hidden" name="user_id" value="{user_id}">
                 <input type="hidden" name="token" value="{token}">
+                <input type="hidden" name="code_challenge" value="{code_challenge}">
+                <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
+                <input type="hidden" name="resource" value="{resource}">
+                <input type="hidden" name="state" value="{state}">
                 <button type="submit" name="action" value="allow" class="btn btn-allow">允许</button>
             </form>
         </div>
@@ -178,11 +204,17 @@ def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
     raise HTTPException(status_code=400, detail="redirect_uri 不在允许列表中")
 
 
-def _build_redirect_error(redirect_uri: str, error: str) -> RedirectResponse:
-    """Build a redirect response with an error parameter."""
-    params = urlencode({"error": error})
+def _build_redirect_error(redirect_uri: str, error: str, state: str | None = None) -> RedirectResponse:
+    """Build a redirect response with error and optional state."""
+    params = {"error": error}
+    if state:
+        params["state"] = state
+    qs = urlencode(params)
     separator = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(url=f"{redirect_uri}{separator}{params}")
+    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}")
+
+
+# ---------- Endpoints ----------
 
 
 @router.get("/authorize", response_class=HTMLResponse)
@@ -192,10 +224,13 @@ def authorize_page(
     scope: str | None = None,
     response_type: str | None = None,
     state: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    resource: str | None = None,
     email: str | None = None,
     error: str | None = None,
 ):
-    """Render the OAuth authorization login page."""
+    """Render the OAuth authorization login page (supports PKCE)."""
     if response_type and response_type != "code":
         return HTMLResponse("不支持的 response_type", status_code=400)
 
@@ -211,6 +246,10 @@ def authorize_page(
         client_id=client_id,
         redirect_uri=redirect_uri or "",
         scope=scope or "read",
+        code_challenge=code_challenge or "",
+        code_challenge_method=code_challenge_method or "S256",
+        resource=resource or "",
+        state=state or "",
         email=email or "",
         error=f"<p>{error}</p>" if error else "",
     )
@@ -224,6 +263,10 @@ def authorize_login(
     redirect_uri: str = "",
     scope: str = "read",
     response_type: str = "code",
+    code_challenge: str = "",
+    code_challenge_method: str = "S256",
+    resource: str = "",
+    state: str = "",
     email: str = "",
     captcha: str = "",
     db: Session = Depends(get_db),
@@ -239,6 +282,10 @@ def authorize_login(
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            resource=resource,
+            state=state,
             error="请填写邮箱和验证码",
             email=email,
         )
@@ -252,6 +299,10 @@ def authorize_login(
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            resource=resource,
+            state=state,
             error="验证码错误或已过期",
             email=email,
         )
@@ -262,6 +313,10 @@ def authorize_login(
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            resource=resource,
+            state=state,
             error="用户不存在或已被禁用",
             email=email,
         )
@@ -277,6 +332,10 @@ def authorize_login(
         user_name=user.user_name or user.user_email,
         user_id=user.id,
         token=consent_token,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        resource=resource,
+        state=state,
     )
     return HTMLResponse(html)
 
@@ -288,12 +347,16 @@ def authorize_consent(
     scope: str = "read",
     user_id: int = 0,
     token: str = "",
+    code_challenge: str = "",
+    code_challenge_method: str = "S256",
+    resource: str = "",
+    state: str = "",
     action: str = "",
     db: Session = Depends(get_db),
 ):
-    """Handle user consent (allow or deny)."""
+    """Handle user consent (allow or deny), storing PKCE params with the auth code."""
     if action == "deny":
-        return _build_redirect_error(redirect_uri, "access_denied")
+        return _build_redirect_error(redirect_uri, "access_denied", state)
 
     if action != "allow":
         return HTMLResponse("无效操作", status_code=400)
@@ -302,7 +365,7 @@ def authorize_consent(
     if not user:
         return HTMLResponse("用户不存在", status_code=400)
 
-    # Generate authorization code
+    # Generate authorization code with PKCE support
     code = secrets.token_urlsafe(32)
     auth_code = OAuthAuthorizationCode(
         user_id=user.id,
@@ -310,16 +373,21 @@ def authorize_consent(
         client_id=client_id,
         redirect_uri=redirect_uri,
         scope=scope,
+        code_challenge=code_challenge if code_challenge else None,
+        code_challenge_method=code_challenge_method if code_challenge else None,
         expires_at=datetime.now(timezone.utc)
         + timedelta(minutes=OAUTH_AUTH_CODE_EXPIRE_MINUTES),
     )
     db.add(auth_code)
     db.commit()
 
-    # Redirect back to the client with the code
-    params = urlencode({"code": code})
+    # Redirect back to the client with code + state
+    params = {"code": code}
+    if state:
+        params["state"] = state
+    qs = urlencode(params)
     separator = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(url=f"{redirect_uri}{separator}{params}")
+    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}")
 
 
 @router.post("/token", response_model=TokenResponse)
@@ -327,7 +395,7 @@ def exchange_token(
     req: TokenRequest,
     db: Session = Depends(get_db),
 ):
-    """Exchange an authorization code for access and refresh tokens."""
+    """Exchange an authorization code (with PKCE verification) for access + refresh tokens."""
     now = datetime.now(timezone.utc)
 
     auth_code = (
@@ -343,6 +411,13 @@ def exchange_token(
     if not auth_code:
         raise HTTPException(status_code=400, detail="授权码无效或已过期")
 
+    # PKCE verification — required when code_challenge was stored
+    if auth_code.code_challenge:
+        if not req.code_verifier:
+            raise HTTPException(status_code=400, detail="缺少 code_verifier（PKCE 要求）")
+        if not _verify_pkce(req.code_verifier, auth_code.code_challenge, auth_code.code_challenge_method or "S256"):
+            raise HTTPException(status_code=400, detail="code_verifier 无效")
+
     # Mark code as used (one-time use)
     auth_code.used = True
 
@@ -350,7 +425,7 @@ def exchange_token(
     if not user or not user.active:
         raise HTTPException(status_code=400, detail="用户不存在或已被禁用")
 
-    # Issue long-lived access token (365 days)
+    # Issue long-lived access token (365 days) — sub = user.id only
     access_token = create_access_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(days=OAUTH_ACCESS_TOKEN_EXPIRE_DAYS),

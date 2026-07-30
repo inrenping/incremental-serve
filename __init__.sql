@@ -335,25 +335,31 @@ COMMENT ON COLUMN public.t_task.updated_at IS '任务更新时间';
 -- ==========================================
 -- 2. 创建任务结果表 (t_task_result) 及注释
 -- ==========================================
-CREATE TABLE public.t_task_result (
-    id bigserial NOT NULL,
-    task_id bigint NOT NULL,
-    type int4 NOT NULL,
-    message text NULL,
-    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
-    CONSTRAINT t_task_result_pkey PRIMARY KEY (id),
-    CONSTRAINT fk_task_result_task_id FOREIGN KEY (task_id) REFERENCES public.t_task(id)
-);
+-- public.t_task_result definition
 
+-- Drop table
+
+-- DROP TABLE public.t_task_result;
+
+CREATE TABLE public.t_task_result (
+	id bigserial NOT NULL,
+	task_id int8 NOT NULL,
+	task_messages text NULL,
+	created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+	CONSTRAINT t_task_result_pkey PRIMARY KEY (id)
+);
 -- 创建索引
 CREATE INDEX idx_t_task_result_task_id ON public.t_task_result USING btree (task_id);
+
+-- public.t_task_result foreign keys
+
+ALTER TABLE public.t_task_result ADD CONSTRAINT fk_task_result_task_id FOREIGN KEY (task_id) REFERENCES public.t_task(id);
 
 -- 添加表和字段注释
 COMMENT ON TABLE public.t_task_result IS '任务历史执行结果表';
 COMMENT ON COLUMN public.t_task_result.id IS '自增主键';
 COMMENT ON COLUMN public.t_task_result.task_id IS '任务ID，关联 t_task.id';
-COMMENT ON COLUMN public.t_task_result.type IS '结果类型/状态码（例如：1-成功，2-部分成功，3-失败）';
-COMMENT ON COLUMN public.t_task_result.message IS '执行总结信息或全局错误提示';
+COMMENT ON COLUMN public.t_task_result.task_messages IS '执行总结信息或全局错误提示';
 COMMENT ON COLUMN public.t_task_result.created_at IS '执行记录生成时间';
 
 
@@ -543,6 +549,8 @@ CREATE TABLE IF NOT EXISTS public.t_oauth_authorization_codes (
     client_id VARCHAR(50) NOT NULL,
     redirect_uri VARCHAR(500),
     scope VARCHAR(200),
+    code_challenge VARCHAR(128),
+    code_challenge_method VARCHAR(10),
     expires_at TIMESTAMPTZ NOT NULL,
     used BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -557,6 +565,8 @@ COMMENT ON COLUMN public.t_oauth_authorization_codes.code IS '授权码，唯一
 COMMENT ON COLUMN public.t_oauth_authorization_codes.client_id IS '第三方客户端标识，如 gpt-actions';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.redirect_uri IS '授权后回调地址';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.scope IS '授权范围，如 read';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.code_challenge IS 'PKCE code_challenge';
+COMMENT ON COLUMN public.t_oauth_authorization_codes.code_challenge_method IS 'PKCE 方法，如 S256';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.expires_at IS '授权码过期时间（创建后 10 分钟有效）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.used IS '是否已使用（一次性使用，用完标记）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.created_at IS '记录创建时间';
