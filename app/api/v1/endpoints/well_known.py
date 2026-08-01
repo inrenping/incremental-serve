@@ -32,6 +32,10 @@ def authorization_server_metadata():
             "issuer": CANONICAL_ORIGIN,
             "authorization_endpoint": f"{CANONICAL_ORIGIN}/oauth/authorize",
             "token_endpoint": f"{CANONICAL_ORIGIN}/oauth/token",
+            # OpenAI/ChatGPT 通过 DCR 动态注册客户端，缺少该字段会报
+            # "MCP server does not implement OAuth"
+            "registration_endpoint": f"{CANONICAL_ORIGIN}/oauth/register",
+            "registration_endpoint_auth_methods_supported": ["none"],
             "response_types_supported": ["code"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],

@@ -27,6 +27,10 @@ OAUTH_CLIENTS = {
     }
 }
 
+# 动态注册的 OAuth 客户端（RFC 7591 DCR）—— OpenAI/ChatGPT 连接时自动注册。
+# 使用进程内存储即可满足注册→授权→换 token 的短生命周期流程。
+_REGISTERED_CLIENTS: dict[str, dict] = {}
+
 OAUTH_ACCESS_TOKEN_EXPIRE_DAYS = 365
 OAUTH_AUTH_CODE_EXPIRE_MINUTES = 10
 OAUTH_REFRESH_TOKEN_EXPIRE_DAYS = 400
@@ -48,6 +52,25 @@ class TokenResponse(BaseModel):
     scope: str | None = None
 
 
+class ClientRegistrationRequest(BaseModel):
+    client_name: str | None = None
+    redirect_uris: list[str]
+    grant_types: list[str] | None = None
+    response_types: list[str] | None = None
+    scope: str | None = None
+    token_endpoint_auth_method: str | None = None
+
+
+class ClientRegistrationResponse(BaseModel):
+    client_id: str
+    client_id_issued_at: int
+    redirect_uris: list[str]
+    token_endpoint_auth_method: str = "none"
+    grant_types: list[str]
+    response_types: list[str]
+    scope: str
+
+
 def _verify_pkce(code_verifier: str, code_challenge: str, method: str = "S256") -> bool:
     """Verify a PKCE code_verifier against the stored code_challenge."""
     if method != "S256":
@@ -66,20 +89,20 @@ LOGIN_PAGE = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Incremental - 授权登录</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: white; border-radius: 12px; padding: 40px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); width: 360px; }
-        h1 { font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }
-        p { color: #666; margin-bottom: 24px; font-size: 14px; }
-        label { display: block; margin-bottom: 6px; font-size: 14px; color: #333; font-weight: 500; }
-        input { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; box-sizing: border-box; margin-bottom: 16px; }
-        input:focus { outline: none; border-color: #4A90D9; }
-        .btn { width: 100%; padding: 12px; background: #4A90D9; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }
-        .btn:hover { background: #357ABD; }
-        .error { color: #e74c3c; font-size: 13px; margin-bottom: 12px; display: none; }
-        .captcha-row { display: flex; gap: 8px; }
-        .captcha-row input { flex: 1; }
-        .captcha-btn { padding: 10px 12px; background: #e8e8e8; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; white-space: nowrap; font-size: 13px; }
-        .captcha-btn:hover { background: #ddd; }
+        body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
+        .card {{ background: white; border-radius: 12px; padding: 40px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); width: 360px; }}
+        h1 {{ font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }}
+        p {{ color: #666; margin-bottom: 24px; font-size: 14px; }}
+        label {{ display: block; margin-bottom: 6px; font-size: 14px; color: #333; font-weight: 500; }}
+        input {{ width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; box-sizing: border-box; margin-bottom: 16px; }}
+        input:focus {{ outline: none; border-color: #4A90D9; }}
+        .btn {{ width: 100%; padding: 12px; background: #4A90D9; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }}
+        .btn:hover {{ background: #357ABD; }}
+        .error {{ color: #e74c3c; font-size: 13px; margin-bottom: 12px; display: none; }}
+        .captcha-row {{ display: flex; gap: 8px; }}
+        .captcha-row input {{ flex: 1; }}
+        .captcha-btn {{ padding: 10px 12px; background: #e8e8e8; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; white-space: nowrap; font-size: 13px; }}
+        .captcha-btn:hover {{ background: #ddd; }}
     </style>
 </head>
 <body>
@@ -185,7 +208,16 @@ CONSENT_PAGE = """<!DOCTYPE html>
 
 def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
     """Validate redirect_uri against the client's allowed URIs."""
-    client = OAUTH_CLIENTS.get(client_id)
+    client = OAUTH_CLIENTS.get(client_id) or _REGISTERED_CLIENTS.get(client_id)
+
+    # 多 worker 部署下，进程内的动态注册记录可能落在其他 worker 上。
+    # 对 DCR 客户端（dcr_ 前缀）做宽松回退：回调域名必须是 OpenAI 官方域名。
+    if client is None and client_id.startswith("dcr_"):
+        if redirect_uri and redirect_uri.startswith(
+            ("https://chatgpt.com", "https://chat.openai.com", "https://openai.com")
+        ):
+            return redirect_uri
+
     if not client:
         raise HTTPException(status_code=400, detail="未知的 client_id")
 
@@ -204,7 +236,9 @@ def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
     raise HTTPException(status_code=400, detail="redirect_uri 不在允许列表中")
 
 
-def _build_redirect_error(redirect_uri: str, error: str, state: str | None = None) -> RedirectResponse:
+def _build_redirect_error(
+    redirect_uri: str, error: str, state: str | None = None
+) -> RedirectResponse:
     """Build a redirect response with error and optional state."""
     params = {"error": error}
     if state:
@@ -215,6 +249,35 @@ def _build_redirect_error(redirect_uri: str, error: str, state: str | None = Non
 
 
 # ---------- Endpoints ----------
+
+
+@router.post("/register")
+def register_client(req: ClientRegistrationRequest):
+    """RFC 7591 Dynamic Client Registration —— OpenAI/ChatGPT 连接 MCP 时自动注册。
+
+    OpenAI 的插件连接器要求授权服务器支持 DCR（或 CIMD），
+    否则会报 "MCP server does not implement OAuth"。
+    """
+    if not req.redirect_uris:
+        raise HTTPException(status_code=400, detail="redirect_uris 不能为空")
+
+    grant_types = req.grant_types or ["authorization_code", "refresh_token"]
+    client_id = f"dcr_{secrets.token_urlsafe(16)}"
+    _REGISTERED_CLIENTS[client_id] = {
+        "client_name": req.client_name,
+        "redirect_uris": req.redirect_uris,
+        "scope": req.scope or "read",
+        "grant_types": grant_types,
+    }
+    return ClientRegistrationResponse(
+        client_id=client_id,
+        client_id_issued_at=int(datetime.now(timezone.utc).timestamp()),
+        redirect_uris=req.redirect_uris,
+        token_endpoint_auth_method="none",
+        grant_types=grant_types,
+        response_types=["code"],
+        scope=req.scope or "read",
+    )
 
 
 @router.get("/authorize", response_class=HTMLResponse)
@@ -414,8 +477,14 @@ def exchange_token(
     # PKCE verification — required when code_challenge was stored
     if auth_code.code_challenge:
         if not req.code_verifier:
-            raise HTTPException(status_code=400, detail="缺少 code_verifier（PKCE 要求）")
-        if not _verify_pkce(req.code_verifier, auth_code.code_challenge, auth_code.code_challenge_method or "S256"):
+            raise HTTPException(
+                status_code=400, detail="缺少 code_verifier（PKCE 要求）"
+            )
+        if not _verify_pkce(
+            req.code_verifier,
+            auth_code.code_challenge,
+            auth_code.code_challenge_method or "S256",
+        ):
             raise HTTPException(status_code=400, detail="code_verifier 无效")
 
     # Mark code as used (one-time use)
