@@ -57,6 +57,7 @@ pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 python-jose==3.5.0
+python-multipart==0.0.20
 requests==2.33.1
 requests-oauthlib==2.0.0
 resend==2.27.0

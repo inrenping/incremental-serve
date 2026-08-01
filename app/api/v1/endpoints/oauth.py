@@ -54,11 +54,24 @@ class TokenResponse(BaseModel):
 
 class ClientRegistrationRequest(BaseModel):
     client_name: str | None = None
-    redirect_uris: list[str]
+    redirect_uris: list[str] | None = None
+    # 部分客户端可能用单数字段名或动态回调 URL（OpenAI 回调是动态生成的）
+    redirect_uri: str | None = None
+    callback_url: str | None = None
     grant_types: list[str] | None = None
     response_types: list[str] | None = None
     scope: str | None = None
     token_endpoint_auth_method: str | None = None
+
+
+# OpenAI/ChatGPT 动态回调 URL 的域名白名单（回调由 ChatGPT 每个连接器动态生成）
+_OPENAI_REDIRECT_PATTERNS = [
+    "https://chatgpt.com/",
+    "https://chat.openai.com/",
+    "https://openai.com/",
+    "https://apps-api.openai.com/",
+    "https://platform.openai.com/",
+]
 
 
 class ClientRegistrationResponse(BaseModel):
@@ -210,11 +223,12 @@ def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
     """Validate redirect_uri against the client's allowed URIs."""
     client = OAUTH_CLIENTS.get(client_id) or _REGISTERED_CLIENTS.get(client_id)
 
-    # 多 worker 部署下，进程内的动态注册记录可能落在其他 worker 上。
-    # 对 DCR 客户端（dcr_ 前缀）做宽松回退：回调域名必须是 OpenAI 官方域名。
+    # 多 worker 部署下，进程内的动态注册记录可能落在其他 worker 上；
+    # OpenAI 回调又是每个连接器动态生成的。对 DCR 客户端（dcr_ 前缀）做
+    # 宽松校验：回调域名必须在 OpenAI 官方白名单内。
     if client is None and client_id.startswith("dcr_"):
-        if redirect_uri and redirect_uri.startswith(
-            ("https://chatgpt.com", "https://chat.openai.com", "https://openai.com")
+        if redirect_uri and any(
+            redirect_uri.startswith(p) for p in _OPENAI_REDIRECT_PATTERNS
         ):
             return redirect_uri
 
@@ -258,21 +272,29 @@ def register_client(req: ClientRegistrationRequest):
     OpenAI 的插件连接器要求授权服务器支持 DCR（或 CIMD），
     否则会报 "MCP server does not implement OAuth"。
     """
-    if not req.redirect_uris:
-        raise HTTPException(status_code=400, detail="redirect_uris 不能为空")
+    # 兼容各种客户端：redirect_uris 数组、redirect_uri 单数、callback_url，
+    # 或完全不提供（OpenAI 的回调 URL 是动态生成的，注册阶段可能没有）
+    redirect_uris = req.redirect_uris or []
+    if not redirect_uris and req.redirect_uri:
+        redirect_uris = [req.redirect_uri]
+    if not redirect_uris and req.callback_url:
+        redirect_uris = [req.callback_url]
+    if not redirect_uris:
+        # OpenAI 回调动态生成且域名在官方白名单内，注册时允许后续按域名校验
+        redirect_uris = _OPENAI_REDIRECT_PATTERNS
 
     grant_types = req.grant_types or ["authorization_code", "refresh_token"]
     client_id = f"dcr_{secrets.token_urlsafe(16)}"
     _REGISTERED_CLIENTS[client_id] = {
         "client_name": req.client_name,
-        "redirect_uris": req.redirect_uris,
+        "redirect_uris": redirect_uris,
         "scope": req.scope or "read",
         "grant_types": grant_types,
     }
     return ClientRegistrationResponse(
         client_id=client_id,
         client_id_issued_at=int(datetime.now(timezone.utc).timestamp()),
-        redirect_uris=req.redirect_uris,
+        redirect_uris=redirect_uris,
         token_endpoint_auth_method="none",
         grant_types=grant_types,
         response_types=["code"],
