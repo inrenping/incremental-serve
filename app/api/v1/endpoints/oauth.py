@@ -252,13 +252,17 @@ def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
 def _build_redirect_error(
     redirect_uri: str, error: str, state: str | None = None
 ) -> RedirectResponse:
-    """Build a redirect response with error and optional state."""
+    """Build a redirect response with error and optional state.
+
+    使用 302 Found：OAuth 回调必须通过 GET 重定向返回（307 会保留 POST 方法，
+    导致 ChatGPT 等回调端点 400）。
+    """
     params = {"error": error}
     if state:
         params["state"] = state
     qs = urlencode(params)
     separator = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}")
+    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}", status_code=302)
 
 
 # ---------- Endpoints ----------
@@ -466,12 +470,13 @@ def authorize_consent(
     db.commit()
 
     # Redirect back to the client with code + state
+    # 必须用 302（GET 重定向），307 会保留 POST 方法导致 ChatGPT 回调 400
     params = {"code": code}
     if state:
         params["state"] = state
     qs = urlencode(params)
     separator = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}")
+    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}", status_code=302)
 
 
 @router.post("/token", response_model=TokenResponse)
