@@ -146,10 +146,9 @@ LOGIN_PAGE = """<!DOCTYPE html>
         function sendCaptcha() {{
             const email = document.querySelector('input[name="email"]').value;
             if (!email) {{ alert('请先输入邮箱'); return; }}
-            fetch('/api/v1/auth/send-captcha', {{
-                method: 'POST',
-                headers: {{ 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{ email: email, purpose: 'login' }})
+            // send-captcha 端点使用 query 参数（与主站一致），不能发 JSON body
+            fetch('/api/v1/auth/send-captcha?email=' + encodeURIComponent(email) + '&purpose=login', {{
+                method: 'POST'
             }}).then(r => {{
                 if (r.ok) alert('验证码已发送到 ' + email);
                 else alert('发送失败');
@@ -344,16 +343,16 @@ def authorize_page(
 @router.post("/authorize")
 def authorize_login(
     request: Request,
-    client_id: str = "",
-    redirect_uri: str = "",
-    scope: str = "read",
-    response_type: str = "code",
-    code_challenge: str = "",
-    code_challenge_method: str = "S256",
-    resource: str = "",
-    state: str = "",
-    email: str = "",
-    captcha: str = "",
+    client_id: str = Form(""),
+    redirect_uri: str = Form(""),
+    scope: str = Form("read"),
+    response_type: str = Form("code"),
+    code_challenge: str = Form(""),
+    code_challenge_method: str = Form("S256"),
+    resource: str = Form(""),
+    state: str = Form(""),
+    email: str = Form(""),
+    captcha: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Handle login form submission from the authorize page."""
@@ -427,16 +426,16 @@ def authorize_login(
 
 @router.post("/consent")
 def authorize_consent(
-    client_id: str = "",
-    redirect_uri: str = "",
-    scope: str = "read",
-    user_id: int = 0,
-    token: str = "",
-    code_challenge: str = "",
-    code_challenge_method: str = "S256",
-    resource: str = "",
-    state: str = "",
-    action: str = "",
+    client_id: str = Form(""),
+    redirect_uri: str = Form(""),
+    scope: str = Form("read"),
+    user_id: int = Form(0),
+    token: str = Form(""),
+    code_challenge: str = Form(""),
+    code_challenge_method: str = Form("S256"),
+    resource: str = Form(""),
+    state: str = Form(""),
+    action: str = Form(""),
     db: Session = Depends(get_db),
 ):
     """Handle user consent (allow or deny), storing PKCE params with the auth code."""
