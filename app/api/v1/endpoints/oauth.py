@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -455,16 +455,24 @@ def authorize_consent(
 
 @router.post("/token", response_model=TokenResponse)
 def exchange_token(
-    req: TokenRequest,
+    grant_type: str = Form("authorization_code"),
+    code: str = Form(...),
+    redirect_uri: str | None = Form(None),
+    client_id: str | None = Form(None),
+    code_verifier: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    """Exchange an authorization code (with PKCE verification) for access + refresh tokens."""
+    """Exchange an authorization code (with PKCE verification) for access + refresh tokens.
+
+    OAuth 2.0 规范要求 token 端点接受 application/x-www-form-urlencoded 表单
+    （RFC 6749 §3.2），OpenAI/ChatGPT 等客户端均以表单方式 POST，而非 JSON。
+    """
     now = datetime.now(timezone.utc)
 
     auth_code = (
         db.query(OAuthAuthorizationCode)
         .filter(
-            OAuthAuthorizationCode.code == req.code,
+            OAuthAuthorizationCode.code == code,
             OAuthAuthorizationCode.used == False,
             OAuthAuthorizationCode.expires_at > now,
         )
@@ -476,12 +484,12 @@ def exchange_token(
 
     # PKCE verification — required when code_challenge was stored
     if auth_code.code_challenge:
-        if not req.code_verifier:
+        if not code_verifier:
             raise HTTPException(
                 status_code=400, detail="缺少 code_verifier（PKCE 要求）"
             )
         if not _verify_pkce(
-            req.code_verifier,
+            code_verifier,
             auth_code.code_challenge,
             auth_code.code_challenge_method or "S256",
         ):

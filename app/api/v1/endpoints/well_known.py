@@ -24,6 +24,24 @@ def protected_resource_metadata():
     )
 
 
+@router.get("/.well-known/oauth-protected-resource/{path:path}")
+def protected_resource_metadata_path(path: str):
+    """RFC 9728 Path-based PRM — MCP 客户端会尝试
+    {origin}/.well-known/oauth-protected-resource{mcp_path}（如 .../mcp）。
+    resource 字段需与 MCP 服务 URL 一致。
+    """
+    resource = f"{CANONICAL_ORIGIN}/{path}".rstrip("/")
+    return JSONResponse(
+        {
+            "resource": resource,
+            "authorization_servers": [CANONICAL_ORIGIN],
+            "scopes_supported": ["read"],
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": "https://incremental.icu/docs",
+        }
+    )
+
+
 def _authorization_server_metadata() -> dict:
     """RFC 8414 Authorization Server Metadata — 告诉客户端 OAuth 端点位置与能力。"""
     return {
