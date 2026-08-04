@@ -7,7 +7,7 @@ class OAuthVerifyCode(Base):
     """
     用户 OAuth 授权验证码（一次性短码）。
 
-    用户登录主站后，在 /dash/settings/gpt 页面查看此验证码，
+    用户登录主站后，在 /dash/gpt 页面查看此验证码，
     在 OpenAI / ChatGPT 的授权页直接输入即可完成 OAuth 授权。
     """
 
