@@ -596,3 +596,37 @@ COMMENT ON COLUMN public.t_user_oauth_verify_codes.code IS '6 位一次性验证
 COMMENT ON COLUMN public.t_user_oauth_verify_codes.expires_at IS '验证码失效时间（生成后 5 分钟有效）';
 COMMENT ON COLUMN public.t_user_oauth_verify_codes.used IS '是否已使用（一次性使用，用完标记）';
 COMMENT ON COLUMN public.t_user_oauth_verify_codes.created_at IS '验证码生成时间';
+
+
+-- ── Supabase 存储桶文件列表表 ──────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.t_supabase_files (
+    id bigserial NOT NULL,
+    key varchar(1024) NOT NULL,
+    name varchar(512) NULL,
+    size bigint NULL,
+    content_type varchar(256) NULL,
+    last_modified timestamptz NULL,
+    etag varchar(256) NULL,
+    bucket varchar(256) NOT NULL,
+    synced_at timestamptz DEFAULT now() NOT NULL,
+    CONSTRAINT t_supabase_files_pkey PRIMARY KEY (id),
+    CONSTRAINT t_supabase_files_key_key UNIQUE (key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_supabase_files_key
+ON public.t_supabase_files USING btree (key);
+
+CREATE INDEX IF NOT EXISTS idx_t_supabase_files_bucket
+ON public.t_supabase_files USING btree (bucket);
+
+COMMENT ON TABLE public.t_supabase_files IS 'Supabase 存储桶文件列表：记录 Supabase Storage 中所有文件的元数据快照，用于本地查询和管理';
+COMMENT ON COLUMN public.t_supabase_files.id IS '[主键] 自增主键';
+COMMENT ON COLUMN public.t_supabase_files.key IS '文件在存储桶中的完整路径/Key（全局唯一）';
+COMMENT ON COLUMN public.t_supabase_files.name IS '文件名（从 key 中提取）';
+COMMENT ON COLUMN public.t_supabase_files.size IS '文件大小，单位：字节 (bytes)';
+COMMENT ON COLUMN public.t_supabase_files.content_type IS '文件 MIME 类型';
+COMMENT ON COLUMN public.t_supabase_files.last_modified IS '文件在 Supabase Storage 中的最后修改时间';
+COMMENT ON COLUMN public.t_supabase_files.etag IS '文件 ETag（用于判断文件内容是否变更）';
+COMMENT ON COLUMN public.t_supabase_files.bucket IS '所属存储桶名称';
+COMMENT ON COLUMN public.t_supabase_files.synced_at IS '同步到本地数据库的时间';
