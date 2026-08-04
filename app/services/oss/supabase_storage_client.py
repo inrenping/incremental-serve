@@ -142,3 +142,51 @@ class SupabaseStorageClient:
         except Exception as e:
             print(f"上传文件到 Supabase Storage 失败: {key}, 错误: {e}")
             return False
+
+    def list_objects(self, prefix: str = "", max_keys: int = 1000) -> list[dict]:
+        """
+        列出存储桶中的对象
+
+        Args:
+            prefix: 对象键前缀过滤
+            max_keys: 单次请求最大返回数量
+
+        Returns:
+            对象列表，每个元素包含 key, size, last_modified, etag, content_type 等字段
+        """
+        objects = []
+        continuation_token = None
+
+        while True:
+            kwargs = {
+                "Bucket": self.bucket,
+                "Prefix": prefix,
+                "MaxKeys": max_keys,
+            }
+            if continuation_token:
+                kwargs["ContinuationToken"] = continuation_token
+
+            response = self.client.list_objects_v2(**kwargs)
+
+            for obj in response.get("Contents", []):
+                # 获取更多元数据（content_type 等）
+                try:
+                    head = self.client.head_object(Bucket=self.bucket, Key=obj["Key"])
+                    content_type = head.get("ContentType", "")
+                except Exception:
+                    content_type = ""
+
+                objects.append({
+                    "key": obj["Key"],
+                    "size": obj.get("Size", 0),
+                    "last_modified": obj.get("LastModified"),
+                    "etag": obj.get("ETag", "").strip('"'),
+                    "content_type": content_type,
+                })
+
+            if response.get("IsTruncated"):
+                continuation_token = response.get("NextContinuationToken")
+            else:
+                break
+
+        return objects
