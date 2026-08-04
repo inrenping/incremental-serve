@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -70,6 +70,37 @@ def get_activities_by_month(
             MainActivity.user_id == current_user.id,
             extract("year", MainActivity.start_time_local) == year,
             extract("month", MainActivity.start_time_local) == month,
+        )
+        .order_by(desc(MainActivity.start_time_local))
+        .all()
+    )
+
+    return {"status": "success", "data": result, "total": len(result)}
+
+
+@router.get("/getActivitiesByWeek")
+def get_activities_by_week(
+    date: str = datetime.now().strftime("%Y-%m-%d"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    根据日期获取最近 6 周（含该日期所在周）的全部运动记录。
+
+    周以周一为起始，从该日期所在周向前取 5 周共 6 周，
+    避免按月统计时跨周的周初/周末数据被截断。
+    """
+    target = datetime.strptime(date, "%Y-%m-%d")
+    monday = target - timedelta(days=target.weekday())  # 该日期所在周的周一
+    range_start = monday - timedelta(weeks=5)  # 共 6 周
+    range_end = monday + timedelta(days=6)  # 该周的周日
+
+    result = (
+        db.query(MainActivity)
+        .filter(
+            MainActivity.user_id == current_user.id,
+            MainActivity.start_time_local >= range_start,
+            MainActivity.start_time_local < range_end + timedelta(days=1),
         )
         .order_by(desc(MainActivity.start_time_local))
         .all()
