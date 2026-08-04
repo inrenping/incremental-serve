@@ -1,0 +1,18 @@
+name: 刷新 Garmin 活动计数
+
+# 定义触发事件
+on:
+  schedule:
+    # 每天执行一次（每天 00:00）
+    - cron: "0 0 * * *"
+  workflow_dispatch: # 可手动触发
+
+jobs:
+  refresh-garmin-count:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 刷新 Garmin 活动计数
+        run: |
+          echo "开始刷新 Garmin 活动计数..."
+          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/refreshGarminActivityCount" -H "Content-Type: application/json")
+          echo "接口返回: $RESPONSE"
