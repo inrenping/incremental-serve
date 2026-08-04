@@ -13,6 +13,7 @@ from app.core.security import get_current_user
 from app.db.session import get_db
 from app.models.base_activity import BaseActivity
 from app.models.base_connect import BaseConnect
+from app.models.supabase_file import SupabaseFile
 from app.models.user import User
 
 from app.services import (
@@ -216,6 +217,85 @@ def get_activities_by_page(
     )
 
     return {"status": "success", "data": result, "total": total}
+
+
+@router.get("/getActivitiesByPageWithFiles")
+def get_activities_by_page_with_files(
+    connect_id: int,
+    page_size: int = 10,
+    page_count: int = 1,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_types: Optional[str] = None,
+    name: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # 1. 校验连接凭证
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.id == connect_id, BaseConnect.user_id == current_user.id)
+        .first()
+    )
+    if not base_connect:
+        return {"status": "success", "data": [], "total": 0}
+
+    # 2. 构建基础查询，左连接 t_supabase_files
+    query = (
+        db.query(BaseActivity, SupabaseFile.name.label("file_name"))
+        .outerjoin(
+            SupabaseFile,
+            text(
+                "regexp_replace(t_supabase_files.name, '\\.[^.]+$', '') = t_base_activity.activity_id"
+            ),
+        )
+        .filter(
+            BaseActivity.user_id == current_user.id,
+            BaseActivity.base_connect_id == base_connect.id,
+        )
+    )
+
+    # 3. 组合时间过滤条件
+    if start_date:
+        query = query.filter(BaseActivity.start_time_local >= start_date)
+    if end_date:
+        query = query.filter(BaseActivity.start_time_local <= end_date)
+
+    # 4. 增加运动类型过滤 (支持多选，逗号分隔)
+    if sport_types:
+        key_list = [t.strip() for t in sport_types.split(",")]
+        key_list.extend(
+            [item["name"] for item in ACTIVITY_CONFIG if item["key"] in key_list]
+        )
+        query = query.filter(BaseActivity.sport_type_raw.in_(key_list))
+
+    # 5. 增加名称模糊搜索
+    if name:
+        search_pattern = f"%{name}%"
+        query = query.filter(BaseActivity.activity_name.ilike(search_pattern))
+
+    # 6. 计算符合条件的总条数
+    total = query.count()
+
+    # 7. 执行分页与排序查询
+    result = (
+        query.order_by(desc(BaseActivity.start_time_local))
+        .limit(page_size)
+        .offset((page_count - 1) * page_size)
+        .all()
+    )
+
+    # 8. 组装返回数据，把 file_name 合并到 activity 的 dict 中
+    data = []
+    for activity, file_name in result:
+        activity_dict = {
+            column.name: getattr(activity, column.name)
+            for column in activity.__table__.columns
+        }
+        activity_dict["file_name"] = file_name
+        data.append(activity_dict)
+
+    return {"status": "success", "data": data, "total": total}
 
 
 @router.get("/getActivity")
