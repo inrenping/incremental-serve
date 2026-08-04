@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -112,17 +112,19 @@ LOGIN_PAGE = """<!DOCTYPE html>
         .btn {{ width: 100%; padding: 12px; background: #4A90D9; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; }}
         .btn:hover {{ background: #357ABD; }}
         .error {{ color: #e74c3c; font-size: 13px; margin-bottom: 12px; display: none; }}
-        .captcha-row {{ display: flex; gap: 8px; }}
-        .captcha-row input {{ flex: 1; }}
-        .captcha-btn {{ padding: 10px 12px; background: #e8e8e8; border: 1px solid #ddd; border-radius: 8px; cursor: pointer; white-space: nowrap; font-size: 13px; }}
-        .captcha-btn:hover {{ background: #ddd; }}
+        .error.show {{ display: block; }}
+        .hint {{ background: #f8f9fa; border-left: 4px solid #4A90D9; padding: 10px 12px; margin-bottom: 16px; font-size: 13px; color: #666; line-height: 1.6; }}
+        .hint a {{ color: #4A90D9; }}
     </style>
 </head>
 <body>
     <div class="card">
         <h1>授权登录</h1>
         <p>为 {client_name} 授权访问你的运动数据</p>
-        <div class="error" id="error">{error}</div>
+        <div class="error {error_class}" id="error">{error}</div>
+        <div class="hint">
+            请输入你在 <a href="https://incremental.icu/dash/settings/gpt" target="_blank">incremental.icu 网站的「GPT 授权码」页面</a>看到的 6 位验证码。
+        </div>
         <form method="post" action="/oauth/authorize">
             <input type="hidden" name="client_id" value="{client_id}">
             <input type="hidden" name="redirect_uri" value="{redirect_uri}">
@@ -132,87 +134,10 @@ LOGIN_PAGE = """<!DOCTYPE html>
             <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
             <input type="hidden" name="resource" value="{resource}">
             <input type="hidden" name="state" value="{state}">
-            <label>邮箱</label>
-            <input type="email" name="email" placeholder="your@email.com" value="{email}" required>
             <label>验证码</label>
-            <div class="captcha-row">
-                <input type="text" name="captcha" placeholder="输入验证码" required>
-                <button type="button" class="captcha-btn" onclick="sendCaptcha()">发送验证码</button>
-            </div>
+            <input type="text" name="captcha" placeholder="输入 6 位验证码" maxlength="6" autocomplete="one-time-code" required>
             <button type="submit" class="btn" style="margin-top:8px;">登录并授权</button>
         </form>
-    </div>
-    <script>
-        function sendCaptcha() {{
-            const email = document.querySelector('input[name="email"]').value;
-            if (!email) {{ alert('请先输入邮箱'); return; }}
-            // send-captcha 端点使用 query 参数（与主站一致），不能发 JSON body
-            fetch('/api/v1/auth/send-captcha?email=' + encodeURIComponent(email) + '&purpose=login', {{
-                method: 'POST'
-            }}).then(r => {{
-                if (r.ok) alert('验证码已发送到 ' + email);
-                else alert('发送失败');
-            }});
-        }}
-    </script>
-</body>
-</html>"""
-
-CONSENT_PAGE = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Incremental - 确认授权</title>
-    <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
-        .card {{ background: white; border-radius: 12px; padding: 40px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); width: 360px; text-align: center; }}
-        h1 {{ font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }}
-        p {{ color: #666; margin-bottom: 24px; font-size: 14px; }}
-        .scope-list {{ text-align: left; background: #f9f9f9; border-radius: 8px; padding: 16px; margin-bottom: 24px; }}
-        .scope-list li {{ margin: 8px 0; font-size: 14px; color: #333; }}
-        .btn-group {{ display: flex; gap: 12px; }}
-        .btn {{ flex: 1; padding: 12px; border-radius: 8px; font-size: 16px; cursor: pointer; border: none; }}
-        .btn-allow {{ background: #4A90D9; color: white; }}
-        .btn-allow:hover {{ background: #357ABD; }}
-        .btn-deny {{ background: #e8e8e8; color: #666; }}
-        .btn-deny:hover {{ background: #ddd; }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>确认授权</h1>
-        <p>你好 <strong>{user_name}</strong>，<strong>{client_name}</strong> 请求访问以下数据：</p>
-        <div class="scope-list">
-            <li>📊 运动活动数据（距离、时长、心率、配速等）</li>
-            <li>❤️ 心率数据（每日汇总、采样明细）</li>
-        </div>
-        <div class="btn-group">
-            <form method="post" action="/oauth/consent" style="flex:1;">
-                <input type="hidden" name="client_id" value="{client_id}">
-                <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                <input type="hidden" name="scope" value="{scope}">
-                <input type="hidden" name="user_id" value="{user_id}">
-                <input type="hidden" name="token" value="{token}">
-                <input type="hidden" name="code_challenge" value="{code_challenge}">
-                <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
-                <input type="hidden" name="resource" value="{resource}">
-                <input type="hidden" name="state" value="{state}">
-                <button type="submit" name="action" value="deny" class="btn btn-deny">拒绝</button>
-            </form>
-            <form method="post" action="/oauth/consent" style="flex:1;">
-                <input type="hidden" name="client_id" value="{client_id}">
-                <input type="hidden" name="redirect_uri" value="{redirect_uri}">
-                <input type="hidden" name="scope" value="{scope}">
-                <input type="hidden" name="user_id" value="{user_id}">
-                <input type="hidden" name="token" value="{token}">
-                <input type="hidden" name="code_challenge" value="{code_challenge}">
-                <input type="hidden" name="code_challenge_method" value="{code_challenge_method}">
-                <input type="hidden" name="resource" value="{resource}">
-                <input type="hidden" name="state" value="{state}">
-                <button type="submit" name="action" value="allow" class="btn btn-allow">允许</button>
-            </form>
-        </div>
     </div>
 </body>
 </html>"""
@@ -247,22 +172,6 @@ def _validate_redirect_uri(client_id: str, redirect_uri: str | None) -> str:
             return redirect_uri
 
     raise HTTPException(status_code=400, detail="redirect_uri 不在允许列表中")
-
-
-def _build_redirect_error(
-    redirect_uri: str, error: str, state: str | None = None
-) -> RedirectResponse:
-    """Build a redirect response with error and optional state.
-
-    使用 302 Found：OAuth 回调必须通过 GET 重定向返回（307 会保留 POST 方法，
-    导致 ChatGPT 等回调端点 400）。
-    """
-    params = {"error": error}
-    if state:
-        params["state"] = state
-    qs = urlencode(params)
-    separator = "&" if "?" in redirect_uri else "?"
-    return RedirectResponse(url=f"{redirect_uri}{separator}{qs}", status_code=302)
 
 
 # ---------- Endpoints ----------
@@ -315,7 +224,6 @@ def authorize_page(
     code_challenge: str | None = None,
     code_challenge_method: str | None = None,
     resource: str | None = None,
-    email: str | None = None,
     error: str | None = None,
 ):
     """Render the OAuth authorization login page (supports PKCE)."""
@@ -338,8 +246,8 @@ def authorize_page(
         code_challenge_method=code_challenge_method or "S256",
         resource=resource or "",
         state=state or "",
-        email=email or "",
         error=f"<p>{error}</p>" if error else "",
+        error_class="show" if error else "",
     )
     return HTMLResponse(html)
 
@@ -355,17 +263,20 @@ def authorize_login(
     code_challenge_method: str = Form("S256"),
     resource: str = Form(""),
     state: str = Form(""),
-    email: str = Form(""),
     captcha: str = Form(""),
     db: Session = Depends(get_db),
 ):
-    """Handle login form submission from the authorize page."""
+    """Handle login form submission from the authorize page.
+
+    用户输入在 incremental.icu「GPT 授权码」页面查看的 6 位验证码，
+    校验通过后直接签发 OAuth 授权码并重定向回客户端（不再需要邮件验证码与二次确认）。
+    """
     try:
         _validate_redirect_uri(client_id, redirect_uri)
     except HTTPException as e:
         return HTMLResponse(str(e.detail), status_code=400)
 
-    if not email or not captcha:
+    if not captcha:
         return authorize_page(
             client_id=client_id,
             redirect_uri=redirect_uri,
@@ -374,15 +285,14 @@ def authorize_login(
             code_challenge_method=code_challenge_method,
             resource=resource,
             state=state,
-            error="请填写邮箱和验证码",
-            email=email,
+            error="请输入验证码",
         )
 
-    from app.services.captcha_service import verify_captcha_logic
+    from app.services.oauth_verify_service import verify_code
 
     try:
-        verify_captcha_logic(db, email, captcha, "login")
-    except Exception:
+        record = verify_code(db, captcha)
+    except HTTPException:
         return authorize_page(
             client_id=client_id,
             redirect_uri=redirect_uri,
@@ -392,10 +302,9 @@ def authorize_login(
             resource=resource,
             state=state,
             error="验证码错误或已过期",
-            email=email,
         )
 
-    user = db.query(User).filter(User.user_email == email).first()
+    user = db.query(User).filter(User.id == record.user_id).first()
     if not user or not user.active:
         return authorize_page(
             client_id=client_id,
@@ -406,52 +315,7 @@ def authorize_login(
             resource=resource,
             state=state,
             error="用户不存在或已被禁用",
-            email=email,
         )
-
-    # Generate a one-time consent token (short-lived, not stored in DB)
-    consent_token = secrets.token_urlsafe(32)
-
-    html = CONSENT_PAGE.format(
-        client_name=OAUTH_CLIENTS.get(client_id, {}).get("client_name", client_id),
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scope=scope,
-        user_name=user.user_name or user.user_email,
-        user_id=user.id,
-        token=consent_token,
-        code_challenge=code_challenge,
-        code_challenge_method=code_challenge_method,
-        resource=resource,
-        state=state,
-    )
-    return HTMLResponse(html)
-
-
-@router.post("/consent")
-def authorize_consent(
-    client_id: str = Form(""),
-    redirect_uri: str = Form(""),
-    scope: str = Form("read"),
-    user_id: int = Form(0),
-    token: str = Form(""),
-    code_challenge: str = Form(""),
-    code_challenge_method: str = Form("S256"),
-    resource: str = Form(""),
-    state: str = Form(""),
-    action: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    """Handle user consent (allow or deny), storing PKCE params with the auth code."""
-    if action == "deny":
-        return _build_redirect_error(redirect_uri, "access_denied", state)
-
-    if action != "allow":
-        return HTMLResponse("无效操作", status_code=400)
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        return HTMLResponse("用户不存在", status_code=400)
 
     # Generate authorization code with PKCE support
     code = secrets.token_urlsafe(32)

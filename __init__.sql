@@ -570,3 +570,29 @@ COMMENT ON COLUMN public.t_oauth_authorization_codes.code_challenge_method IS 'P
 COMMENT ON COLUMN public.t_oauth_authorization_codes.expires_at IS '授权码过期时间（创建后 10 分钟有效）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.used IS '是否已使用（一次性使用，用完标记）';
 COMMENT ON COLUMN public.t_oauth_authorization_codes.created_at IS '记录创建时间';
+
+
+-- ── 用户 OAuth 授权验证码表（前端展示，OpenAI 授权页直接输入）──────
+
+CREATE TABLE IF NOT EXISTS public.t_user_oauth_verify_codes (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES t_users(id) ON DELETE CASCADE,
+    code VARCHAR(10) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_user_oauth_verify_codes_user
+ON public.t_user_oauth_verify_codes USING btree (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_t_user_oauth_verify_codes_code
+ON public.t_user_oauth_verify_codes USING btree (code);
+
+COMMENT ON TABLE public.t_user_oauth_verify_codes IS '用户 OAuth 授权验证码表：用户登录主站后查看的 6 位短码，在 OpenAI/ChatGPT 授权页输入即可完成 OAuth 授权';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.id IS '自增主键';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.user_id IS '用户 ID，关联 t_users 表';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.code IS '6 位一次性验证码明文';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.expires_at IS '验证码失效时间（生成后 5 分钟有效）';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.used IS '是否已使用（一次性使用，用完标记）';
+COMMENT ON COLUMN public.t_user_oauth_verify_codes.created_at IS '验证码生成时间';
