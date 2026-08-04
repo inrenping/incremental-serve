@@ -123,7 +123,7 @@ LOGIN_PAGE = """<!DOCTYPE html>
         <p>为 {client_name} 授权访问你的运动数据</p>
         <div class="error {error_class}" id="error">{error}</div>
         <div class="hint">
-            请输入你在 <a href="https://incremental.icu/dash/settings/gpt" target="_blank">incremental.icu 网站的「GPT 授权码」页面</a>看到的 6 位验证码。
+            请输入你在 <a href="https://incremental.icu/dash/gpt" target="_blank">incremental.icu 网站的「GPT 授权码」页面</a>看到的 6 位验证码。
         </div>
         <form method="post" action="/oauth/authorize">
             <input type="hidden" name="client_id" value="{client_id}">

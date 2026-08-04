@@ -1,6 +1,6 @@
 """OAuth 授权验证码服务。
 
-用户登录主站后，在 /dash/settings/gpt 页面查看 6 位验证码，
+用户登录主站后，在 /dash/gpt 页面查看 6 位验证码，
 在 OpenAI / ChatGPT 的 OAuth 授权页直接输入该验证码即可完成授权，
 不再依赖邮件验证码。
 """
