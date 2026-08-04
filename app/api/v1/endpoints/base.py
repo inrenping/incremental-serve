@@ -242,7 +242,11 @@ def get_activities_by_page_with_files(
 
     # 2. 构建基础查询，左连接 t_supabase_files
     query = (
-        db.query(BaseActivity, SupabaseFile.name.label("file_name"))
+        db.query(
+            BaseActivity,
+            SupabaseFile.name.label("file_name"),
+            SupabaseFile.size.label("file_size"),
+        )
         .outerjoin(
             SupabaseFile,
             text(
@@ -287,12 +291,13 @@ def get_activities_by_page_with_files(
 
     # 8. 组装返回数据，把 file_name 合并到 activity 的 dict 中
     data = []
-    for activity, file_name in result:
+    for activity, file_name, file_size in result:
         activity_dict = {
             column.name: getattr(activity, column.name)
             for column in activity.__table__.columns
         }
         activity_dict["file_name"] = file_name
+        activity_dict["file_size"] = file_size
         data.append(activity_dict)
 
     return {"status": "success", "data": data, "total": total}
@@ -596,6 +601,22 @@ def log_stream_generator(
             f"🛑 检测到客户端中断了连接，任务 [Task-{current_user.id}-{source_id}-{target_id}] 的流式推送已停止。"
         )
         raise
+
+
+@router.post("/cacheActivityFit/{activity_id}")
+def cache_activity_fit(
+    activity_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    将单个活动的 FIT 文件上传到对象存储，并记录到 t_supabase_files 表。
+    """
+    return base_activity_service.cache_activity_fit_to_storage(
+        activity_id=activity_id,
+        db=db,
+        current_user=current_user,
+    )
 
 
 @router.get("/batchUploadFitToStorage")

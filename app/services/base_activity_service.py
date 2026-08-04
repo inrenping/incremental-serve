@@ -217,6 +217,114 @@ def is_same_activity(
     return True
 
 
+def cache_activity_fit_to_storage(activity_id: int, db: Session, current_user: User) -> dict:
+    """
+    将单个活动的 FIT 文件上传到对象存储，并记录到 t_supabase_files 表。
+
+    Args:
+        activity_id: 活动 ID
+        db: 数据库会话
+        current_user: 当前用户
+    """
+    from app.models.supabase_file import SupabaseFile
+    from datetime import datetime, timezone
+
+    base_activity = (
+        db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
+    )
+    if not base_activity:
+        return {"status": "error", "message": "未找到对应的活动记录"}
+
+    # 使用源平台的 activity_id 生成 oss_key
+    oss_key = oss_service.generate_fit_oss_key(base_activity.activity_id)
+
+    # 检查存储中是否已存在
+    if oss_service.check_fit_file_exists(oss_key):
+        return {"status": "success", "message": "文件已缓存", "oss_key": oss_key, "cached": True}
+
+    # 获取连接配置
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.id == base_activity.base_connect_id)
+        .first()
+    )
+    base_connect = base_connect_service.perform_relogin(
+        base_connect.id, db, current_user
+    )
+
+    # 从源平台下载 FIT 文件
+    file_data = None
+    if base_activity.source_type == "coros":
+        file_response, _ = coros_service.download_coros_activity_response(
+            db, current_user, base_connect.id, activity_id
+        )
+        file_data = file_response.content
+    elif base_activity.source_type == "garmin":
+        file_data, _ = garmin_service.get_garmin_activity_download_info(
+            db, current_user, activity_id
+        )
+
+    if not file_data:
+        return {"status": "error", "message": "不支持的设备类型或下载失败"}
+
+    # 上传到对象存储
+    if not oss_service.upload_fit_bytes(file_data, oss_key):
+        return {"status": "error", "message": "上传到对象存储失败"}
+
+    # 获取上传后的文件元数据
+    client = oss_service.get_storage_client()
+    try:
+        head = client.client.head_object(Bucket=client.bucket, Key=oss_key)
+        file_size = head.get("ContentLength", len(file_data))
+        content_type = head.get("ContentType", "application/fit")
+        last_modified = head.get("LastModified")
+        etag = head.get("ETag", "").strip('"')
+    except Exception:
+        file_size = len(file_data)
+        content_type = "application/fit"
+        last_modified = datetime.now(timezone.utc)
+        etag = ""
+
+    # 写入或更新 t_supabase_files 表
+    now = datetime.now(timezone.utc)
+    existing_file = db.query(SupabaseFile).filter(SupabaseFile.key == oss_key).first()
+    if existing_file:
+        existing_file.size = file_size
+        existing_file.content_type = content_type
+        existing_file.last_modified = last_modified
+        existing_file.etag = etag
+        existing_file.bucket = client.bucket
+        existing_file.synced_at = now
+    else:
+        new_file = SupabaseFile(
+            key=oss_key,
+            name=f"{base_activity.activity_id}.fit",
+            size=file_size,
+            content_type=content_type,
+            last_modified=last_modified,
+            etag=etag,
+            bucket=client.bucket,
+            synced_at=now,
+        )
+        db.add(new_file)
+
+    db.commit()
+
+    log_operation_async(
+        user_id=current_user.id,
+        log_type="STORAGE_UPLOAD",
+        module_name="oss",
+        op_desc=f"缓存到存储: {base_activity.activity_id}.fit",
+    )
+
+    return {
+        "status": "success",
+        "message": "文件缓存成功",
+        "oss_key": oss_key,
+        "size": file_size,
+    }
+
+
 def batch_upload_fit_to_storage(db: Session, limit: int = None) -> dict:
     """
     批量上传所有 VIP 用户的 FIT 文件到对象存储。
