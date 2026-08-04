@@ -7,6 +7,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services.user_service import get_user_info, get_user_social_info
+from app.services.oauth_verify_service import get_or_create_code
 
 router = APIRouter()
 
@@ -51,6 +52,41 @@ def get_user_socials(
 ):
     """根据当前登录用户获取其社交登录信息。"""
     return get_user_social_info(db, current_user)
+
+
+@router.get("/oauth-code")
+def get_oauth_code(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    获取当前用户的 OAuth 授权验证码。
+
+    该验证码用于 OpenAI / ChatGPT 的授权页（/oauth/authorize）直接登录，
+    5 分钟内有效、一次性使用。用户已存在未过期且未使用的验证码时直接返回。
+    """
+    result = get_or_create_code(db, current_user, force=False)
+    return {
+        "code": result["code"],
+        "expires_at": result["expires_at"].isoformat(),
+        "expires_in": result["expires_in"],
+    }
+
+
+@router.post("/oauth-code")
+def rotate_oauth_code(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    """
+    强制轮换当前用户的 OAuth 授权验证码（旧的立即作废并生成新的）。
+
+    有频率限制：同一用户每分钟最多生成 3 次。
+    """
+    result = get_or_create_code(db, current_user, force=True)
+    return {
+        "code": result["code"],
+        "expires_at": result["expires_at"].isoformat(),
+        "expires_in": result["expires_in"],
+    }
 
 
 @router.delete("")
