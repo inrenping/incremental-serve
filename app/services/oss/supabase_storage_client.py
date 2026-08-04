@@ -143,6 +143,37 @@ class SupabaseStorageClient:
             print(f"上传文件到 Supabase Storage 失败: {key}, 错误: {e}")
             return False
 
+    @staticmethod
+    def _guess_content_type(key: str) -> str:
+        """根据文件扩展名推断 MIME 类型"""
+        ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+        mapping = {
+            "fit": "application/fit",
+            "json": "application/json",
+            "csv": "text/csv",
+            "txt": "text/plain",
+            "pdf": "application/pdf",
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "svg": "image/svg+xml",
+            "webp": "image/webp",
+            "zip": "application/zip",
+            "gz": "application/gzip",
+            "xml": "application/xml",
+            "html": "text/html",
+            "css": "text/css",
+            "js": "application/javascript",
+            "mp4": "video/mp4",
+            "mp3": "audio/mpeg",
+            "yaml": "application/x-yaml",
+            "yml": "application/x-yaml",
+            "toml": "application/toml",
+            "ico": "image/x-icon",
+        }
+        return mapping.get(ext, "application/octet-stream")
+
     def list_objects(self, prefix: str = "", max_keys: int = 1000) -> list[dict]:
         """
         列出存储桶中的对象
@@ -169,20 +200,15 @@ class SupabaseStorageClient:
             response = self.client.list_objects_v2(**kwargs)
 
             for obj in response.get("Contents", []):
-                # 获取更多元数据（content_type 等）
-                try:
-                    head = self.client.head_object(Bucket=self.bucket, Key=obj["Key"])
-                    content_type = head.get("ContentType", "")
-                except Exception:
-                    content_type = ""
-
-                objects.append({
-                    "key": obj["Key"],
-                    "size": obj.get("Size", 0),
-                    "last_modified": obj.get("LastModified"),
-                    "etag": obj.get("ETag", "").strip('"'),
-                    "content_type": content_type,
-                })
+                objects.append(
+                    {
+                        "key": obj["Key"],
+                        "size": obj.get("Size", 0),
+                        "last_modified": obj.get("LastModified"),
+                        "etag": obj.get("ETag", "").strip('"'),
+                        "content_type": self._guess_content_type(obj["Key"]),
+                    }
+                )
 
             if response.get("IsTruncated"):
                 continuation_token = response.get("NextContinuationToken")
