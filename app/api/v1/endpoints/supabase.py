@@ -139,6 +139,7 @@ def sync_supabase_files(
 @router.get("/files")
 def list_supabase_files(
     prefix: str = Query("", description="按文件 key 前缀过滤"),
+    name: str = Query("", description="按文件名模糊查询"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(50, ge=1, le=500, description="每页数量"),
     current_user: User = Depends(get_current_user),
@@ -150,6 +151,8 @@ def list_supabase_files(
     query = db.query(SupabaseFile)
     if prefix:
         query = query.filter(SupabaseFile.key.startswith(prefix))
+    if name:
+        query = query.filter(SupabaseFile.name.ilike(f"%{name}%"))
     query = query.order_by(SupabaseFile.key)
 
     total = query.count()
