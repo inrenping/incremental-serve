@@ -14,5 +14,5 @@ jobs:
       - name: 定时任务执行
         run: |
           echo "开始执行定时任务..."
-          RESPONSE=$(curl -s -X POST "https://i.incremental.icu/api/v1/task/cron-execute" -H "Content-Type: application/json")
+          RESPONSE=$(curl -s -X POST "https://i.incremental.icu/api/v1/task/cron-execute2" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
