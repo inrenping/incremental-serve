@@ -377,6 +377,73 @@ def download_coros_activity_response(
     return file_response, f"coros_activity_{activity.activity_id}.fit"
 
 
+def fetch_latest_coros_activities(config: BaseConnect, count: int) -> list[dict]:
+    """直接从高驰平台 API 拉取最新 count 条运动数据（不写入数据库）。
+
+    返回归一化后的活动字典列表，字段与 BaseActivity 对齐，便于后续比较。
+    """
+    base_url = get_team_api_base(str(config.region))
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "accesstoken": config.access_token,
+    }
+    query_url = f"{base_url}/activity/query?size={count}&pageNumber=1"
+    response = requests.get(query_url, headers=headers, timeout=10)
+    response.raise_for_status()
+    result = response.json()
+    if result.get("result") != "0000":
+        raise HTTPException(
+            status_code=400, detail=f"高驰 API 返回异常: {result.get('message')}"
+        )
+
+    activities = []
+    for item in (result.get("data") or {}).get("dataList") or []:
+        label_id = str(item.get("labelId")) if item.get("labelId") else None
+        if not label_id:
+            continue
+        start_ts = item.get("startTime")
+        activities.append(
+            {
+                "activity_id": label_id,
+                "source_type": "coros",
+                "activity_name": item.get("name") or "",
+                "sport_type_raw": item.get("sportType"),
+                "start_time_gmt": (
+                    datetime.fromtimestamp(start_ts, tz=timezone.utc)
+                    if start_ts
+                    else None
+                ),
+                "start_time_local": (
+                    datetime.fromtimestamp(start_ts) if start_ts else None
+                ),
+                "distance_meters": item.get("distance"),
+                "_raw": item,
+            }
+        )
+    return activities
+
+
+def download_coros_activity_fit(
+    config: BaseConnect, activity: dict
+) -> tuple[bytes, str]:
+    """根据平台原始活动数据直接下载高驰 FIT 文件，返回 (文件字节, 文件名)。"""
+    base_url = get_team_api_base(str(config.region))
+    meta_url = (
+        f"{base_url}/activity/detail/download?labelId={activity['activity_id']}"
+        f"&sportType={activity.get('sport_type_raw')}&fileType=4"
+    )
+    headers = {"accesstoken": config.access_token}
+    meta_res = requests.post(meta_url, headers=headers, timeout=10).json()
+    if meta_res.get("result") != "0000":
+        raise HTTPException(
+            status_code=400, detail=f"获取下载链接失败: {meta_res.get('message')}"
+        )
+    download_url = meta_res.get("data", {}).get("fileUrl")
+    file_response = requests.get(download_url, stream=True, timeout=30)
+    file_response.raise_for_status()
+    return file_response.content, f"coros_activity_{activity['activity_id']}.fit"
+
+
 def sync_garmin_to_coros(
     db: Session, current_user: User, garmin_activity_id: int, connect_id: int
 ) -> dict:
