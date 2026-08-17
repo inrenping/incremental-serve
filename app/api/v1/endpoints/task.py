@@ -136,6 +136,66 @@ def cron_execute(
     }
 
 
+@router.post("/cron-execute2")
+def cron_execute2(
+    db: Session = Depends(get_db),
+):
+    """
+    定时任务回调接口（无认证，仅内部/定时任务调用）。
+    遍历所有有效 task，若当前小时匹配 task.hour，则调用 /execute2 对应的
+    execute_task2 逻辑执行同步，并将结果 JSON 记录到 task_result 日志中。
+    """
+    import json
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    from app.api.v1.endpoints.base import TaskRequest, execute_task2
+
+    now_utc = datetime.now(timezone.utc)
+    tasks = db.query(Task).filter(Task.is_active == True).all()
+
+    executed_count = 0
+    for task in tasks:
+        user = db.query(User).filter(User.id == task.user_id).first()
+        if not user:
+            continue
+
+        # 根据用户的时区计算当前本地小时
+        user_tz = user.timezone or "Asia/Shanghai"
+        local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
+        if task.hour != local_hour:
+            continue
+
+        try:
+            result = execute_task2(
+                TaskRequest(
+                    source_id=task.connect_source_id,
+                    target_id=task.connect_target_id,
+                    count=10,
+                ),
+                current_user=user,
+                db=db,
+            )
+            messages = json.dumps(result, ensure_ascii=False)
+        except Exception as e:
+            messages = json.dumps(
+                {"status": "error", "message": f"执行异常: {str(e)}"},
+                ensure_ascii=False,
+            )
+
+        task_result = TaskResult(
+            task_id=task.id,
+            task_messages=messages,
+        )
+        db.add(task_result)
+        executed_count += 1
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"已检查 {len(tasks)} 个任务，匹配当前小时并执行了 {executed_count} 个",
+    }
+
+
 @router.get("/{task_id}")
 def get_task_results(
     task_id: int,

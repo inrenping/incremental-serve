@@ -433,7 +433,9 @@ def execute_task2(
             }
 
         # 2. 从 A 平台获取最新 count 条数据（不写入数据库）
-        source_activities = _fetch_platform_latest(source_config, request.count)
+        source_activities = _fetch_platform_latest(
+            source_config, request.count, db, current_user
+        )
         if not source_activities:
             return {
                 "status": "error",
@@ -451,7 +453,9 @@ def execute_task2(
             }
 
         # 4. 从 B 平台获取最新 count 条数据（不写入数据库）
-        target_activities = _fetch_platform_latest(target_config, request.count)
+        target_activities = _fetch_platform_latest(
+            target_config, request.count, db, current_user
+        )
         if not target_activities:
             return {
                 "status": "error",
@@ -485,7 +489,9 @@ def execute_task2(
         failures = []
         with ThreadPoolExecutor(max_workers=min(len(diff_source_only), 5)) as executor:
             future_map = {
-                executor.submit(_download_fit_file, source_config, item): item
+                executor.submit(
+                    _download_fit_file, source_config, item, db, current_user
+                ): item
                 for item in diff_source_only
             }
             for future in as_completed(future_map):
@@ -606,10 +612,14 @@ def execute_task2(
         return {"status": "error", "message": f"执行异常: {str(e)}"}
 
 
-def _fetch_platform_latest(config: BaseConnect, count: int) -> list[dict]:
+def _fetch_platform_latest(
+    config: BaseConnect, count: int, db: Session, current_user: User
+) -> list[dict]:
     """从平台 API 直接拉取最新 count 条运动数据（不写入数据库）。"""
     if config.source_type == "coros":
-        return coros_service.fetch_latest_coros_activities(config, count)
+        return coros_service.fetch_latest_coros_activities(
+            config, count, db, current_user
+        )
     if config.source_type.startswith("garmin"):
         return garmin_service.fetch_latest_garmin_activities(config, count)
     return []
@@ -653,10 +663,14 @@ def _diff_activities(
     return diff_source_only
 
 
-def _download_fit_file(source_config: BaseConnect, activity: dict) -> tuple[bytes, str]:
+def _download_fit_file(
+    source_config: BaseConnect, activity: dict, db: Session, current_user: User
+) -> tuple[bytes, str]:
     """根据平台原始数据下载 FIT 文件，返回 (文件字节, 文件名)。"""
     if activity["source_type"] == "coros":
-        return coros_service.download_coros_activity_fit(source_config, activity)
+        return coros_service.download_coros_activity_fit(
+            source_config, activity, db, current_user
+        )
     return garmin_service.download_garmin_activity_fit(
         source_config, activity["activity_id"]
     )
