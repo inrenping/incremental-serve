@@ -13,6 +13,7 @@ CREATE TABLE public.t_users (
 	active bool DEFAULT false NULL,
 	vip bool DEFAULT false NULL,
 	timezone varchar DEFAULT 'Asia/Shanghai'::character varying NULL,
+	yearly_target int4 DEFAULT 2026 NULL,
 	CONSTRAINT t_users_pkey PRIMARY KEY (id),
 	CONSTRAINT t_users_user_email_key UNIQUE (user_email),
 	CONSTRAINT t_users_user_name_key UNIQUE (user_name)
@@ -28,6 +29,7 @@ COMMENT ON COLUMN public.t_users.created_at IS '账号创建时间（带时区�
 COMMENT ON COLUMN public.t_users.updated_at IS '账号资料最后更新时间（带时区）';
 COMMENT ON COLUMN public.t_users.active IS '账号激活状态：true=已激活，false=未激活';
 COMMENT ON COLUMN public.t_users.vip IS '会员状态：true=VIP会员，false=普通用户';
+COMMENT ON COLUMN public.t_users.yearly_target IS '年跑量目标';
 
 
 -- public.t_base_connect definition
