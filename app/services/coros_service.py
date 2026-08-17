@@ -63,12 +63,12 @@ def test_coros_token(connect_id: int, db: Session, current_user: User) -> bool:
     page_size = 1
     page_number = 1
     query_url = f"{base_url}/activity/query?size={page_size}&pageNumber={page_number}"
-    response = requests.get(query_url, headers=headers, timeout=10)
-    print(f"测试coros token 有效性。{json.dumps(response.json())}")
     try:
-        data_json = response.json()
-        print(f"测试coros token 有效性。{json.dumps(data_json)}")
-    except ValueError:
+        response = requests.get(query_url, headers=headers, timeout=10)
+        print(f"测试coros token 有效性。{json.dumps(response.json())}")
+        return is_response_valid(response)
+    except Exception as e:
+        print(f"测试coros token 有效性异常: {e}")
         return False
 
 
@@ -377,11 +377,22 @@ def download_coros_activity_response(
     return file_response, f"coros_activity_{activity.activity_id}.fit"
 
 
-def fetch_latest_coros_activities(config: BaseConnect, count: int) -> list[dict]:
+def fetch_latest_coros_activities(
+    config: BaseConnect, count: int, db: Session, current_user: User
+) -> list[dict]:
     """直接从高驰平台 API 拉取最新 count 条运动数据（不写入数据库）。
 
     返回归一化后的活动字典列表，字段与 BaseActivity 对齐，便于后续比较。
     """
+    # 刷新 token，避免使用已失效的 access_token
+    config = base_connect_service.perform_relogin(
+        config.id, db=db, current_user=current_user
+    )
+    if not isinstance(config, BaseConnect):
+        raise HTTPException(
+            status_code=400, detail="高驰鉴权失败，token 刷新失败，请重新绑定账号"
+        )
+
     base_url = get_team_api_base(str(config.region))
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -424,9 +435,18 @@ def fetch_latest_coros_activities(config: BaseConnect, count: int) -> list[dict]
 
 
 def download_coros_activity_fit(
-    config: BaseConnect, activity: dict
+    config: BaseConnect, activity: dict, db: Session, current_user: User
 ) -> tuple[bytes, str]:
     """根据平台原始活动数据直接下载高驰 FIT 文件，返回 (文件字节, 文件名)。"""
+    # 刷新 token，避免使用已失效的 access_token
+    config = base_connect_service.perform_relogin(
+        config.id, db=db, current_user=current_user
+    )
+    if not isinstance(config, BaseConnect):
+        raise HTTPException(
+            status_code=400, detail="高驰鉴权失败，token 刷新失败，请重新绑定账号"
+        )
+
     base_url = get_team_api_base(str(config.region))
     meta_url = (
         f"{base_url}/activity/detail/download?labelId={activity['activity_id']}"
