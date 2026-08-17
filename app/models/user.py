@@ -28,3 +28,4 @@ class User(Base):
     active = Column(Boolean, default=False)
     vip = Column(Boolean, default=False)
     timezone = Column(String, default="Asia/Shanghai")
+    yearly_target = Column(Integer, nullable=True, comment="年跑量目标")
