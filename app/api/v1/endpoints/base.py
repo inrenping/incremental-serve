@@ -1046,7 +1046,8 @@ def get_running_total(
     )  # 月累计时间（小时）
 
     # 6. 计算目标和完成度（公里为单位）
-    yearly_target = 2026  # 年目标 2026 公里
+    # 年目标优先取用户设置，未设置时默认当年年份（如 2026 公里）
+    yearly_target = current_user.yearly_target or current_year
     monthly_target = yearly_target / 12  # 月目标
 
     # 转换为公里
