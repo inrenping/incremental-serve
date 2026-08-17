@@ -624,6 +624,69 @@ def get_garmin_activity_download_info(
         raise HTTPException(status_code=500, detail=f"佳明文件下载失败:{str(e)}")
 
 
+def fetch_latest_garmin_activities(config: BaseConnect, count: int) -> list[dict]:
+    """直接从佳明平台 API 拉取最新 count 条运动数据（不写入数据库）。
+
+    返回归一化后的活动字典列表，字段与 BaseActivity 对齐，便于后续比较。
+    """
+    if config.region and config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
+    api_path = "/activitylist-service/activities/search/activities"
+    activities_data = garth.connectapi(api_path, params={"start": 0, "limit": count})
+    if not activities_data or not isinstance(activities_data, list):
+        return []
+
+    activities = []
+    for item in activities_data:
+        activity_id = str(item.get("activityId")) if item.get("activityId") else None
+        if not activity_id:
+            continue
+        start_gmt = None
+        start_local = None
+        if item.get("startTimeGMT"):
+            start_gmt = datetime.fromisoformat(item["startTimeGMT"]).replace(
+                tzinfo=timezone.utc
+            )
+        if item.get("startTimeLocal"):
+            start_local = datetime.fromisoformat(item["startTimeLocal"])
+        activities.append(
+            {
+                "activity_id": activity_id,
+                "source_type": "garmin",
+                "activity_name": item.get("activityName") or "",
+                "sport_type_raw": (item.get("activityType") or {}).get("typeKey"),
+                "location_name": item.get("locationName"),
+                "start_time_gmt": start_gmt,
+                "start_time_local": start_local,
+                "distance_meters": item.get("distance"),
+                "_raw": item,
+            }
+        )
+    return activities
+
+
+def download_garmin_activity_fit(
+    config: BaseConnect, activity_id: str
+) -> tuple[bytes, str]:
+    """根据佳明活动 ID 直接下载 FIT 文件（自动解压 zip），返回 (文件字节, 文件名)。"""
+    if config.region and config.region.upper() == "CN":
+        garth.client.configure(domain="garmin.cn", ssl_verify=False)
+    else:
+        garth.client.configure(domain="garmin.com")
+    url = f"/download-service/files/activity/{activity_id}"
+    raw = garth.client.download(url)
+    if not raw:
+        raise Exception("下载内容为空")
+    if raw.startswith(b"PK"):
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            fit_names = [n for n in zf.namelist() if n.endswith(".fit")]
+            if fit_names:
+                raw = zf.read(fit_names[0])
+    return raw, f"{activity_id}.fit"
+
+
 def parse_garmin_upload_response(
     response: requests.Response,
 ) -> Tuple[str, Optional[dict]]:

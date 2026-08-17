@@ -2,7 +2,8 @@ import time
 import json
 from enum import Enum
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, text, func
@@ -385,7 +386,7 @@ def upload_activity_to_target(
 class TaskRequest(BaseModel):
     source_id: int
     target_id: int
-    count: int
+    count: int = 10
 
 
 @router.post("/execute")
@@ -405,6 +406,290 @@ def execute_task(
         ),
         media_type="text/event-stream",
     )
+
+
+@router.post("/execute2")
+def execute_task2(
+    request: TaskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    数据同步（不写库）：从源平台 A 拉取最新 count 条运动，与目标平台 B 最新 count 条比较，
+    将 A 有而 B 没有的运动下载 FIT 并上传到 B，执行完成后直接返回 JSON 汇总结果。
+    """
+    if request.source_id == request.target_id:
+        return {"status": "error", "message": "两个账号相同，不需要同步"}
+
+    try:
+        # 1. 源平台 A 鉴权（token 失效会自动刷新）
+        source_config = base_connect_service.perform_relogin(
+            request.source_id, db, current_user
+        )
+        if not isinstance(source_config, BaseConnect):
+            return {
+                "status": "error",
+                "message": f"源平台 {request.source_id} 鉴权失败",
+            }
+
+        # 2. 从 A 平台获取最新 count 条数据（不写入数据库）
+        source_activities = _fetch_platform_latest(source_config, request.count)
+        if not source_activities:
+            return {
+                "status": "error",
+                "message": f"源平台 {request.source_id} 获取最新 {request.count} 条数据失败",
+            }
+
+        # 3. 目标平台 B 鉴权（token 失效会自动刷新）
+        target_config = base_connect_service.perform_relogin(
+            request.target_id, db, current_user
+        )
+        if not isinstance(target_config, BaseConnect):
+            return {
+                "status": "error",
+                "message": f"目标平台 {request.target_id} 鉴权失败",
+            }
+
+        # 4. 从 B 平台获取最新 count 条数据（不写入数据库）
+        target_activities = _fetch_platform_latest(target_config, request.count)
+        if not target_activities:
+            return {
+                "status": "error",
+                "message": f"目标平台 {request.target_id} 获取最新 {request.count} 条数据失败",
+            }
+
+        # 5. 比较两个平台数据，找出 A 有而 B 没有的运动
+        diff_source_only = _diff_activities(source_activities, target_activities)
+        if not diff_source_only:
+            return {
+                "status": "success",
+                "message": "源平台没有需要上传的数据，完成同步",
+                "data": {
+                    "source_count": len(source_activities),
+                    "target_count": len(target_activities),
+                    "diff_count": 0,
+                    "uploaded": [],
+                    "failed": [],
+                },
+            }
+
+        # 6. 下载前确保全局 garth 客户端持有源平台（A）的凭证
+        #    （鉴权 B 时可能已把凭证切换到 B，需要切回 A 再下载）
+        if source_config.source_type.startswith("garmin"):
+            source_config = base_connect_service.perform_relogin(
+                source_config.id, db, current_user
+            )
+
+        # 7. 并发从 A 平台下载 FIT 文件
+        downloaded = []
+        failures = []
+        with ThreadPoolExecutor(max_workers=min(len(diff_source_only), 5)) as executor:
+            future_map = {
+                executor.submit(_download_fit_file, source_config, item): item
+                for item in diff_source_only
+            }
+            for future in as_completed(future_map):
+                item = future_map[future]
+                try:
+                    file_data, filename = future.result()
+                    downloaded.append(
+                        {
+                            "activity": item,
+                            "file_data": file_data,
+                            "filename": filename,
+                        }
+                    )
+                except Exception as e:
+                    failures.append(
+                        {
+                            "activity": item,
+                            "filename": "",
+                            "error": f"下载失败: {str(e)}",
+                        }
+                    )
+
+        # 8. 上传前确保全局 garth 客户端持有目标平台（B）的凭证
+        if target_config.source_type.startswith("garmin"):
+            target_config = base_connect_service.perform_relogin(
+                target_config.id, db, current_user
+            )
+
+        # 9. 并发上传到 B 平台
+        uploaded = []
+        with ThreadPoolExecutor(max_workers=min(len(downloaded), 5)) as executor:
+            future_map = {
+                executor.submit(
+                    _upload_file,
+                    db,
+                    current_user,
+                    target_config,
+                    item["file_data"],
+                    item["filename"],
+                ): item
+                for item in downloaded
+            }
+            for future in as_completed(future_map):
+                entry = future_map[future]
+                try:
+                    upload_result = future.result()
+                    if upload_result.get("status") in (
+                        "success",
+                        "SUCCESS",
+                        "DUPLICATE_ACTIVITY",
+                    ):
+                        uploaded.append(
+                            {
+                                "activity": entry["activity"],
+                                "filename": entry["filename"],
+                                "result": upload_result,
+                            }
+                        )
+                    else:
+                        failures.append(
+                            {
+                                "activity": entry["activity"],
+                                "filename": entry["filename"],
+                                "error": upload_result,
+                            }
+                        )
+                except Exception as e:
+                    failures.append(
+                        {
+                            "activity": entry["activity"],
+                            "filename": entry["filename"],
+                            "error": f"上传异常: {str(e)}",
+                        }
+                    )
+
+        # 10. 组装返回结果（保持源平台 A 的顺序）
+        order = {item["activity_id"]: idx for idx, item in enumerate(diff_source_only)}
+        uploaded.sort(key=lambda x: order.get(x["activity"]["activity_id"], 0))
+        failures.sort(key=lambda x: order.get(x["activity"]["activity_id"], 0))
+
+        return {
+            "status": "success",
+            "message": (
+                f"同步完成：需要同步 {len(diff_source_only)} 条，"
+                f"成功 {len(uploaded)} 条，失败 {len(failures)} 条"
+            ),
+            "data": {
+                "source_count": len(source_activities),
+                "target_count": len(target_activities),
+                "diff_count": len(diff_source_only),
+                "uploaded": [
+                    {
+                        "activity_id": item["activity"]["activity_id"],
+                        "activity_name": item["activity"].get("activity_name"),
+                        "start_time_local": _format_local_time(
+                            item["activity"].get("start_time_local")
+                        ),
+                        "filename": item["filename"],
+                        "result": item["result"],
+                    }
+                    for item in uploaded
+                ],
+                "failed": [
+                    {
+                        "activity_id": item["activity"]["activity_id"],
+                        "activity_name": item["activity"].get("activity_name"),
+                        "start_time_local": _format_local_time(
+                            item["activity"].get("start_time_local")
+                        ),
+                        "filename": item["filename"],
+                        "error": item["error"],
+                    }
+                    for item in failures
+                ],
+            },
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"执行异常: {str(e)}"}
+
+
+def _fetch_platform_latest(config: BaseConnect, count: int) -> list[dict]:
+    """从平台 API 直接拉取最新 count 条运动数据（不写入数据库）。"""
+    if config.source_type == "coros":
+        return coros_service.fetch_latest_coros_activities(config, count)
+    if config.source_type.startswith("garmin"):
+        return garmin_service.fetch_latest_garmin_activities(config, count)
+    return []
+
+
+def _is_same_activity_dict(source: dict, target: dict) -> bool:
+    """判断是否为同一条运动（开始时间差 ≤ 5 分钟 且 距离差 ≤ 5%），与旧逻辑保持一致。"""
+    if not source.get("start_time_gmt") or not target.get("start_time_gmt"):
+        return False
+    time_diff = abs(
+        (source["start_time_gmt"] - target["start_time_gmt"]).total_seconds()
+    )
+    if time_diff > 300:
+        return False
+    s_dist = float(source.get("distance_meters") or 0)
+    t_dist = float(target.get("distance_meters") or 0)
+    if s_dist > 0 or t_dist > 0:
+        max_dist = max(s_dist, t_dist)
+        if max_dist and abs(s_dist - t_dist) / max_dist > 0.05:
+            return False
+    return True
+
+
+def _diff_activities(
+    source_activities: list[dict], target_activities: list[dict]
+) -> list[dict]:
+    """比较两个平台的运动列表，返回源平台有而目标平台没有的运动。"""
+    matched_target_ids = set()
+    diff_source_only = []
+    for item_a in source_activities:
+        is_matched = False
+        for item_b in target_activities:
+            if item_b["activity_id"] in matched_target_ids:
+                continue
+            if _is_same_activity_dict(item_a, item_b):
+                matched_target_ids.add(item_b["activity_id"])
+                is_matched = True
+                break
+        if not is_matched:
+            diff_source_only.append(item_a)
+    return diff_source_only
+
+
+def _download_fit_file(source_config: BaseConnect, activity: dict) -> tuple[bytes, str]:
+    """根据平台原始数据下载 FIT 文件，返回 (文件字节, 文件名)。"""
+    if activity["source_type"] == "coros":
+        return coros_service.download_coros_activity_fit(source_config, activity)
+    return garmin_service.download_garmin_activity_fit(
+        source_config, activity["activity_id"]
+    )
+
+
+def _upload_file(
+    db: Session,
+    current_user: User,
+    target_config: BaseConnect,
+    file_data: bytes,
+    filename: str,
+) -> dict:
+    """将 FIT 文件上传到目标平台，返回平台结果。"""
+    if target_config.source_type == "coros":
+        return coros_service._upload_fit_zip_to_coros(
+            db, current_user, target_config, file_data, filename
+        )
+    if target_config.source_type.startswith("garmin"):
+        return garmin_service._upload_file_to_garmin(
+            current_user=current_user,
+            db=db,
+            target_config=target_config,
+            file_data=file_data,
+            filename=filename,
+        )
+    return {
+        "status": "error",
+        "message": f"不支持的目标平台类型: {target_config.source_type}",
+    }
+
+
+def _format_local_time(dt) -> str:
+    return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else ""
 
 
 def log_stream_generator(
