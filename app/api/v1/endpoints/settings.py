@@ -1,20 +1,12 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.models.base_activity import BaseActivity
 from app.models.user import User
 
 router = APIRouter()
-
-
-class OneClickSyncRequest(BaseModel):
-    """一键同步请求模型"""
-
-    source: str
-    target: str
 
 
 def download_garmin(id: int, current_user: User, db: Session):
