@@ -5,7 +5,6 @@ from typing import Optional
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, text, func
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -387,25 +386,6 @@ class TaskRequest(BaseModel):
     source_id: int
     target_id: int
     count: int = 10
-
-
-@router.post("/execute")
-def execute_task(
-    request: TaskRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """测试 SSE"""
-    print(
-        f"🔔 收到数据同步请求 -> user_id: {current_user.id}, source_id: {request.source_id}, target_id: {request.target_id}"
-    )
-
-    return StreamingResponse(
-        log_stream_generator(
-            request.source_id, request.target_id, request.count, current_user, db
-        ),
-        media_type="text/event-stream",
-    )
 
 
 @router.post("/execute2")
