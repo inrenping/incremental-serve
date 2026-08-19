@@ -1,5 +1,7 @@
 import os
+import io
 import json
+import zipfile
 import requests
 from app.services import base_connect_service
 
@@ -589,6 +591,14 @@ def _upload_fit_zip_to_coros(
     # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
     os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
     file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
+
+    # 兼容传入裸 FIT 字节的情况（一键同步传入的是解压后的 FIT），先打包成合法 ZIP
+    if not fit_data.startswith(b"PK"):
+        buf = io.BytesIO()
+        inner_name = f"{os.path.splitext(filename)[0]}.fit"
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(inner_name, fit_data)
+        fit_data = buf.getvalue()
 
     with open(file_path, "wb") as fb:
         fb.write(fit_data)
