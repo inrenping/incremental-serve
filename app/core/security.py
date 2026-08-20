@@ -1,3 +1,4 @@
+import base64
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -5,10 +6,9 @@ from typing import Any, Union, Optional, TYPE_CHECKING
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
-from jose.backends import rsa_backend
-from jose.utils import long_to_bytes
 from sqlalchemy.orm import Session
 import requests
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 # 导入配置和数据库依赖
 from app.core.config import settings
@@ -64,8 +64,19 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+    # 优先验证 Clerk JWT (RS256)；token 无效时回退旧版 HS256（过渡期兼容）
     try:
-        # 使用统一配置的 SECRET_KEY
+        user = _resolve_user_by_clerk(db, token.credentials, credentials_exception)
+        if not user.active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="用户账户已禁用"
+            )
+        return user
+    except (JWTError, ValueError):
+        pass
+
+    try:
+        # 旧版 token：使用统一配置的 SECRET_KEY
         payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
@@ -86,6 +97,12 @@ def get_current_user(
 
 
 # --- Clerk JWKS 客户端 ---
+
+
+def _b64url_to_int(value: str) -> int:
+    """将 JWK 中的 base64url 编码值转换为 int。"""
+    padding = "=" * (-len(value) % 4)
+    return int.from_bytes(base64.urlsafe_b64decode(value + padding), "big")
 
 
 class _ClerkJWKClient:
@@ -114,10 +131,10 @@ class _ClerkJWKClient:
         jwk = self._jwks.get(kid)
         if jwk is None:
             return None
-        # JWK RSA 参数 -> cryptography RSA public key
-        n = int.from_bytes(long_to_bytes(jwk["n"]), "big")
-        e = int.from_bytes(long_to_bytes(jwk["e"]), "big")
-        return rsa_backend.construct_public_key(n, e)
+        # JWK base64url 参数 -> cryptography RSA public key
+        n = _b64url_to_int(jwk["n"])
+        e = _b64url_to_int(jwk["e"])
+        return rsa.RSAPublicNumbers(e, n).public_key()
 
 
 _clerk_jwk_client = _ClerkJWKClient()
@@ -147,28 +164,21 @@ def _verify_clerk_jwt(token: str) -> dict:
 # --- 依赖项：通过 Clerk JWT 获取当前用户 ---
 
 
-def get_clerk_current_user(
-    db: Session = Depends(get_db),
-    token: HTTPAuthorizationCredentials = Depends(security),
+def _resolve_user_by_clerk(
+    db: Session,
+    credentials: str,
+    credentials_exception: HTTPException,
 ) -> "User":
-    """
-    验证 Clerk JWT 并返回对应用户。
-    过渡期同时支持 clerk_id 匹配和 email 匹配，老用户无需迁移即可登录。
-    """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="无效的 Clerk 认证凭据",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    """验证 Clerk JWT 并通过 clerk_id / email 解析用户。
 
-    try:
-        payload = _verify_clerk_jwt(token.credentials)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    - token 无效（签名/格式/issuer 错误）时抛出 JWTError/ValueError，由调用方决定是否回退旧版。
+    - token 有效但用户不存在时抛出 credentials_exception。
+    """
+    payload = _verify_clerk_jwt(credentials)
 
     clerk_sub: str = payload.get("sub")
     if not clerk_sub or not clerk_sub.startswith("user_"):
-        raise credentials_exception
+        raise ValueError("invalid clerk sub")
 
     # 优先用 clerk_id 匹配
     user = db.query(User).filter(User.clerk_id == clerk_sub).first()
@@ -184,9 +194,29 @@ def get_clerk_current_user(
 
     if user is None:
         raise credentials_exception
+    return user
+
+
+def get_clerk_current_user(
+    db: Session = Depends(get_db),
+    token: HTTPAuthorizationCredentials = Depends(security),
+) -> "User":
+    """
+    验证 Clerk JWT 并返回对应用户。
+    过渡期同时支持 clerk_id 匹配和 email 匹配，老用户无需迁移即可登录。
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无效的 Clerk 认证凭据",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        user = _resolve_user_by_clerk(db, token.credentials, credentials_exception)
+    except (JWTError, ValueError):
+        raise credentials_exception
     if not user.active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="用户账户已禁用"
         )
-
     return user
