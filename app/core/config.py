@@ -40,6 +40,7 @@ class Settings:
     # Clerk 认证
     CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
     CLERK_ISSUER = os.getenv("CLERK_ISSUER")  # e.g. https://xxx.clerk.accounts.dev
+    CLERK_WEBHOOK_SECRET = os.getenv("CLERK_WEBHOOK_SECRET")
 
 
 settings = Settings()

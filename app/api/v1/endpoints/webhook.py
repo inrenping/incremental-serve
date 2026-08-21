@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -93,7 +94,7 @@ async def clerk_webhook(request: Request):
 
 
 def _handle_user_created(db, data: dict):
-    """user.created: Clerk 新用户创建，按邮箱绑定到已有 t_users 记录。"""
+    """user.created: Clerk 新用户创建，按邮箱绑定到已有 t_users 记录，或创建新用户。"""
     clerk_id = data.get("id")
     if not clerk_id:
         return
@@ -112,10 +113,33 @@ def _handle_user_created(db, data: dict):
     if not email:
         return
 
+    # 提取用户名（first_name + last_name）
+    first_name = data.get("first_name", "")
+    last_name = data.get("last_name", "")
+    full_name = f"{first_name} {last_name}".strip()
+    if not full_name:
+        full_name = email.split("@")[0]  # 使用邮箱前缀作为用户名
+
     # 按 email 查找已有用户
     user = db.query(User).filter(User.user_email == email).first()
     if user:
+        # 已有用户，绑定 clerk_id
         user.clerk_id = clerk_id
+        if not user.user_name:
+            user.user_name = full_name
+        db.commit()
+    else:
+        # 新用户，创建记录
+        now = datetime.now(timezone.utc)
+        new_user = User(
+            clerk_id=clerk_id,
+            user_email=email,
+            user_name=full_name,
+            active=True,  # Clerk 已验证，直接激活
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(new_user)
         db.commit()
 
 
