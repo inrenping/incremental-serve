@@ -2,7 +2,6 @@ import os
 
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
-from garth.http import Client
 import io
 import zipfile
 import json
@@ -270,7 +269,6 @@ def refresh_garmin_access_token(
         raise HTTPException(status_code=404, detail="找不到有效的佳明配置或凭证字符串")
 
     try:
-        garth.client = Client()
         if garmin_config.region and str(garmin_config.region).upper() == "CN":
             garth.configure(domain="garmin.cn", ssl_verify=False)
         else:
