@@ -16,7 +16,7 @@ ecdsa==0.19.2
 executing==2.2.1
 fastapi==0.135.1
 garmin-fit-sdk==21.202.0
-garth==0.8.0
+garth==0.5.17
 google-api-core==2.31.0
 google-api-python-client==2.198.0
 google-auth==2.55.2
