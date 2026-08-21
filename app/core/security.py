@@ -6,6 +6,7 @@ from typing import Any, Union, Optional, TYPE_CHECKING
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 import requests
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -172,8 +173,10 @@ def _resolve_user_by_clerk(
     """验证 Clerk JWT 并通过 clerk_id / email 解析用户。
 
     - token 无效（签名/格式/issuer 错误）时抛出 JWTError/ValueError，由调用方决定是否回退旧版。
-    - token 有效但用户不存在时抛出 credentials_exception。
+    - token 有效但用户不存在时自动创建用户记录。
     """
+    from datetime import datetime, timezone
+
     payload = _verify_clerk_jwt(credentials)
 
     clerk_sub: str = payload.get("sub")
@@ -184,16 +187,53 @@ def _resolve_user_by_clerk(
     user = db.query(User).filter(User.clerk_id == clerk_sub).first()
 
     # 过渡期兜底：按 email 自动绑定（老用户无 clerk_id 时）
+    # 使用大小写不敏感匹配，因为邮箱地址不区分大小写
     if user is None:
         email = payload.get("email")
         if email:
-            user = db.query(User).filter(User.user_email == email).first()
+            user = (
+                db.query(User)
+                .filter(func.lower(User.user_email) == func.lower(email))
+                .first()
+            )
             if user:
                 user.clerk_id = clerk_sub
                 db.commit()
 
+    # 如果还是找不到用户，自动创建新用户
     if user is None:
-        raise credentials_exception
+        email = payload.get("email")
+        if not email:
+            raise credentials_exception
+
+        # 提取用户名
+        first_name = payload.get("first_name", "")
+        last_name = payload.get("last_name", "")
+        full_name = f"{first_name} {last_name}".strip()
+        if not full_name:
+            full_name = email.split("@")[0]
+
+        # 检查用户名是否已存在，如果存在则添加后缀
+        base_name = full_name
+        counter = 1
+        while db.query(User).filter(User.user_name == full_name).first():
+            full_name = f"{base_name}_{counter}"
+            counter += 1
+
+        # 创建新用户
+        now = datetime.now(timezone.utc)
+        user = User(
+            clerk_id=clerk_sub,
+            user_email=email,
+            user_name=full_name,
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
     return user
 
 
