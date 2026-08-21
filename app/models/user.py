@@ -16,6 +16,7 @@ class User(Base):
         updated_at (datetime): 记录最后一次更新的时间戳（带时区）。
         active (bool): 账户激活状态。默认为 False，需通过验证后激活。
         timezone (str): 用户时区，如 "Asia/Shanghai"。
+        clerk_id (str): Clerk 用户 ID（格式 user_xxx），用于 Clerk JWT 验证。
     """
 
     __tablename__ = "t_users"
@@ -29,3 +30,4 @@ class User(Base):
     vip = Column(Boolean, default=False)
     timezone = Column(String, default="Asia/Shanghai")
     yearly_target = Column(Integer, nullable=True, comment="年跑量目标")
+    clerk_id = Column(String(64), unique=True, nullable=True, comment="Clerk 用户 ID")

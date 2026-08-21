@@ -37,5 +37,9 @@ class Settings:
     GIT_HUB_CLIENT_ID = os.getenv("GIT_HUB_CLIENT_ID")
     GIT_HUB_CLIENT_SECRET = os.getenv("GIT_HUB_CLIENT_SECRET")
 
+    # Clerk 认证
+    CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
+    CLERK_ISSUER = os.getenv("CLERK_ISSUER")  # e.g. https://xxx.clerk.accounts.dev
+
 
 settings = Settings()

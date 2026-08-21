@@ -228,7 +228,7 @@ def get_garmin_secret_string(
             op_desc="佳明模拟登录",
         ) as ctx:
             garth.login(account, raw_password)
-            secret_string = garth.client.dumps()
+            secret_string = garth.client.dump()
             print(f"佳明 { region } 模拟登录成功")
             ctx["response"] = secret_string
 
@@ -278,12 +278,12 @@ def refresh_garmin_access_token(
 
         # print(f"secret_string = {garmin_config.secret_string}")
 
-        garth.client.loads(garmin_config.secret_string)
+        garth.client.load(garmin_config.secret_string)
 
         if garth.client.oauth2_token:
             # 刷新 OAuth2 令牌
             garth.client.refresh_oauth2()
-            new_secret_string = garth.client.dumps()
+            new_secret_string = garth.client.dump()
 
             # print(f"garmin 登录成功:{ new_secret_string }")
 
