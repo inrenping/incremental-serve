@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import func
 
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -120,8 +121,10 @@ def _handle_user_created(db, data: dict):
     if not full_name:
         full_name = email.split("@")[0]  # 使用邮箱前缀作为用户名
 
-    # 按 email 查找已有用户
-    user = db.query(User).filter(User.user_email == email).first()
+    # 按 email 查找已有用户（大小写不敏感）
+    user = (
+        db.query(User).filter(func.lower(User.user_email) == func.lower(email)).first()
+    )
     if user:
         # 已有用户，绑定 clerk_id
         user.clerk_id = clerk_id
@@ -144,14 +147,14 @@ def _handle_user_created(db, data: dict):
 
 
 def _handle_user_updated(db, data: dict):
-    """user.updated: 同步 Clerk 侧的 email 和 name 变更。"""
+    """user.updated: 同步 Clerk 侧的 email 和 name 变更，或创建新用户。"""
     clerk_id = data.get("id")
     if not clerk_id:
         return
 
     user = db.query(User).filter(User.clerk_id == clerk_id).first()
     if not user:
-        # 还没绑定，尝试按 email 绑定
+        # 还没绑定，尝试按 email 绑定（大小写不敏感）
         email_addresses = data.get("email_addresses", [])
         primary_email_id = data.get("primary_email_address_id")
         email = None
@@ -160,11 +163,54 @@ def _handle_user_updated(db, data: dict):
                 email = addr.get("email_address")
                 break
         if email:
-            user = db.query(User).filter(User.user_email == email).first()
+            user = (
+                db.query(User)
+                .filter(func.lower(User.user_email) == func.lower(email))
+                .first()
+            )
             if user:
                 user.clerk_id = clerk_id
 
+    # 如果还是找不到用户，创建新用户
     if not user:
+        email_addresses = data.get("email_addresses", [])
+        primary_email_id = data.get("primary_email_address_id")
+        email = None
+        for addr in email_addresses:
+            if addr.get("id") == primary_email_id:
+                email = addr.get("email_address")
+                break
+        if not email and email_addresses:
+            email = email_addresses[0].get("email_address")
+
+        if not email:
+            return
+
+        # 提取用户名
+        first_name = data.get("first_name", "")
+        last_name = data.get("last_name", "")
+        full_name = f"{first_name} {last_name}".strip()
+        if not full_name:
+            full_name = email.split("@")[0]
+
+        # 检查用户名是否已存在
+        base_name = full_name
+        counter = 1
+        while db.query(User).filter(User.user_name == full_name).first():
+            full_name = f"{base_name}_{counter}"
+            counter += 1
+
+        now = datetime.now(timezone.utc)
+        user = User(
+            clerk_id=clerk_id,
+            user_email=email,
+            user_name=full_name,
+            active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(user)
+        db.commit()
         return
 
     # 同步 email（如果变更）
