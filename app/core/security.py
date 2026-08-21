@@ -165,6 +165,24 @@ def _verify_clerk_jwt(token: str) -> dict:
 # --- 依赖项：通过 Clerk JWT 获取当前用户 ---
 
 
+def _get_clerk_user_info(user_id: str) -> dict:
+    """使用 Clerk Backend API 获取用户信息。"""
+    if not settings.CLERK_SECRET_KEY:
+        return {}
+
+    url = f"https://api.clerk.com/v1/users/{user_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.CLERK_SECRET_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=5.0)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return {}
+
+
 def _resolve_user_by_clerk(
     db: Session,
     credentials: str,
@@ -186,29 +204,46 @@ def _resolve_user_by_clerk(
     # 优先用 clerk_id 匹配
     user = db.query(User).filter(User.clerk_id == clerk_sub).first()
 
+    # 如果没有找到用户，通过 Clerk Backend API 获取用户信息
+    email = None
+    first_name = ""
+    last_name = ""
+
+    if user is None:
+        clerk_user = _get_clerk_user_info(clerk_sub)
+        if clerk_user:
+            # 获取主邮箱
+            email_addresses = clerk_user.get("email_addresses", [])
+            primary_email_id = clerk_user.get("primary_email_id")
+            for addr in email_addresses:
+                if addr.get("id") == primary_email_id:
+                    email = addr.get("email_address")
+                    break
+            if not email and email_addresses:
+                email = email_addresses[0].get("email_address")
+
+            # 获取用户名
+            first_name = clerk_user.get("first_name", "") or ""
+            last_name = clerk_user.get("last_name", "") or ""
+
     # 过渡期兜底：按 email 自动绑定（老用户无 clerk_id 时）
     # 使用大小写不敏感匹配，因为邮箱地址不区分大小写
-    if user is None:
-        email = payload.get("email")
-        if email:
-            user = (
-                db.query(User)
-                .filter(func.lower(User.user_email) == func.lower(email))
-                .first()
-            )
-            if user:
-                user.clerk_id = clerk_sub
-                db.commit()
+    if user is None and email:
+        user = (
+            db.query(User)
+            .filter(func.lower(User.user_email) == func.lower(email))
+            .first()
+        )
+        if user:
+            user.clerk_id = clerk_sub
+            db.commit()
 
     # 如果还是找不到用户，自动创建新用户
     if user is None:
-        email = payload.get("email")
         if not email:
             raise credentials_exception
 
         # 提取用户名
-        first_name = payload.get("first_name", "")
-        last_name = payload.get("last_name", "")
         full_name = f"{first_name} {last_name}".strip()
         if not full_name:
             full_name = email.split("@")[0]
