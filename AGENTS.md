@@ -92,6 +92,10 @@ Pull requests trigger AI review when commented with: `/gemini-review`
 
 Located in [app/services/](file:///home/inrenping/projects/github/blunt-serv/app/services)
 
+## Working Principles
+
+**Before executing any actual operations (modifying code, creating files, running commands, etc.), you must first confirm with the user. Only proceed after receiving explicit approval.** Read-only operations such as analysis, reading, and searching do not require confirmation.
+
 ## Development Workflow
 
 1. Keep code consistent with existing patterns

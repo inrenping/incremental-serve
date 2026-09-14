@@ -15,7 +15,11 @@ def pull_full_activities(
     current_user: User, db: Session, connect_id: int, incremental: bool = False
 ) -> dict:
     """全量/增量拉取数据。"""
-    base_connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
+    base_connect = (
+        db.query(BaseConnect)
+        .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
+        .first()
+    )
     if not base_connect:
         return {"status": "error", "message": "未找到授权配置，请先登录获取授权。"}
     # 确认 Token 有效性
@@ -54,7 +58,9 @@ def download_activity(activity_id: int, db: Session, current_user: User):
     if not activity_id:
         return {"status": "error", "message": "缺少 activity_id 参数，无法下载。"}
     base_activity = (
-        db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
+        db.query(BaseActivity)
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
+        .first()
     )
     if not base_activity:
         return {"status": "error", "message": "未找到对应的活动记录"}
@@ -84,7 +90,10 @@ def download_activity(activity_id: int, db: Session, current_user: User):
     # 从源平台下载
     base_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.id == base_activity.base_connect_id)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id == base_activity.base_connect_id,
+        )
         .first()
     )
     base_connect = base_connect_service.perform_relogin(
@@ -130,17 +139,29 @@ def upload_activity_to_target(
 ):
     """把运动数据同步到指定账号"""
     source_activity = (
-        db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
+        db.query(BaseActivity)
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
+        .first()
     )
     if not source_activity:
         return {"status": "error", "message": "未找到对应的活动记录"}
     source_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.id == source_activity.base_connect_id)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id == source_activity.base_connect_id,
+        )
         .first()
     )
+    if not source_connect:
+        return {"status": "error", "message": "未找到对应的源账号"}
     target_connect = (
-        db.query(BaseConnect).filter(BaseConnect.id == target_connect_id).first()
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id == target_connect_id,
+        )
+        .first()
     )
     try:
         if not target_connect:
@@ -217,7 +238,9 @@ def is_same_activity(
     return True
 
 
-def cache_activity_fit_to_storage(activity_id: int, db: Session, current_user: User) -> dict:
+def cache_activity_fit_to_storage(
+    activity_id: int, db: Session, current_user: User
+) -> dict:
     """
     将单个活动的 FIT 文件上传到对象存储，并记录到 t_supabase_files 表。
 
@@ -230,7 +253,9 @@ def cache_activity_fit_to_storage(activity_id: int, db: Session, current_user: U
     from datetime import datetime, timezone
 
     base_activity = (
-        db.query(BaseActivity).filter(BaseActivity.id == activity_id).first()
+        db.query(BaseActivity)
+        .filter(BaseActivity.user_id == current_user.id, BaseActivity.id == activity_id)
+        .first()
     )
     if not base_activity:
         return {"status": "error", "message": "未找到对应的活动记录"}
@@ -240,12 +265,20 @@ def cache_activity_fit_to_storage(activity_id: int, db: Session, current_user: U
 
     # 检查存储中是否已存在
     if oss_service.check_fit_file_exists(oss_key):
-        return {"status": "success", "message": "文件已缓存", "oss_key": oss_key, "cached": True}
+        return {
+            "status": "success",
+            "message": "文件已缓存",
+            "oss_key": oss_key,
+            "cached": True,
+        }
 
     # 获取连接配置
     base_connect = (
         db.query(BaseConnect)
-        .filter(BaseConnect.id == base_activity.base_connect_id)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id == base_activity.base_connect_id,
+        )
         .first()
     )
     base_connect = base_connect_service.perform_relogin(
