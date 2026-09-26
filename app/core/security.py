@@ -30,12 +30,27 @@ security = HTTPBearer()
 # --- Token 生成与解码 ---
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    data: dict,
+    expires_delta: Optional[timedelta] = None,
+    audience: Optional[str] = None,
+) -> str:
+    """签发 JWT。
+
+    Args:
+        data: 需要编码进 payload 的自定义字段（调用方通常传 {"sub": user_id}）。
+        expires_delta: 有效期，默认 ACCESS_TOKEN_EXPIRE_MINUTES。
+        audience: RFC 8707 的受众标识。传入时会写入 `aud` 声明；
+            不传则保持与历史签发一致（不含 aud），避免影响存量令牌。
+            MCP/OAuth 场景必须传 settings.MCP_RESOURCE_URI。
+    """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     to_encode.update({"exp": expire})
+    if audience:
+        to_encode.update({"aud": audience})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 

@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.oauth_code import OAuthAuthorizationCode
 from app.models.user import User
@@ -36,12 +37,12 @@ OAUTH_AUTH_CODE_EXPIRE_MINUTES = 10
 OAUTH_REFRESH_TOKEN_EXPIRE_DAYS = 400
 
 
-class TokenRequest(BaseModel):
-    grant_type: str = "authorization_code"
-    code: str
-    redirect_uri: str | None = None
-    client_id: str | None = None
-    code_verifier: str | None = None
+# token 端点的参数不再用固定的 Pydantic/Form 模型描述：各授权类型的必填字段不同，
+# 统一在 endpoint 内按 grant_type 解析与校验（见 _exchange_* 分支）。
+
+OAUTH_RESOURCE_URI = settings.MCP_RESOURCE_URI
+# 本服务唯一支持的 scope（与 well_known 的 scopes_supported 保持一致）
+OAUTH_DEFAULT_SCOPE = "read"
 
 
 class TokenResponse(BaseModel):
@@ -343,62 +344,56 @@ def authorize_login(
     return RedirectResponse(url=f"{redirect_uri}{separator}{qs}", status_code=302)
 
 
-@router.post("/token", response_model=TokenResponse)
-def exchange_token(
-    grant_type: str = Form("authorization_code"),
-    code: str = Form(...),
-    redirect_uri: str | None = Form(None),
-    client_id: str | None = Form(None),
-    code_verifier: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
-    """Exchange an authorization code (with PKCE verification) for access + refresh tokens.
+def _oauth_error(status_code: int, error: str, description: str) -> JSONResponse:
+    """RFC 6749 §5.2 标准错误响应体。
 
-    OAuth 2.0 规范要求 token 端点接受 application/x-www-form-urlencoded 表单
-    （RFC 6749 §3.2），OpenAI/ChatGPT 等客户端均以表单方式 POST，而非 JSON。
+    token 端点必须返回 {error, error_description}，而不是 FastAPI 默认的
+    {"detail": ...}，否则部分 OAuth 客户端无法识别失败原因。
     """
-    now = datetime.now(timezone.utc)
-
-    auth_code = (
-        db.query(OAuthAuthorizationCode)
-        .filter(
-            OAuthAuthorizationCode.code == code,
-            OAuthAuthorizationCode.used == False,
-            OAuthAuthorizationCode.expires_at > now,
-        )
-        .first()
+    return JSONResponse(
+        status_code=status_code,
+        content={"error": error, "error_description": description},
     )
 
-    if not auth_code:
-        raise HTTPException(status_code=400, detail="授权码无效或已过期")
 
-    # PKCE verification — required when code_challenge was stored
-    if auth_code.code_challenge:
-        if not code_verifier:
-            raise HTTPException(
-                status_code=400, detail="缺少 code_verifier（PKCE 要求）"
-            )
-        if not _verify_pkce(
-            code_verifier,
-            auth_code.code_challenge,
-            auth_code.code_challenge_method or "S256",
-        ):
-            raise HTTPException(status_code=400, detail="code_verifier 无效")
+async def _read_token_params(request: Request) -> dict[str, str]:
+    """读取 token 请求参数。
 
-    # Mark code as used (one-time use)
-    auth_code.used = True
+    RFC 6749 §3.2 要求接受 application/x-www-form-urlencoded，这里作为默认；
+    同时兼容 application/json，避免部分客户端因 Content-Type 不同而拿到 422。
+    """
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return {k: v for k, v in payload.items() if v is not None}
 
-    user = db.query(User).filter(User.id == auth_code.user_id).first()
-    if not user or not user.active:
-        raise HTTPException(status_code=400, detail="用户不存在或已被禁用")
+    form = await request.form()
+    return {k: v for k, v in form.items() if v is not None}
 
-    # Issue long-lived access token (365 days) — sub = user.id only
+
+def _missing(params: dict, *names: str) -> list[str]:
+    """返回 params 中缺失或为空的字段名。"""
+    return [name for name in names if not params.get(name)]
+
+
+def _issue_oauth_tokens(
+    db: Session, user: User, scope: str, audience: str | None
+) -> TokenResponse:
+    """签发 OAuth access_token（365 天）+ refresh_token（400 天）。
+
+    access_token 始终带上 aud（RFC 8707），供 incremental-mcp 校验受众。
+    """
+    now = datetime.now(timezone.utc)
     access_token = create_access_token(
         data={"sub": str(user.id)},
         expires_delta=timedelta(days=OAUTH_ACCESS_TOKEN_EXPIRE_DAYS),
+        audience=audience or OAUTH_RESOURCE_URI,
     )
-
-    # Issue refresh token (400 days)
     refresh_token_str = create_refresh_token()
     refresh_record = UserRefreshToken(
         user_id=user.id,
@@ -409,11 +404,136 @@ def exchange_token(
     )
     db.add(refresh_record)
     db.commit()
-
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
         expires_in=OAUTH_ACCESS_TOKEN_EXPIRE_DAYS * 86400,
         refresh_token=refresh_token_str,
-        scope=auth_code.scope or "read",
+        scope=scope or OAUTH_DEFAULT_SCOPE,
+    )
+
+
+def _exchange_authorization_code(
+    db: Session, params: dict, audience: str | None
+) -> TokenResponse | JSONResponse:
+    """authorization_code 授权：需 code + code_verifier + redirect_uri + client_id。"""
+    missing = _missing(params, "code", "code_verifier", "redirect_uri", "client_id")
+    if missing:
+        return _oauth_error(
+            400, "invalid_request", f"缺少必填参数: {', '.join(missing)}"
+        )
+
+    code = params["code"]
+    code_verifier = params["code_verifier"]
+    redirect_uri = params["redirect_uri"]
+    client_id = params["client_id"]
+
+    now = datetime.now(timezone.utc)
+    auth_code = (
+        db.query(OAuthAuthorizationCode)
+        .filter(
+            OAuthAuthorizationCode.code == code,
+            OAuthAuthorizationCode.used == False,
+            OAuthAuthorizationCode.expires_at > now,
+        )
+        .first()
+    )
+    if not auth_code:
+        return _oauth_error(400, "invalid_grant", "授权码无效或已过期")
+
+    # 校验 client_id / redirect_uri 与授权阶段一致，防止授权码被第三方冒用
+    if auth_code.client_id != client_id:
+        return _oauth_error(400, "invalid_client", "client_id 与授权码不匹配")
+    if auth_code.redirect_uri and auth_code.redirect_uri != redirect_uri:
+        return _oauth_error(400, "invalid_grant", "redirect_uri 与授权码不匹配")
+
+    # PKCE 校验（S256）
+    if auth_code.code_challenge:
+        if not _verify_pkce(
+            code_verifier,
+            auth_code.code_challenge,
+            auth_code.code_challenge_method or "S256",
+        ):
+            return _oauth_error(400, "invalid_grant", "code_verifier 无效")
+
+    user = db.query(User).filter(User.id == auth_code.user_id).first()
+    if not user or not user.active:
+        return _oauth_error(400, "invalid_grant", "用户不存在或已被禁用")
+
+    # 授权码一次性使用
+    auth_code.used = True
+    db.commit()
+
+    return _issue_oauth_tokens(db, user, auth_code.scope or OAUTH_DEFAULT_SCOPE, audience)
+
+
+def _exchange_refresh_token(
+    db: Session, params: dict, audience: str | None
+) -> TokenResponse | JSONResponse:
+    """refresh_token 授权：只需 refresh_token，client_id 可选。
+
+    校验通过后签发新 access_token 并轮换 refresh_token（旧 token 作废）。
+    scope 沿用原授权：t_user_refresh_tokens 未持久化 scope，而本服务仅支持
+    唯一 scope=read，故刷新时保持 read 语义不变。
+    """
+    missing = _missing(params, "refresh_token")
+    if missing:
+        return _oauth_error(
+            400, "invalid_request", f"缺少必填参数: {', '.join(missing)}"
+        )
+
+    now = datetime.now(timezone.utc)
+    record = (
+        db.query(UserRefreshToken)
+        .filter(
+            UserRefreshToken.refresh_token == params["refresh_token"],
+            UserRefreshToken.revoked == False,
+            UserRefreshToken.expires_time > now,
+        )
+        .first()
+    )
+    if not record:
+        return _oauth_error(400, "invalid_grant", "refresh_token 无效或已过期")
+
+    user = db.query(User).filter(User.id == record.user_id).first()
+    if not user or not user.active:
+        return _oauth_error(400, "invalid_grant", "用户不存在或已被禁用")
+
+    # Rotation：旧 refresh_token 立即作废，防重放
+    record.revoked = True
+    db.commit()
+
+    return _issue_oauth_tokens(db, user, OAUTH_DEFAULT_SCOPE, audience)
+
+
+@router.post("/token", response_model=TokenResponse)
+async def exchange_token(
+    request: Request, db: Session = Depends(get_db)
+):
+    """OAuth 2.1 token 端点，支持 authorization_code + PKCE 与 refresh_token 两种授权。
+
+    请求体必须能被 form-encoded 客户端使用（RFC 6749 §3.2），同时兼容 JSON。
+    字段要求按 grant_type 分支校验，不再把 code 当成无条件必填。
+    """
+    params = await _read_token_params(request)
+    grant_type = (params.get("grant_type") or "authorization_code").strip()
+
+    # RFC 8707 resource：可选接收；一旦传入必须等于本服务的 MCP resource 标识，
+    # 并将其写入令牌 aud，使资源服务器可校验受众。
+    resource = params.get("resource")
+    audience: str | None = None
+    if resource:
+        if resource != OAUTH_RESOURCE_URI:
+            return _oauth_error(
+                400, "invalid_target", f"不支持的 resource: {resource}"
+            )
+        audience = resource
+
+    if grant_type == "authorization_code":
+        return _exchange_authorization_code(db, params, audience)
+    if grant_type == "refresh_token":
+        return _exchange_refresh_token(db, params, audience)
+
+    return _oauth_error(
+        400, "unsupported_grant_type", f"不支持的 grant_type: {grant_type}"
     )
