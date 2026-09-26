@@ -4,33 +4,20 @@ Authorization Server Metadata (RFC 8414)，用于 ChatGPT 等 OAuth 客户端自
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.core.config import settings
+
 router = APIRouter(tags=["OAuth Discovery"])
 
-# --- 统一用该域名作为 resource / issuer ---
-CANONICAL_ORIGIN = "https://incremental.icu"
+# --- 站点 canonical 域名 ---
+CANONICAL_ORIGIN = settings.CANONICAL_ORIGIN
+# --- MCP 服务的 resource 标识（RFC 8707）---
+# 必须与 incremental-mcp 侧的 mcp_resource 完全一致，且与令牌 aud 同值。
+# 根路径元数据原本返回 CANONICAL_ORIGIN，与 /mcp 下的元数据不一致，
+# 会破坏 RFC 8707 的资源匹配，这里统一为 MCP 端点 URI。
+MCP_RESOURCE_URI = settings.MCP_RESOURCE_URI
 
 
-@router.get("/.well-known/oauth-protected-resource")
-def protected_resource_metadata():
-    """RFC 9728 Protected Resource Metadata — 告诉客户端在哪里找授权服务器。"""
-    return JSONResponse(
-        {
-            "resource": CANONICAL_ORIGIN,
-            "authorization_servers": [CANONICAL_ORIGIN],
-            "scopes_supported": ["read"],
-            "bearer_methods_supported": ["header"],
-            "resource_documentation": "https://incremental.icu/docs",
-        }
-    )
-
-
-@router.get("/.well-known/oauth-protected-resource/{path:path}")
-def protected_resource_metadata_path(path: str):
-    """RFC 9728 Path-based PRM — MCP 客户端会尝试
-    {origin}/.well-known/oauth-protected-resource{mcp_path}（如 .../mcp）。
-    resource 字段需与 MCP 服务 URL 一致。
-    """
-    resource = f"{CANONICAL_ORIGIN}/{path}".rstrip("/")
+def _protected_resource_metadata(resource: str) -> JSONResponse:
     return JSONResponse(
         {
             "resource": resource,
@@ -40,6 +27,29 @@ def protected_resource_metadata_path(path: str):
             "resource_documentation": "https://incremental.icu/docs",
         }
     )
+
+
+@router.get("/.well-known/oauth-protected-resource")
+def protected_resource_metadata():
+    """RFC 9728 Protected Resource Metadata — 告诉客户端在哪里找授权服务器。
+
+    根路径发现的客户端同样需要拿到 MCP endpoint 作为 resource，
+    以便与 401 的 WWW-Authenticate 所指向的 resource 保持一致。
+    """
+    return _protected_resource_metadata(MCP_RESOURCE_URI)
+
+
+@router.get("/.well-known/oauth-protected-resource/{path:path}")
+def protected_resource_metadata_path(path: str):
+    """RFC 9728 Path-based PRM — MCP 客户端会尝试
+    {origin}/.well-known/oauth-protected-resource{mcp_path}（如 .../mcp）。
+    resource 字段需与 MCP 服务 URL 一致。
+    """
+    resource = f"{CANONICAL_ORIGIN}/{path}".rstrip("/")
+    # 对 MCP 路径直接返回统一常量，避免大小写/尾斜杠差异导致不一致
+    if resource.rstrip("/") == CANONICAL_ORIGIN + "/mcp":
+        resource = MCP_RESOURCE_URI
+    return _protected_resource_metadata(resource)
 
 
 def _authorization_server_metadata() -> dict:

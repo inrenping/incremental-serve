@@ -12,6 +12,13 @@ load_dotenv(env_path)
 class Settings:
     ENV = os.getenv("APP_ENV", "development")
     DATABASE_URL = os.getenv("DATABASE_URL")
+
+    # MCP 服务的 resource 标识（RFC 8707 Resource Indicators）。
+    # 必须与 incremental-mcp 侧的 app.config.Settings.mcp_resource 完全一致：
+    # 该值同时用于 PRM 元数据的 resource 字段、令牌的 aud 声明与 resource 参数校验。
+    MCP_RESOURCE_URI = os.getenv("MCP_RESOURCE_URI", "https://incremental.icu/mcp")
+    # 站点 canonical 域名。注：PRM 的 resource 不再是该值，请勿混淆。
+    CANONICAL_ORIGIN = os.getenv("CANONICAL_ORIGIN", "https://incremental.icu")
     if not DATABASE_URL:
         raise ValueError("DATABASE_URL is not set in environment variables")
 
