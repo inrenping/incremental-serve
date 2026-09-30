@@ -1,3 +1,4 @@
+APScheduler==3.10.4
 aliyun-python-sdk-core==2.16.0
 aliyun-python-sdk-kms==2.16.5
 annotated-doc==0.0.4

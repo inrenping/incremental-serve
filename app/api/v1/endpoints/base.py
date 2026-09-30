@@ -426,6 +426,8 @@ def list_sync_runs(
             "duplicated_count": r.skipped_count,
             "failed_count": r.failed_count,
             "status": r.status,
+            "task_id": r.task_id,
+            "trigger_mode": r.trigger_mode,
             "started_at": r.started_at.isoformat() if r.started_at else None,
             "finished_at": r.finished_at.isoformat() if r.finished_at else None,
             "duration_ms": r.duration_ms,

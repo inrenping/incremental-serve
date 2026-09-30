@@ -22,6 +22,8 @@ class SyncRun(Base):
     __tablename__ = "t_sync_run"
     __table_args__ = (
         Index("idx_t_sync_run_user_created", "user_id", "created_at"),
+        Index("idx_t_sync_run_task_id", "task_id"),
+        Index("idx_t_sync_run_trigger_mode", "trigger_mode"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="批次主键")
@@ -42,6 +44,18 @@ class SyncRun(Base):
         ForeignKey("t_base_connect.id"),
         nullable=False,
         comment="目标账号连接配置 ID（关联 t_base_connect 表）",
+    )
+    task_id = Column(
+        Integer,
+        ForeignKey("t_task.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="关联的任务 ID（定时任务触发时非空，手动触发时为空，关联 t_task 表）",
+    )
+    trigger_mode = Column(
+        String(32),
+        nullable=False,
+        default="manual",
+        comment="触发方式：manual=用户手动点击，scheduled=定时任务自动执行",
     )
     window_size = Column(
         Integer, nullable=False, default=10, comment="每侧拉取的运动条数"

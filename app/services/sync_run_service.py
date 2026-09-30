@@ -14,12 +14,16 @@ def start_run(
     source_connect: BaseConnect,
     target_connect: BaseConnect,
     window_size: int,
+    task_id: int | None = None,
+    trigger_mode: str = "manual",
 ) -> SyncRun:
     """开启一次同步批次，写入一条 run 记录。"""
     run = SyncRun(
         user_id=user.id,
         source_connect_id=source_connect.id,
         target_connect_id=target_connect.id,
+        task_id=task_id,
+        trigger_mode=trigger_mode,
         window_size=window_size,
         source_platform=source_connect.source_type,
         target_platform=target_connect.source_type,

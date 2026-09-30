@@ -1,18 +1,17 @@
 name: 定时任务执行
 
-# 定义触发事件
+# 注意：定时触发已迁移至后端 APScheduler 内置调度器（每小时整点 UTC 执行）。
+# 本 workflow 仅保留手动触发入口，用于紧急调试/手动重跑。
+
 on:
-  schedule:
-    # 每小时执行一次
-    - cron: "0 * * * *"
-  workflow_dispatch: # 可手动触发
+  workflow_dispatch:
 
 jobs:
   cron-execute:
     runs-on: ubuntu-latest
     steps:
-      - name: 定时任务执行
+      - name: 手动触发定时任务
         run: |
-          echo "开始执行定时任务..."
+          echo "手动触发 cron-execute2..."
           RESPONSE=$(curl -s -X POST "https://i.incremental.icu/api/v1/task/cron-execute2" -H "Content-Type: application/json")
           echo "接口返回: $RESPONSE"
