@@ -224,3 +224,6 @@ credentials/
 *.json
 
 .python-version
+
+# WorkBuddy 内部状态（记忆笔记、本地技能等）——不纳入版本控制
+.workbuddy/
