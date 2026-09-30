@@ -35,7 +35,9 @@ def _is_same_activity_dict(source: dict, target: dict) -> bool:
     return True
 
 
-def _diff_activities(source_activities: list[dict], target_activities: list[dict]) -> list[dict]:
+def _diff_activities(
+    source_activities: list[dict], target_activities: list[dict]
+) -> list[dict]:
     """时间桶哈希剪枝：以目标侧 start_time_gmt 的分钟数建桶，
 
     源侧每条只比对 ±5 分钟（覆盖 ±300 秒窗口）命中的桶，替代 O(n*m) 嵌套循环。
@@ -86,10 +88,16 @@ def _process_one(item: dict, source_session, target_session) -> dict:
                 if isinstance(detail, dict)
                 else ""
             )
-            return {"status": "synced", "target_activity_id": target_activity_id or None}
+            return {
+                "status": "synced",
+                "target_activity_id": target_activity_id or None,
+            }
         if status == "DUPLICATE_ACTIVITY":
             return {"status": "duplicate", "message": "目标平台已存在该活动"}
-        return {"status": "failed", "message": (result or {}).get("message") or "上传失败"}
+        return {
+            "status": "failed",
+            "message": (result or {}).get("message") or "上传失败",
+        }
     except Exception as e:
         return {"status": "failed", "message": f"处理失败: {str(e)}"}
 
@@ -100,6 +108,8 @@ def run_quick_sync(
     source_id: int,
     target_id: int,
     count: int,
+    task_id: int | None = None,
+    trigger_mode: str = "manual",
 ) -> dict:
     """一段式一键同步：拉双端 TopN → 内存 diff → 推差异项。活动表零读写。"""
     if source_id == target_id:
@@ -122,11 +132,23 @@ def run_quick_sync(
         if not target_connect:
             return {"status": "error", "message": f"目标平台 {target_id} 鉴权失败"}
 
-        run = start_run(db, current_user, source_connect, target_connect, count)
+        run = start_run(
+            db,
+            current_user,
+            source_connect,
+            target_connect,
+            count,
+            task_id,
+            trigger_mode,
+        )
 
         # 每个连接独立会话，不再共用全局 garth 单例
-        source_session = platform_session.build_session(source_connect, db, current_user)
-        target_session = platform_session.build_session(target_connect, db, current_user)
+        source_session = platform_session.build_session(
+            source_connect, db, current_user
+        )
+        target_session = platform_session.build_session(
+            target_connect, db, current_user
+        )
 
         # 列表拉取本身即是最强的 token 有效性验证，无需先 test
         source_activities = source_session.list_activities(count)
@@ -137,7 +159,9 @@ def run_quick_sync(
         db.commit()
 
         if not source_activities:
-            finalize(db, run, error_message=f"源平台 {source_id} 获取最新 {count} 条数据失败")
+            finalize(
+                db, run, error_message=f"源平台 {source_id} 获取最新 {count} 条数据失败"
+            )
             return {
                 "status": "error",
                 "message": f"源平台 {source_id} 获取最新 {count} 条数据失败",
@@ -168,7 +192,9 @@ def run_quick_sync(
             max_workers=min(len(diff_source_only), MAX_WORKERS)
         ) as executor:
             future_map = {
-                executor.submit(_process_one, item, source_session, target_session): item
+                executor.submit(
+                    _process_one, item, source_session, target_session
+                ): item
                 for item in diff_source_only
             }
             for future in as_completed(future_map):
@@ -211,7 +237,10 @@ def run_quick_sync(
                         "result": (
                             {"status": "DUPLICATE_ACTIVITY"}
                             if res["status"] == "duplicate"
-                            else {"status": "SUCCESS", "uploadId": res.get("target_activity_id")}
+                            else {
+                                "status": "SUCCESS",
+                                "uploadId": res.get("target_activity_id"),
+                            }
                         ),
                     }
                 )
