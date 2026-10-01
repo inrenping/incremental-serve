@@ -26,6 +26,40 @@ def get_connect(id: int, db: Session, current_user: User):
     return connect_configs
 
 
+def resolve_owned_connect(
+    db: Session, current_user: User, connect_id: int
+) -> tuple[BaseConnect | None, str | None, str | None]:
+    """按 id 查连接并校验归属，用于拦截跨用户访问（IDOR）。
+
+    与 get_connect 的区别：get_connect 把「不存在」和「不属于本人」统一吞成 None，
+    本函数显式区分失败原因，便于定位是参数填错还是越权尝试，也便于记安全审计。
+
+    Args:
+        db: 数据库会话
+        current_user: 当前登录用户
+        connect_id: 待校验的账号连接 ID
+
+    Returns:
+        (connect, error_message, reason)：
+        - 成功时 error_message 与 reason 均为 None；
+        - 失败时 reason 取值为 missing / not_found / forbidden，
+          其中 forbidden 表示连接存在但不属于当前用户（越权信号，需审计）；
+        - reason 为 inactive 时表示连接已停用，但**不阻断**（error_message 为 None），
+          保持与历史行为一致，调用方可按需自行收紧。
+    """
+    if not connect_id:
+        return None, "缺少账号连接参数", "missing"
+
+    base_connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
+    if not base_connect:
+        return None, f"账号连接 {connect_id} 不存在", "not_found"
+    if base_connect.user_id != current_user.id:
+        return None, f"账号连接 {connect_id} 不属于当前用户，无权访问", "forbidden"
+
+    reason = "inactive" if base_connect.is_active is False else None
+    return base_connect, None, reason
+
+
 def test_connect(id: int, db: Session, current_user: User):
     """测试 token 有效性"""
     if not id:

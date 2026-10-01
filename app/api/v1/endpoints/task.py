@@ -6,6 +6,7 @@ from sqlalchemy import desc
 
 from app.core.security import get_current_user
 from app.db.session import get_db
+from app.services import base_connect_service
 from app.models.task import Task
 from app.models.task_result import TaskResult
 from app.models.user import User
@@ -45,6 +46,23 @@ def save_task(
     db: Session = Depends(get_db),
 ):
     """新增或修改任务。传入 id 修改，不传 id 新增"""
+    # 归属校验：源/目标账号连接必须属于当前用户，避免把他人账号写进任务
+    _, source_error, _ = base_connect_service.resolve_owned_connect(
+        db, current_user, request.connect_source_id
+    )
+    _, target_error, _ = base_connect_service.resolve_owned_connect(
+        db, current_user, request.connect_target_id
+    )
+    errors = []
+    if source_error:
+        errors.append(f"源账号：{source_error}")
+    if target_error:
+        errors.append(f"目标账号：{target_error}")
+    if errors:
+        return {"status": "error", "message": "；".join(errors)}
+    if request.connect_source_id == request.connect_target_id:
+        return {"status": "error", "message": "源账号与目标账号不能相同"}
+
     if request.id:
         task = (
             db.query(Task)
