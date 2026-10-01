@@ -2,12 +2,25 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy.orm import Session
 
-from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.services import platform_session
 from app.services.sync_run_service import finalize, record_item, start_run
+from app.utils.logger_utils import log_operation_async
 
 MAX_WORKERS = 3  # 下载/上传并发上限
+
+
+def _log_denied(current_user: User, connect_id: int, reason: str, role: str) -> None:
+    """越权尝试审计：连接存在但不属于当前用户时落一条操作日志。"""
+    log_operation_async(
+        user_id=current_user.id,
+        log_type="SECURITY_DENIED",
+        module_name="quick_sync",
+        op_desc=(
+            f"同步{role}校验失败[{reason}]：connect_id={connect_id}，"
+            f"user_id={current_user.id}"
+        ),
+    )
 
 
 def _format_local_time(dt):
@@ -115,22 +128,31 @@ def run_quick_sync(
     if source_id == target_id:
         return {"status": "error", "message": "两个账号相同，不需要同步"}
 
+    # 延迟导入，避免与 base_connect_service -> coros/garmin_service 形成顶层循环
+    from app.services import base_connect_service
+
     run = None
     try:
-        source_connect = (
-            db.query(BaseConnect)
-            .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == source_id)
-            .first()
+        source_connect, source_error, source_reason = (
+            base_connect_service.resolve_owned_connect(db, current_user, source_id)
         )
-        target_connect = (
-            db.query(BaseConnect)
-            .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == target_id)
-            .first()
+        target_connect, target_error, target_reason = (
+            base_connect_service.resolve_owned_connect(db, current_user, target_id)
         )
-        if not source_connect:
-            return {"status": "error", "message": f"源平台 {source_id} 鉴权失败"}
-        if not target_connect:
-            return {"status": "error", "message": f"目标平台 {target_id} 鉴权失败"}
+        if source_error:
+            _log_denied(current_user, source_id, source_reason or "unknown", "源账号")
+            return {"status": "error", "message": f"源平台鉴权失败：{source_error}"}
+        if target_error:
+            _log_denied(current_user, target_id, target_reason or "unknown", "目标账号")
+            return {"status": "error", "message": f"目标平台鉴权失败：{target_error}"}
+
+        # 纵深防御：上传前再次断言两端都属于当前用户，防止后续改动绕过上面的校验
+        if source_connect.user_id != current_user.id:
+            _log_denied(current_user, source_id, "forbidden", "源账号")
+            return {"status": "error", "message": "源平台鉴权失败：账号不属于当前用户"}
+        if target_connect.user_id != current_user.id:
+            _log_denied(current_user, target_id, "forbidden", "目标账号")
+            return {"status": "error", "message": "目标平台鉴权失败：账号不属于当前用户"}
 
         run = start_run(
             db,
