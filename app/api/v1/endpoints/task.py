@@ -146,6 +146,12 @@ def save_task(
 ):
     """新增或修改任务。传入 id 修改，不传 id 新增"""
     hours = sorted(set(request.hours))
+    logger.info(
+        "[task] save request id=%s hours=%s items=%s",
+        request.id,
+        hours,
+        [(i.connect_source_id, i.connect_target_id) for i in request.items],
+    )
     error = _validate_hours(hours)
     if error:
         return {"status": "error", "message": error}
@@ -214,6 +220,12 @@ def save_task(
         .filter(TaskItem.task_id == task.id)
         .order_by(TaskItem.id)
         .all()
+    )
+    logger.info(
+        "[task] saved task %s with %d items (requested %d)",
+        task.id,
+        len(items),
+        len(request.items),
     )
     return {"status": "success", "data": _task_to_dict(task, items)}
 
