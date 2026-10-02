@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
@@ -43,8 +44,13 @@ class Task(Base):
     )
     hour = Column(
         Integer,
-        nullable=False,
-        comment="任务执行的小时数（如每隔 N 小时同步一次）",
+        nullable=True,
+        comment="[Deprecated] 旧版单小时字段，迁移后由 hours 取代",
+    )
+    hours = Column(
+        JSON,
+        nullable=True,
+        comment="任务触发小时列表（如 [8, 20]），本地时区 0-23",
     )
     is_active = Column(
         Boolean,

@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from sqlalchemy.orm import Session
 
-from app.api.v1.endpoints.task import SaveTaskRequest, save_task
+from app.api.v1.endpoints.task import SaveTaskRequest, TaskItemPayload, save_task
 from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.services import base_connect_service, quick_sync_service
@@ -112,7 +112,7 @@ def test_quick_sync_same_connect_rejected():
 
 def test_save_task_rejects_foreign_target():
     db = _db_with([_connect(1, user_id=1), _connect(99, user_id=2)])
-    request = SaveTaskRequest(connect_source_id=1, connect_target_id=99, hour=8)
+    request = SaveTaskRequest(hours=[8], items=[TaskItemPayload(connect_source_id=1, connect_target_id=99)])
     response = save_task(request, _user(1), db)
     assert response["status"] == "error"
     assert "目标账号" in response["message"]
@@ -120,7 +120,7 @@ def test_save_task_rejects_foreign_target():
 
 def test_save_task_rejects_same_source_and_target():
     db = _db_with([_connect(1, user_id=1), _connect(1, user_id=1)])
-    request = SaveTaskRequest(connect_source_id=1, connect_target_id=1, hour=8)
+    request = SaveTaskRequest(hours=[8], items=[TaskItemPayload(connect_source_id=1, connect_target_id=1)])
     response = save_task(request, _user(1), db)
     assert response["status"] == "error"
     assert "不能相同" in response["message"]
