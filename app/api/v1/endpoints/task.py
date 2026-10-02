@@ -170,6 +170,10 @@ def save_task(
             return {"status": "error", "message": "任务不存在或无权访问"}
         task.hours = hours
         task.is_active = request.is_active
+        # 旧字段同步为首条同步对，保证仍读旧字段的逻辑（如旧调度器）不会拿到空值
+        task.hour = hours[0]
+        task.connect_source_id = request.items[0].connect_source_id
+        task.connect_target_id = request.items[0].connect_target_id
         # 同步配置整体替换
         db.query(TaskItem).filter(TaskItem.task_id == task.id).delete()
         db.flush()
@@ -181,10 +185,15 @@ def save_task(
                 "status": "error",
                 "message": f"每个用户最多只能创建 {max_tasks} 个任务",
             }
+        # 旧字段（hour / connect_source_id / connect_target_id）仍写入首条同步对：
+        # 生产库上这几个字段仍是 NOT NULL，不写会导致新建任务直接报 500
         task = Task(
             user_id=current_user.id,
             hours=hours,
             is_active=request.is_active,
+            hour=hours[0],
+            connect_source_id=request.items[0].connect_source_id,
+            connect_target_id=request.items[0].connect_target_id,
         )
         db.add(task)
         db.flush()

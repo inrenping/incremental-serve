@@ -33,14 +33,16 @@ class Task(Base):
     connect_source_id = Column(
         Integer,
         ForeignKey("t_base_connect.id"),
-        nullable=False,
-        comment="源连接配置 ID（关联 t_base_connect 表）",
+        nullable=True,
+        comment="[Deprecated] 旧版单同步对源端连接 ID，迁移后由 t_task_item 取代；"
+        "新建任务仍写入首条同步对，便于旧代码/旧数据兼容",
     )
     connect_target_id = Column(
         Integer,
         ForeignKey("t_base_connect.id"),
-        nullable=False,
-        comment="目标连接配置 ID（关联 t_base_connect 表）",
+        nullable=True,
+        comment="[Deprecated] 旧版单同步对目标端连接 ID，迁移后由 t_task_item 取代；"
+        "新建任务仍写入首条同步对，便于旧代码/旧数据兼容",
     )
     hour = Column(
         Integer,
