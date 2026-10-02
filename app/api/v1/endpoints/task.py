@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 MAX_TASK_EXECUTIONS_PER_DAY = 8
 MAX_TASK_ITEMS = 8
 MAX_TASK_HOURS = 8
+# 每个用户只允许一个任务：多同步方向 / 多时间点都在任务内配置
+MAX_TASKS_PER_USER = 1
 
 
 class TaskItemPayload(BaseModel):
@@ -185,11 +187,13 @@ def save_task(
         db.flush()
     else:
         count = db.query(Task).filter(Task.user_id == current_user.id).count()
-        max_tasks = 10 if current_user.vip else 3
-        if count >= max_tasks:
+        if count >= MAX_TASKS_PER_USER:
             return {
                 "status": "error",
-                "message": f"每个用户最多只能创建 {max_tasks} 个任务",
+                "message": (
+                    f"每个用户只能创建 {MAX_TASKS_PER_USER} 个任务，"
+                    "多个同步方向和执行时间请在已有任务中编辑添加"
+                ),
             }
         # 旧字段（hour / connect_source_id / connect_target_id）仍写入首条同步对：
         # 生产库上这几个字段仍是 NOT NULL，不写会导致新建任务直接报 500
