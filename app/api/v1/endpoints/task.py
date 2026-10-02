@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
+import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -13,6 +14,7 @@ from app.models.task_result import TaskResult
 from app.models.user import User
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # 单个任务执行次数上限：同步对数 × 触发小时数
 MAX_TASK_EXECUTIONS_PER_DAY = 8
@@ -205,6 +207,43 @@ def save_task(
         .all()
     )
     return {"status": "success", "data": _task_to_dict(task, items)}
+
+
+@router.delete("/{task_id}")
+def delete_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除任务，连带删除其同步配置（t_task_item）与执行记录（t_task_result）"""
+    from sqlalchemy import text
+
+    task = (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.user_id == current_user.id)
+        .first()
+    )
+    if not task:
+        return {"status": "error", "message": "任务不存在或无权访问"}
+
+    # 历史遗留的明细表无 ORM 模型，直接用 SQL 清理，缺失该表时忽略
+    try:
+        db.execute(
+            text(
+                "DELETE FROM t_task_result_detail "
+                "WHERE task_result_id IN (SELECT id FROM t_task_result WHERE task_id = :task_id)"
+            ),
+            {"task_id": task_id},
+        )
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"clean t_task_result_detail failed: {e}")
+
+    db.query(TaskResult).filter(TaskResult.task_id == task_id).delete()
+    db.query(TaskItem).filter(TaskItem.task_id == task_id).delete()
+    db.delete(task)
+    db.commit()
+    return {"status": "success", "message": "任务已删除"}
 
 
 @router.post("/cron-execute")
