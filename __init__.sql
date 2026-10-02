@@ -307,9 +307,10 @@ COMMENT ON COLUMN public.t_log_operation.created_at IS '业务操作发生的时
 CREATE TABLE public.t_task (
     id bigserial NOT NULL,
     user_id bigint NOT NULL,
-    connect_source_id bigint NOT NULL,
-    connect_target_id bigint NOT NULL,
-    hour int4 NOT NULL,
+    connect_source_id bigint NULL,
+    connect_target_id bigint NULL,
+    hour int4 NULL,
+    hours jsonb NULL,
     is_active bool DEFAULT true NULL,
     created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
     updated_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
@@ -326,12 +327,35 @@ CREATE INDEX idx_t_task_user_active ON public.t_task USING btree (user_id, is_ac
 COMMENT ON TABLE public.t_task IS '数据同步/推送任务主表';
 COMMENT ON COLUMN public.t_task.id IS '自增主键';
 COMMENT ON COLUMN public.t_task.user_id IS '用户ID，关联 t_users.id';
-COMMENT ON COLUMN public.t_task.connect_source_id IS '源端连接配置ID，关联 t_base_connect.id';
-COMMENT ON COLUMN public.t_task.connect_target_id IS '目标端连接配置ID，关联 t_base_connect.id';
-COMMENT ON COLUMN public.t_task.hour IS '任务执行时间点（如：小时，0-23）或执行周期';
+COMMENT ON COLUMN public.t_task.connect_source_id IS '[Deprecated] 旧版单同步对源端连接ID，迁移后由 t_task_item 取代';
+COMMENT ON COLUMN public.t_task.connect_target_id IS '[Deprecated] 旧版单同步对目标端连接ID，迁移后由 t_task_item 取代';
+COMMENT ON COLUMN public.t_task.hour IS '[Deprecated] 旧版单触发小时，迁移后由 hours 取代';
+COMMENT ON COLUMN public.t_task.hours IS '触发小时列表 jsonb（如 [8,20]），0-23，用户本地时区';
 COMMENT ON COLUMN public.t_task.is_active IS '任务是否启用（true: 启用，false: 停用）';
 COMMENT ON COLUMN public.t_task.created_at IS '任务创建时间';
 COMMENT ON COLUMN public.t_task.updated_at IS '任务更新时间';
+
+-- ==========================================
+-- 1.1 创建任务同步对子表 (t_task_item) 及注释
+-- ==========================================
+CREATE TABLE public.t_task_item (
+    id bigserial NOT NULL,
+    task_id int4 NOT NULL,
+    connect_source_id int4 NOT NULL,
+    connect_target_id int4 NOT NULL,
+    created_at timestamptz(6) DEFAULT CURRENT_TIMESTAMP NULL,
+    CONSTRAINT t_task_item_pkey PRIMARY KEY (id),
+    CONSTRAINT t_task_item_task_fkey FOREIGN KEY (task_id) REFERENCES public.t_task(id) ON DELETE CASCADE,
+    CONSTRAINT t_task_item_source_fkey FOREIGN KEY (connect_source_id) REFERENCES public.t_base_connect(id),
+    CONSTRAINT t_task_item_target_fkey FOREIGN KEY (connect_target_id) REFERENCES public.t_base_connect(id)
+);
+CREATE INDEX idx_t_task_item_task_id ON public.t_task_item USING btree (task_id);
+COMMENT ON TABLE public.t_task_item IS '任务同步对子表：一个任务包含多条「源 -> 目标」配置，与触发小时构成笛卡尔积调度';
+COMMENT ON COLUMN public.t_task_item.id IS '自增主键';
+COMMENT ON COLUMN public.t_task_item.task_id IS '任务ID，关联 t_task.id';
+COMMENT ON COLUMN public.t_task_item.connect_source_id IS '源端连接配置ID，关联 t_base_connect.id';
+COMMENT ON COLUMN public.t_task_item.connect_target_id IS '目标端连接配置ID，关联 t_base_connect.id';
+COMMENT ON COLUMN public.t_task_item.created_at IS '创建时间';
 
 
 -- ==========================================

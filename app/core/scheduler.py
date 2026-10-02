@@ -7,11 +7,19 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.db.session import SessionLocal
 from app.models.task import Task
+from app.models.task_item import TaskItem
 from app.models.task_result import TaskResult
 from app.models.user import User
 from app.services import quick_sync_service
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_task_hours(task: Task) -> list:
+    """兼容新旧字段：优先 hours 列表，退回旧的单 hour 字段"""
+    if task.hours:
+        return task.hours
+    return [task.hour] if task.hour is not None else []
 
 
 def run_cron_execute2_internal() -> None:
@@ -26,35 +34,41 @@ def run_cron_execute2_internal() -> None:
             if not user:
                 continue
 
-            user_tz = user.timezone or "Asia/Shanghai"
-            local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
-            if task.hour != local_hour:
+            task_hours = _resolve_task_hours(task)
+            if not task_hours:
                 continue
 
-            try:
-                result = quick_sync_service.run_quick_sync(
-                    db=db,
-                    current_user=user,
-                    source_id=task.connect_source_id,
-                    target_id=task.connect_target_id,
-                    count=10,
-                    task_id=task.id,
-                    trigger_mode="scheduled",
-                )
-                messages = json.dumps(result, ensure_ascii=False)
-            except Exception as e:
-                logger.exception(f"[scheduler] task {task.id} execute failed")
-                messages = json.dumps(
-                    {"status": "error", "message": f"执行异常: {str(e)}"},
-                    ensure_ascii=False,
-                )
+            user_tz = user.timezone or "Asia/Shanghai"
+            local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
+            if local_hour not in task_hours:
+                continue
 
-            task_result = TaskResult(
-                task_id=task.id,
-                task_messages=messages,
-            )
-            db.add(task_result)
-            executed_count += 1
+            items = db.query(TaskItem).filter(TaskItem.task_id == task.id).all()
+            for item in items:
+                try:
+                    result = quick_sync_service.run_quick_sync(
+                        db=db,
+                        current_user=user,
+                        source_id=item.connect_source_id,
+                        target_id=item.connect_target_id,
+                        count=10,
+                        task_id=task.id,
+                        trigger_mode="scheduled",
+                    )
+                    messages = json.dumps(result, ensure_ascii=False)
+                except Exception as e:
+                    logger.exception(f"[scheduler] task {task.id} execute failed")
+                    messages = json.dumps(
+                        {"status": "error", "message": f"执行异常: {str(e)}"},
+                        ensure_ascii=False,
+                    )
+
+                task_result = TaskResult(
+                    task_id=task.id,
+                    task_messages=messages,
+                )
+                db.add(task_result)
+                executed_count += 1
 
         db.commit()
         logger.info(
