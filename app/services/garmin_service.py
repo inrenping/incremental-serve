@@ -845,7 +845,6 @@ def get_garmin_daily_heart_rate(
     date: str,
     db: Session,
     current_user: User,
-    display_name: str = "inrenping",
 ) -> dict:
     """
     从 Garmin 获取指定日期的全天心率数据。
@@ -855,7 +854,6 @@ def get_garmin_daily_heart_rate(
     :param date: 日期字符串，格式 'YYYY-MM-DD'
     :param db: 数据库会话
     :param current_user: 当前用户
-    :param display_name: Garmin 用户显示名称
     :return: Garmin API 返回的心率数据
     """
     config = get_garmin_connect(connect_id, db, current_user)
