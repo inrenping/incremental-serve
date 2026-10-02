@@ -112,6 +112,28 @@ def get_current_user(
     return user
 
 
+# --- 依赖项：获取当前用户（可选，未登录时返回 None） ---
+
+security_optional = HTTPBearer(auto_error=False)
+
+
+def get_current_user_optional(
+    db: Session = Depends(get_db),
+    token: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
+) -> Optional["User"]:
+    """与 get_current_user 相同的解析逻辑，但不抛异常。
+
+    差异：缺少 Authorization 头或凭据无效时返回 None，而不是 401。
+    仅用于「未登录时回退到默认账号」的兼容场景，写操作端点不要用。
+    """
+    if token is None:
+        return None
+    try:
+        return get_current_user(db=db, token=token)
+    except (HTTPException, JWTError, ValueError):
+        return None
+
+
 # --- Clerk JWKS 客户端 ---
 
 
