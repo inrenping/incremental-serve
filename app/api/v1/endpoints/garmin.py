@@ -1,6 +1,5 @@
-from datetime import date, datetime, time, timezone, timedelta
+from datetime import date, datetime, timezone
 from typing import Any, Optional
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -13,7 +12,7 @@ from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
 from app.models.base_connect import BaseConnect
 from app.models.user import User
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_current_user_optional
 from app.services import garmin_service
 from app.services.user_service import get_user_by_username
 
@@ -220,20 +219,18 @@ def upload_coros_activity_to_garmin(
 
 
 @router.get("/syncDailyHeartRate")
-def get_daily_heart_rate(
+def sync_daily_heart_rate(
     date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     获取并保存指定日期的 Garmin 心率数据到数据库。
 
     从 Garmin 获取心率汇总和明细数据，存入 t_heart_rate_daily 和 t_heart_rate_detail 表。
-    如果数据库中已有同名用户同一天的数据，则更新；否则插入新记录。
+    数据归属当前登录用户（依据请求中的鉴权令牌），不再固定为单一账号。
+    如果数据库中已有当前用户同一天的数据，则更新；否则插入新记录。
     """
-    current_user = get_user_by_username(db, "inrenping")
-    if current_user is None:
-        raise HTTPException(status_code=404, detail="User 'inrenping' not found")
-
     connect = (
         db.query(BaseConnect)
         .filter(
@@ -247,7 +244,7 @@ def get_daily_heart_rate(
     if connect is None:
         raise HTTPException(
             status_code=404,
-            detail="No active Garmin CN connect found for user 'inrenping'",
+            detail=f"未找到用户 {current_user.user_email} 已激活的 Garmin CN 连接",
         )
 
     if date is None:
@@ -265,12 +262,15 @@ def get_daily_heart_rate(
 @router.get("/getDailyHeartRate")
 def get_daily_heart_rate(
     date_str: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
     """
     获取指定日期的当天心率数据，包含每日汇总（HeartRateDaily）和心率明细（HeartRateDetail）。
 
-    心率明细根据用户时区（user.timezone）确定一天的起止 UTC 范围，直接从 detail 表按采样时间查询。
+    优先使用当前登录用户（依据请求中的鉴权令牌）；
+    未登录或凭据无效时，回退到默认账号 inrenping（兼容无 token 的调用方）。
+    心率明细通过当前用户当日汇总记录（daily_id）关联查询，天然按用户隔离。
     """
     if date_str is None:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -283,39 +283,16 @@ def get_daily_heart_rate(
             detail="日期格式错误，请使用 YYYY-MM-DD 格式",
         )
 
-    current_user = get_user_by_username(db, "inrenping")
-    if not current_user:
+    # 未登录时回退到默认账号 inrenping
+    if current_user is None:
+        current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户 inrenping 不存在",
+            detail="默认用户 inrenping 不存在",
         )
 
-    # 确定用户时区
-    user_tz = (
-        ZoneInfo(current_user.timezone)
-        if current_user.timezone
-        else ZoneInfo("Asia/Shanghai")
-    )
-
-    # 计算该日期在用户时区下的 UTC 起止时间
-    start_of_day = datetime.combine(query_date, time.min, tzinfo=user_tz).astimezone(
-        timezone.utc
-    )
-    end_of_day = datetime.combine(query_date, time.max, tzinfo=user_tz).astimezone(
-        timezone.utc
-    )
-
-    # 直接从 detail 表按 UTC 时间范围查询
-    detail_records = (
-        db.query(HeartRateDetail)
-        .filter(
-            HeartRateDetail.sample_time.between(start_of_day, end_of_day),
-        )
-        .order_by(HeartRateDetail.sample_time)
-        .all()
-    )
-
-    # 查询每日心率汇总（calendar_date 是 Date 类型，无时区问题）
+    # 查询每日心率汇总（calendar_date 是 Date 类型，无时区问题；按当前用户过滤）
     daily_record = (
         db.query(HeartRateDaily)
         .filter(
@@ -323,6 +300,16 @@ def get_daily_heart_rate(
             HeartRateDaily.calendar_date == query_date,
         )
         .first()
+    )
+
+    # 仅返回当前用户当日汇总下的采样明细（通过 daily_id 关联，天然按用户隔离）
+    detail_records = (
+        db.query(HeartRateDetail)
+        .filter(HeartRateDetail.daily_id == daily_record.id)
+        .order_by(HeartRateDetail.sample_time)
+        .all()
+        if daily_record is not None
+        else []
     )
 
     return {
