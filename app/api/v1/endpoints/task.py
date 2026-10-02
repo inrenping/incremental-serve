@@ -234,6 +234,45 @@ def save_task(
     return {"status": "success", "data": _task_to_dict(task, items)}
 
 
+class ToggleTaskRequest(BaseModel):
+    """启停任务请求模型：只改 is_active，不触碰同步配置与触发时间"""
+
+    is_active: bool
+
+
+@router.patch("/{task_id}/status")
+def toggle_task(
+    task_id: int,
+    request: ToggleTaskRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    启停任务（只更新 is_active）。
+
+    启停接口不接收同步配置/触发时间，避免客户端用过期数据回传整个任务
+    而把服务端的配置覆盖掉。
+    """
+    task = (
+        db.query(Task)
+        .filter(Task.id == task_id, Task.user_id == current_user.id)
+        .first()
+    )
+    if not task:
+        return {"status": "error", "message": "任务不存在或无权访问"}
+
+    task.is_active = request.is_active
+    db.commit()
+    db.refresh(task)
+    items = (
+        db.query(TaskItem)
+        .filter(TaskItem.task_id == task.id)
+        .order_by(TaskItem.id)
+        .all()
+    )
+    return {"status": "success", "data": _task_to_dict(task, items)}
+
+
 @router.delete("/{task_id}")
 def delete_task(
     task_id: int,
