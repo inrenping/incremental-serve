@@ -24,8 +24,6 @@ MAX_TASK_ITEMS = 1
 MAX_TASK_HOURS = 3
 # 每个用户可创建的任务数量上限（多任务场景：一个任务 = 一条同步配置 + 一组触发时间）
 MAX_TASKS_PER_USER = 10
-# 账号级每日执行上限 = 任务数上限 × 单任务上限（仅用于提示，不由单接口强制）
-MAX_EXECUTIONS_PER_USER_PER_DAY = MAX_TASKS_PER_USER * MAX_TASK_EXECUTIONS_PER_DAY
 
 
 class TaskItemPayload(BaseModel):
