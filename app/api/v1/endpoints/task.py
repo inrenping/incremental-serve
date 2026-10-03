@@ -8,6 +8,7 @@ from sqlalchemy import desc
 from app.core.security import get_current_user
 from app.db.session import get_db
 from app.services import base_connect_service
+from app.models.base_connect import BaseConnect
 from app.models.task import Task
 from app.models.task_item import TaskItem
 from app.models.task_result import TaskResult
@@ -88,6 +89,52 @@ def _validate_items(
     return None
 
 
+def _connect_label(db: Session, connect_id: int) -> str:
+    """拼一个易读的账号名，如 GARMIN (CN)，用于错误提示"""
+    connect = db.query(BaseConnect).filter(BaseConnect.id == connect_id).first()
+    if not connect:
+        return f"ID:{connect_id}"
+    name = (connect.source_type or "").upper()
+    region = connect.region or ""
+    return f"{name}{f' ({region})' if region else ''}"
+
+
+def _validate_pairs_unique(
+    db: Session,
+    current_user: User,
+    items: List[TaskItemPayload],
+    exclude_task_id: Optional[int] = None,
+) -> Optional[str]:
+    """同一用户下，不同任务的「源 -> 目标」同步配置不能重复。
+
+    一个任务只含一条同步配置，因此这里实际是校验：
+    本次提交的这条配置，不能与该用户其它任务里已有的配置完全相同。
+    """
+    for item in items:
+        query = (
+            db.query(TaskItem)
+            .join(Task, TaskItem.task_id == Task.id)
+            .filter(
+                Task.user_id == current_user.id,
+                TaskItem.connect_source_id == item.connect_source_id,
+                TaskItem.connect_target_id == item.connect_target_id,
+            )
+        )
+        if exclude_task_id:
+            query = query.filter(TaskItem.task_id != exclude_task_id)
+        conflict = query.first()
+        if conflict:
+            pair = (
+                f"{_connect_label(db, item.connect_source_id)} → "
+                f"{_connect_label(db, item.connect_target_id)}"
+            )
+            return (
+                f"同步配置「{pair}」已在任务 #{conflict.task_id} 中配置过，"
+                "同一个用户下不同任务的同步配置不能重复"
+            )
+    return None
+
+
 def _task_to_dict(task: Task, items: List[TaskItem]) -> dict:
     """序列化任务（含 hours 与 items），供前端使用"""
     return {
@@ -160,6 +207,11 @@ def save_task(
         return {"status": "error", "message": error}
 
     error = _validate_items(db, current_user, request.items)
+    if error:
+        return {"status": "error", "message": error}
+
+    # 同一用户下，不同任务的同步配置不能重复（编辑自身时排除自己）
+    error = _validate_pairs_unique(db, current_user, request.items, request.id)
     if error:
         return {"status": "error", "message": error}
 
