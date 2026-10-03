@@ -1,0 +1,27 @@
+name: 同步每日睡眠
+
+# 睡眠数据一天同步一次即可
+on:
+  schedule:
+    # 每天 UTC 02:00（北京时间 10:00），此时昨晚那一觉基本已同步到佳明
+    - cron: "0 2 * * *"
+  workflow_dispatch: # 可手动触发
+
+jobs:
+  sync-sleep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步每日睡眠（昨天和今天）
+        env:
+          SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
+        run: |
+          YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
+          TODAY=$(date '+%Y-%m-%d')
+          echo "同步昨天 ($YESTERDAY) 睡眠..."
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            "https://i.incremental.icu/api/v1/garmin/syncDailySleep?date=$YESTERDAY" \
+            -H "X-Sync-Token: $SYNC_TOKEN"
+          echo "同步今天 ($TODAY) 睡眠..."
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            "https://i.incremental.icu/api/v1/garmin/syncDailySleep?date=$TODAY" \
+            -H "X-Sync-Token: $SYNC_TOKEN"

@@ -10,14 +10,19 @@ on:
 jobs:
   sync-heart-rate:
     runs-on: ubuntu-latest
+    env:
+      # 同步接口要求登录态或定时任务密钥；这里用定时任务密钥
+      SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
     steps:
       - name: 同步每日心率（昨天和今天）
         run: |
           YESTERDAY=$(date -d "yesterday" '+%Y-%m-%d')
           TODAY=$(date '+%Y-%m-%d')
           echo "同步昨天 ($YESTERDAY) 心率..."
-          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$YESTERDAY" -H "Content-Type: application/json")
-          echo "接口返回: $RESPONSE"
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$YESTERDAY" \
+            -H "X-Sync-Token: $SYNC_TOKEN"
           echo "同步今天 ($TODAY) 心率..."
-          RESPONSE=$(curl -s -X GET "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$TODAY" -H "Content-Type: application/json")
-          echo "接口返回: $RESPONSE"
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            "https://i.incremental.icu/api/v1/garmin/syncDailyHeartRate?date=$TODAY" \
+            -H "X-Sync-Token: $SYNC_TOKEN"

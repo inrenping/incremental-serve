@@ -16,6 +16,8 @@ from app.models.base_connect import BaseConnect
 from app.models.base_activity import BaseActivity
 from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
+from app.models.sleep_daily import SleepDaily
+from app.models.sleep_detail import SleepDetail
 from app.models.user import User
 from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
@@ -1016,4 +1018,268 @@ def save_garmin_daily_heart_rate(
         "lastSevenDaysAvgRestingHeartRate": daily_record.last_seven_days_avg_resting_heart_rate,
         "heartRateValueDescriptors": raw_data.get("heartRateValueDescriptors"),
         "sampleCount": len(heart_rate_values),
+    }
+
+
+# ==================== 睡眠数据 ====================
+
+# 佳明 sleepLevels.activityLevel 的阶段编码（与 app/models/sleep_detail.py 保持一致）
+SLEEP_LEVEL_NAMES = {0: "深睡", 1: "浅睡", 2: "REM", 3: "清醒"}
+
+
+def _ensure_garmin_client(
+    connect_id: int,
+    db: Session,
+    current_user: User,
+) -> BaseConnect:
+    """确保模块级 garth 客户端已装载该连接的有效凭证。
+
+    与心率链路同构：先探测 token，失效先用账号密码重新登录，
+    登录失败再退回 OAuth2 刷新。
+
+    注意：这里沿用 garth 的模块级单例（与心率实现保持一致），
+    并发跨用户场景下存在凭证互相覆盖的已知隐患，暂不改动以免波及心率。
+    """
+    config = get_garmin_connect(connect_id, db, current_user)
+    if not config:
+        raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
+    if test_garmin_token(config.id, db, current_user):
+        return config
+    try:
+        return refresh_garmin_secret_string(config.id, db, current_user)
+    except HTTPException:
+        return refresh_garmin_access_token(config.id, db, current_user)
+
+
+def _parse_gmt(value: Any) -> Optional[datetime]:
+    """把佳明的时间字段解析成 UTC datetime。
+
+    支持两种形态:
+      1) epoch 毫秒（dailySleepDTO 的 sleepStartTimestampGMT 等）
+      2) '2026-10-02T23:30:00.0' 这类不带时区的 ISO 串（sleepLevels 的 startGMT/endGMT）
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
+    if isinstance(value, str):
+        text = value.strip().replace("Z", "")
+        if "." in text:
+            text = text.split(".")[0]
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=timezone.utc)
+    return None
+
+
+def get_garmin_daily_sleep(
+    connect_id: int,
+    date: str,
+    db: Session,
+    current_user: User,
+) -> Optional[dict]:
+    """从佳明获取指定日期的睡眠数据。
+
+    calendarDate 采用佳明口径 = 起床那天，例如 10/2 晚上睡到 10/3 早上，
+    传 date=2026-10-03 可以取到这一觉。
+
+    :return: 佳明原始 JSON；当天没有睡眠记录时返回 None
+    """
+    config = _ensure_garmin_client(connect_id, db, current_user)
+    region = (config.region or "").upper()
+    domain = "garmin.cn" if region == "CN" else "garmin.com"
+    garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+
+    params = {"date": date}
+    # 首选：新版接口，不需要 displayName，省一次 socialProfile 请求
+    api_path = "/sleep-service/sleep/dailySleepData"
+    raw: Any = None
+    try:
+        with log_request(
+            current_user=current_user,
+            req_url=f"https://connect.{domain}{api_path}",
+            req_method="GET",
+            req_params=params,
+            log_type="query",
+            module_name="garmin",
+            op_desc=f"获取 Garmin {date} 睡眠数据",
+        ):
+            raw = garth.connectapi(api_path, params=params)
+    except Exception as e:
+        print(f"获取 Garmin 睡眠数据失败(主接口): {str(e)}")
+
+    def _has_sleep(data: Any) -> bool:
+        return (
+            isinstance(data, dict)
+            and bool((data.get("dailySleepDTO") or {}).get("id"))
+        )
+
+    if not _has_sleep(raw):
+        # 回退：老 wellness 接口，路径里要带 displayName
+        try:
+            username = garth.client.username
+        except Exception:
+            username = None
+        if username:
+            alt_path = f"/wellness-service/wellness/dailySleepData/{username}"
+            alt_params = {"date": date, "nonSleepBufferMinutes": 60}
+            try:
+                with log_request(
+                    current_user=current_user,
+                    req_url=f"https://connect.{domain}{alt_path}",
+                    req_method="GET",
+                    req_params=alt_params,
+                    log_type="query",
+                    module_name="garmin",
+                    op_desc=f"获取 Garmin {date} 睡眠数据(回退接口)",
+                ):
+                    raw = garth.connectapi(alt_path, params=alt_params)
+            except Exception as e:
+                print(f"获取 Garmin 睡眠数据失败(回退接口): {str(e)}")
+
+    if not _has_sleep(raw):
+        return None
+    return raw
+
+
+def save_garmin_daily_sleep(
+    connect_id: int,
+    date: str,
+    db: Session,
+    current_user: User,
+) -> dict:
+    """从佳明获取指定日期的睡眠数据并落库。
+
+    1. 调用佳明接口获取 original 数据
+    2. upsert 汇总到 t_sleep_daily
+    3. 全量替换该日的阶段片段到 t_sleep_detail（保证重复同步幂等）
+    """
+    raw_data = get_garmin_daily_sleep(
+        connect_id=connect_id,
+        date=date,
+        db=db,
+        current_user=current_user,
+    )
+
+    if not raw_data:
+        # 没戴表 / 当天无睡眠是正常情况，不报错
+        return {"has_data": False, "calendarDate": date}
+
+    dto = raw_data.get("dailySleepDTO") or {}
+    calendar_date = _parse_date(dto.get("calendarDate") or date)
+
+    start_at = _parse_gmt(dto.get("sleepStartTimestampGMT"))
+    end_at = _parse_gmt(dto.get("sleepEndTimestampGMT"))
+    offset_minutes = None
+    local_start = dto.get("sleepStartTimestampLocal")
+    gmt_start = dto.get("sleepStartTimestampGMT")
+    if isinstance(local_start, (int, float)) and isinstance(gmt_start, (int, float)):
+        offset_minutes = int((local_start - gmt_start) / 60000)
+
+    scores = dto.get("sleepScores") or {}
+    overall_score = (scores.get("overall") or {}).get("value")
+
+    daily_record = (
+        db.query(SleepDaily)
+        .filter(
+            SleepDaily.user_id == current_user.id,
+            SleepDaily.calendar_date == calendar_date,
+        )
+        .first()
+    )
+
+    if daily_record is None:
+        daily_record = SleepDaily(user_id=current_user.id, calendar_date=calendar_date)
+        db.add(daily_record)
+
+    daily_record.sleep_start_at = start_at
+    daily_record.sleep_end_at = end_at
+    daily_record.local_offset_minutes = offset_minutes
+    daily_record.sleep_time_seconds = dto.get("sleepTimeSeconds")
+    daily_record.nap_time_seconds = dto.get("napTimeSeconds")
+    daily_record.deep_sleep_seconds = dto.get("deepSleepSeconds")
+    daily_record.light_sleep_seconds = dto.get("lightSleepSeconds")
+    daily_record.rem_sleep_seconds = dto.get("remSleepSeconds")
+    daily_record.awake_sleep_seconds = dto.get("awakeSleepSeconds")
+    daily_record.unmeasurable_sleep_seconds = dto.get("unmeasurableSleepSeconds")
+    daily_record.awake_count = dto.get("awakeCount")
+    daily_record.sleep_score = overall_score
+    daily_record.average_sp_o2_value = dto.get("averageSpO2Value")
+    daily_record.lowest_sp_o2_value = dto.get("lowestSpO2Value")
+    daily_record.average_respiration_value = dto.get("averageRespirationValue")
+    daily_record.avg_sleep_stress = dto.get("avgSleepStress")
+    daily_record.sleep_window_confirmed = dto.get("sleepWindowConfirmed")
+
+    db.flush()
+
+    # 阶段片段：全量替换，保证幂等
+    db.query(SleepDetail).filter(SleepDetail.daily_id == daily_record.id).delete()
+
+    level_totals = {0: 0, 1: 0, 2: 0, 3: 0}
+    saved_levels = 0
+    for level in raw_data.get("sleepLevels") or []:
+        if not isinstance(level, dict):
+            continue
+        seg_start = _parse_gmt(level.get("startGMT"))
+        seg_end = _parse_gmt(level.get("endGMT"))
+        if seg_start is None or seg_end is None:
+            continue
+        try:
+            activity_level = int(level.get("activityLevel"))
+        except (TypeError, ValueError):
+            continue
+        if activity_level not in level_totals:
+            continue
+        duration = int((seg_end - seg_start).total_seconds())
+        if duration <= 0:
+            continue
+
+        db.add(
+            SleepDetail(
+                daily_id=daily_record.id,
+                start_at=seg_start,
+                end_at=seg_end,
+                duration_seconds=duration,
+                activity_level=activity_level,
+            )
+        )
+        level_totals[activity_level] += duration
+        saved_levels += 1
+
+    # 自检：阶段片段加总 vs 汇总字段，偏差过大说明 activityLevel 映射反了或接口变了
+    for field, level in (
+        ("deepSleepSeconds", 0),
+        ("lightSleepSeconds", 1),
+        ("remSleepSeconds", 2),
+        ("awakeSleepSeconds", 3),
+    ):
+        expected = dto.get(field)
+        if not isinstance(expected, (int, float)) or expected <= 0:
+            continue
+        actual = level_totals[level]
+        if abs(actual - expected) > max(300, expected * 0.1):
+            print(
+                f"[sleep] 阶段映射自检告警 {calendar_date} {field}: "
+                f"汇总={expected}s 片段合计={actual}s "
+                f"（{SLEEP_LEVEL_NAMES.get(level)}）"
+            )
+
+    db.commit()
+
+    return {
+        "has_data": True,
+        "id": daily_record.id,
+        "calendarDate": calendar_date.isoformat(),
+        "sleepStartAt": start_at.isoformat() if start_at else None,
+        "sleepEndAt": end_at.isoformat() if end_at else None,
+        "sleepTimeSeconds": daily_record.sleep_time_seconds,
+        "deepSleepSeconds": daily_record.deep_sleep_seconds,
+        "lightSleepSeconds": daily_record.light_sleep_seconds,
+        "remSleepSeconds": daily_record.rem_sleep_seconds,
+        "awakeSleepSeconds": daily_record.awake_sleep_seconds,
+        "awakeCount": daily_record.awake_count,
+        "sleepScore": daily_record.sleep_score,
+        "levelCount": saved_levels,
     }

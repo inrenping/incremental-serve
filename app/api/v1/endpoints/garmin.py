@@ -1,7 +1,10 @@
+import os
+import secrets
 from datetime import date, datetime, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -10,6 +13,8 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
+from app.models.sleep_daily import SleepDaily
+from app.models.sleep_detail import SleepDetail
 from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.core.security import get_current_user, get_current_user_optional
@@ -17,6 +22,70 @@ from app.services import garmin_service
 from app.services.user_service import get_user_by_username
 
 router = APIRouter()
+
+# 定时任务专用鉴权头。GitHub Actions 拿不到 Clerk 登录态，
+# 用共享密钥换取指定用户的同步权限（密钥配置在环境变量 CRON_SYNC_TOKEN）。
+CRON_SYNC_TOKEN_HEADER = "X-Sync-Token"
+
+
+def get_sync_principal(
+    request: Request,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+) -> User:
+    """同步接口的身份解析：登录用户优先，其次定时任务共享密钥。
+
+    注意：写接口绝不回退到默认账号，匿名请求一律 401。
+    """
+    provided = request.headers.get(CRON_SYNC_TOKEN_HEADER)
+    expected = os.getenv("CRON_SYNC_TOKEN")
+    if provided and expected and secrets.compare_digest(provided, expected):
+        target_email = os.getenv("CRON_SYNC_USER_EMAIL", "inrenping")
+        cron_user = get_user_by_username(db, target_email)
+        if cron_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"定时任务目标用户 {target_email} 不存在",
+            )
+        return cron_user
+
+    if current_user is not None:
+        return current_user
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _today_in_user_tz(current_user: User) -> str:
+    """按用户时区取「今天」，避免 UTC 取日期在凌晨错一天。"""
+    tz_name = getattr(current_user, "timezone", None) or "Asia/Shanghai"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz).strftime("%Y-%m-%d")
+
+
+def _find_garmin_cn_connect(db: Session, user_id: int) -> BaseConnect:
+    connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == user_id,
+            BaseConnect.source_type == "garmin",
+            func.lower(BaseConnect.region) == "cn",
+            BaseConnect.is_active == True,
+        )
+        .first()
+    )
+    if connect is None:
+        raise HTTPException(
+            status_code=404,
+            detail="未找到已激活的 Garmin CN 连接",
+        )
+    return connect
 
 # --- 定义前端请求的数据结构 ---
 
@@ -221,34 +290,20 @@ def upload_coros_activity_to_garmin(
 @router.get("/syncDailyHeartRate")
 def sync_daily_heart_rate(
     date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_sync_principal),
     db: Session = Depends(get_db),
 ):
     """
     获取并保存指定日期的 Garmin 心率数据到数据库。
 
     从 Garmin 获取心率汇总和明细数据，存入 t_heart_rate_daily 和 t_heart_rate_detail 表。
-    数据归属当前登录用户（依据请求中的鉴权令牌），不再固定为单一账号。
+    数据归属当前登录用户；定时任务可改用 X-Sync-Token 头鉴权。
     如果数据库中已有当前用户同一天的数据，则更新；否则插入新记录。
     """
-    connect = (
-        db.query(BaseConnect)
-        .filter(
-            BaseConnect.user_id == current_user.id,
-            BaseConnect.source_type == "garmin",
-            func.lower(BaseConnect.region) == "cn",
-            BaseConnect.is_active == True,
-        )
-        .first()
-    )
-    if connect is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"未找到用户 {current_user.user_email} 已激活的 Garmin CN 连接",
-        )
+    connect = _find_garmin_cn_connect(db, current_user.id)
 
     if date is None:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date = _today_in_user_tz(current_user)
 
     garmin_service.save_garmin_daily_heart_rate(
         connect_id=connect.id,
@@ -344,6 +399,216 @@ def get_daily_heart_rate(
                     "heart_rate": detail.heart_rate,
                 }
                 for detail in detail_records
+            ],
+        },
+    }
+
+
+# ==================== 睡眠 ====================
+
+
+@router.get("/syncDailySleep")
+def sync_daily_sleep(
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
+    current_user: User = Depends(get_sync_principal),
+    db: Session = Depends(get_db),
+):
+    """
+    获取并保存指定日期的佳明睡眠数据。
+
+    口径：date 传**起床那天**（佳明 calendarDate）。
+    例如 10/2 晚上睡到 10/3 早上，应传 2026-10-03。
+    当天没有任何睡眠记录时返回 has_data=false，不报错。
+    """
+    connect = _find_garmin_cn_connect(db, current_user.id)
+
+    if date is None:
+        date = _today_in_user_tz(current_user)
+
+    result = garmin_service.save_garmin_daily_sleep(
+        connect_id=connect.id,
+        date=date,
+        db=db,
+        current_user=current_user,
+    )
+    return {"status": "success", "data": result}
+
+
+@router.get("/getDailySleep")
+def get_daily_sleep(
+    date_str: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """
+    获取指定日期的睡眠汇总 + 阶段片段。
+
+    与心率读接口一致：未登录时回退到默认账号 inrenping（兼容分享图等无 token 调用方）。
+    阶段片段通过 daily_id 关联查询，天然按用户隔离。
+    """
+    if current_user is None:
+        current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="默认用户 inrenping 不存在",
+        )
+    if date_str is None:
+        date_str = _today_in_user_tz(current_user)
+
+    try:
+        query_date = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="日期格式错误，请使用 YYYY-MM-DD 格式",
+        )
+
+    daily_record = (
+        db.query(SleepDaily)
+        .filter(
+            SleepDaily.user_id == current_user.id,
+            SleepDaily.calendar_date == query_date,
+        )
+        .first()
+    )
+
+    detail_records = (
+        db.query(SleepDetail)
+        .filter(SleepDetail.daily_id == daily_record.id)
+        .order_by(SleepDetail.start_at)
+        .all()
+        if daily_record is not None
+        else []
+    )
+
+    def _iso(value):
+        return value.isoformat() if value else None
+
+    return {
+        "status": "success",
+        "data": {
+            "daily": (
+                {
+                    "calendar_date": daily_record.calendar_date.isoformat(),
+                    "sleep_start_at": _iso(daily_record.sleep_start_at),
+                    "sleep_end_at": _iso(daily_record.sleep_end_at),
+                    "local_offset_minutes": daily_record.local_offset_minutes,
+                    "sleep_time_seconds": daily_record.sleep_time_seconds,
+                    "nap_time_seconds": daily_record.nap_time_seconds,
+                    "deep_sleep_seconds": daily_record.deep_sleep_seconds,
+                    "light_sleep_seconds": daily_record.light_sleep_seconds,
+                    "rem_sleep_seconds": daily_record.rem_sleep_seconds,
+                    "awake_sleep_seconds": daily_record.awake_sleep_seconds,
+                    "unmeasurable_sleep_seconds": daily_record.unmeasurable_sleep_seconds,
+                    "awake_count": daily_record.awake_count,
+                    "sleep_score": daily_record.sleep_score,
+                    "average_sp_o2_value": daily_record.average_sp_o2_value,
+                    "average_respiration_value": daily_record.average_respiration_value,
+                    "avg_sleep_stress": daily_record.avg_sleep_stress,
+                    "updated_at": _iso(daily_record.updated_at),
+                }
+                if daily_record
+                else None
+            ),
+            "levels": [
+                {
+                    "start_at": level.start_at.isoformat(),
+                    "end_at": level.end_at.isoformat(),
+                    "duration_seconds": level.duration_seconds,
+                    "activity_level": level.activity_level,
+                }
+                for level in detail_records
+            ],
+        },
+    }
+
+
+@router.get("/getMonthlySleep")
+def get_monthly_sleep(
+    month: str = Query(None, description="月份，格式 YYYY-MM，默认为当月"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """
+    获取指定月份每天的睡眠汇总（不含阶段片段，避免 payload 过大）。
+
+    只返回库里已有的日期；缺失的日期前端保持空白，不自动补数据。
+    """
+    if current_user is None:
+        current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="默认用户 inrenping 不存在",
+        )
+
+    if month is None:
+        month = _today_in_user_tz(current_user)[:7]
+
+    try:
+        year, mon = (int(part) for part in month.split("-"))
+        month_start = date(year, mon, 1)
+        next_year, next_mon = (year + 1, 1) if mon == 12 else (year, mon + 1)
+        month_end = date(next_year, next_mon, 1)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="月份格式错误，请使用 YYYY-MM 格式",
+        )
+
+    records = (
+        db.query(SleepDaily)
+        .filter(
+            SleepDaily.user_id == current_user.id,
+            SleepDaily.calendar_date >= month_start,
+            SleepDaily.calendar_date < month_end,
+        )
+        .order_by(SleepDaily.calendar_date)
+        .all()
+    )
+
+    def _iso(value):
+        return value.isoformat() if value else None
+
+    # 阶段片段用于月报环形图按真实时间定位，一次查完再分组
+    daily_ids = [record.id for record in records]
+    levels_by_daily: dict = {}
+    if daily_ids:
+        for level in (
+            db.query(SleepDetail)
+            .filter(SleepDetail.daily_id.in_(daily_ids))
+            .order_by(SleepDetail.daily_id, SleepDetail.start_at)
+            .all()
+        ):
+            levels_by_daily.setdefault(level.daily_id, []).append(
+                {
+                    "start_at": level.start_at.isoformat(),
+                    "end_at": level.end_at.isoformat(),
+                    "duration_seconds": level.duration_seconds,
+                    "activity_level": level.activity_level,
+                }
+            )
+
+    return {
+        "status": "success",
+        "data": {
+            "month": month,
+            "days": [
+                {
+                    "calendar_date": record.calendar_date.isoformat(),
+                    "sleep_start_at": _iso(record.sleep_start_at),
+                    "sleep_end_at": _iso(record.sleep_end_at),
+                    "sleep_time_seconds": record.sleep_time_seconds,
+                    "deep_sleep_seconds": record.deep_sleep_seconds,
+                    "light_sleep_seconds": record.light_sleep_seconds,
+                    "rem_sleep_seconds": record.rem_sleep_seconds,
+                    "awake_sleep_seconds": record.awake_sleep_seconds,
+                    "awake_count": record.awake_count,
+                    "sleep_score": record.sleep_score,
+                    "levels": levels_by_daily.get(record.id, []),
+                }
+                for record in records
             ],
         },
     }
