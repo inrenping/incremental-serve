@@ -8,6 +8,7 @@ import json
 import base64
 import requests
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -1282,4 +1283,53 @@ def save_garmin_daily_sleep(
         "awakeCount": daily_record.awake_count,
         "sleepScore": daily_record.sleep_score,
         "levelCount": saved_levels,
+    }
+
+
+def sync_monthly_sleep(
+    connect_id: int,
+    month: str,
+    db: Session,
+    current_user: User,
+) -> dict:
+    """逐日同步指定月份的睡眠数据。
+
+    month 采用佳明口径的归属月（起床那天所在月）。
+    当前月只同步到今天（含），避免无谓请求未来日期。
+    每天复用 save_garmin_daily_sleep，天然幂等（重复同步只覆盖）。
+    """
+    try:
+        year, mon = (int(part) for part in month.split("-"))
+    except (ValueError, AttributeError):
+        raise ValueError("月份格式错误，请使用 YYYY-MM 格式")
+
+    import calendar as _cal
+
+    days_in_month = _cal.monthrange(year, mon)[1]
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    month_start = date(year, mon, 1)
+    if month_start > today:
+        return {"month": month, "synced": 0, "with_data": 0, "skipped_future": True}
+
+    synced = 0
+    with_data = 0
+    for d in range(1, days_in_month + 1):
+        day = date(year, mon, d)
+        if day > today:
+            break
+        res = save_garmin_daily_sleep(
+            connect_id=connect_id,
+            date=day.isoformat(),
+            db=db,
+            current_user=current_user,
+        )
+        synced += 1
+        if res.get("has_data"):
+            with_data += 1
+
+    return {
+        "month": month,
+        "synced": synced,
+        "with_data": with_data,
+        "skipped_future": False,
     }
