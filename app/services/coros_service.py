@@ -614,10 +614,17 @@ def _upload_fit_zip_to_coros(
 
     try:
         oss_client = None
+        rid = int(coros_config.region) if coros_config.region else 1
+        sts_conf = STS_CONFIG.get(rid, STS_CONFIG[1])
+        access_token = coros_config.access_token
         if coros_config.region == 2 or coros_config.region == "2":
-            oss_client = AliOssClient()
+            oss_client = AliOssClient(access_token=access_token, region=rid)
         else:
-            oss_client = AwsOssClient()
+            oss_client = AwsOssClient(
+                access_token=access_token,
+                region=rid,
+                bucket=sts_conf["bucket"],
+            )
         oss_client.multipart_upload(file_path, oss_path)
         print(f"成功上传到 OSS: {oss_path}")
     except Exception as e:

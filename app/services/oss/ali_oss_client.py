@@ -8,14 +8,19 @@ from oss2 import SizedFileAdapter, determine_part_size
 from oss2.models import PartInfo
 from app.services.oss.sts_token_error import StsTokenError
 from app.utils.coros_oss_credients_utils import decode
+from app.utils.coros_web_config import build_proxy_url, COOKIE_NAME
+
+LEGACY_STS_URL = "https://faq.coros.com/openapi/oss/sts"
 
 
 class AliOssClient:
-    def __init__(self, bucket="coros-oss", service="aliyun", app_id="1660188068672619112", sign="9AD4AA35AAFEE6BB1E847A76848D58DF", v=2):
+    def __init__(self, access_token=None, bucket="coros-oss", service="aliyun", app_id="1660188068672619112", sign="9AD4AA35AAFEE6BB1E847A76848D58DF", v=2, region=2):
         self.bucket = bucket
         self.service = service
         self.app_id = app_id
         self.sign = sign
+        self.access_token = access_token
+        self.region = region
         self.security_token = None
         self.access_key_id = None
         self.access_key_secret = None
@@ -24,25 +29,59 @@ class AliOssClient:
         self.v = v
         self.initClient()
 
+    def _request_candidates(self):
+        """按优先级给出取凭证的请求：先 v2（Training Hub 同域代理），失败再回退旧的 v1 端点。"""
+        candidates = []
+        if self.access_token:
+            candidates.append((
+                build_proxy_url(self.region, self.bucket, self.service, self.v),
+                {"Cookie": f"{COOKIE_NAME}={self.access_token}", "Accept": "application/json"},
+            ))
+        candidates.append((
+            f"{LEGACY_STS_URL}?bucket={self.bucket}&service={self.service}"
+            f"&app_id={self.app_id}&sign={self.sign}&v={self.v}",
+            {"Accept": "application/json"},
+        ))
+        return candidates
+
+    def _fetch_credentials(self):
+        """依次尝试各个端点，返回 (credentials, v)；全部失败时把上游原因带进异常。"""
+        errors = []
+        for url, headers in self._request_candidates():
+            try:
+                response = self.req.request('GET', url, headers=headers, timeout=20)
+                payload = json.loads(response.data)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{url} 请求异常: {e}")
+                continue
+
+            if payload.get("code") != 200:
+                errors.append(f"{url} code={payload.get('code')} msg={payload.get('msg')}")
+                continue
+
+            data = payload.get("data") or {}
+            credentials = data.get("credentials")
+            if not credentials:
+                errors.append(f"{url} 响应缺少 credentials")
+                continue
+            return credentials, data.get("v", self.v)
+
+        raise StsTokenError("获取阿里云OSS STS Token异常: " + " | ".join(errors))
+
     def initClient(self):
-        sts_token_url = f"https://faq.coros.com/openapi/oss/sts?bucket={self.bucket}&service={self.service}&app_id={self.app_id}&sign={self.sign}&v={self.v}"
-
-        response = self.req.request('GET', sts_token_url)
-
-        sts_token_response = json.loads(response.data)
-        if sts_token_response["code"] != 200:
-            raise StsTokenError("获取阿里云OSS STS Token异常")
-            
-        credentials = sts_token_response["data"]["credentials"]
-        self.v = sts_token_response["data"].get("v", self.v)
+        credentials, self.v = self._fetch_credentials()
         credentials_json = decode(credentials)
 
         self.security_token = credentials_json["SecurityToken"]
         self.access_key_id = credentials_json["AccessKeyId"]
         self.access_key_secret = credentials_json["AccessKeySecret"]
 
+        region_id = credentials_json.get("Region") or "oss-cn-beijing"
+        endpoint = f"https://{region_id}.aliyuncs.com"
+        bucket_name = credentials_json.get("Bucket") or self.bucket
+
         auth = oss2.StsAuth(self.access_key_id, self.access_key_secret, self.security_token)
-        self.client = oss2.Bucket(auth, "https://oss-cn-beijing.aliyuncs.com", self.bucket)
+        self.client = oss2.Bucket(auth, endpoint, bucket_name)
     
     def multipart_upload(self, filePath, fileName):
         key = f"{fileName}"
