@@ -434,6 +434,35 @@ def sync_daily_sleep(
     return {"status": "success", "data": result}
 
 
+@router.get("/syncMonthlySleep")
+def sync_monthly_sleep(
+    month: str = Query(None, description="月份，格式 YYYY-MM，默认为当月"),
+    current_user: User = Depends(get_sync_principal),
+    db: Session = Depends(get_db),
+):
+    """获取并保存指定月份的每一天睡眠数据（逐日同步，复用 save_garmin_daily_sleep）。
+
+    口径：month 是佳明口径的归属月（起床那天所在月）。
+    当前月只同步到今天（含），避免无谓请求未来日期。
+    """
+    connect = _find_garmin_cn_connect(db, current_user.id)
+    if month is None:
+        month = _today_in_user_tz(current_user)[:7]
+    try:
+        result = garmin_service.sync_monthly_sleep(
+            connect_id=connect.id,
+            month=month,
+            db=db,
+            current_user=current_user,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    return {"status": "success", "data": result}
+
+
 @router.get("/getDailySleep")
 def get_daily_sleep(
     date_str: str = Query(None, description="日期，格式 YYYY-MM-DD，默认为今天"),
