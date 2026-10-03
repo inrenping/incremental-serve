@@ -16,12 +16,13 @@ from app.models.user import User
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# 单个任务执行次数上限：同步对数 × 触发小时数
-MAX_TASK_EXECUTIONS_PER_DAY = 8
-MAX_TASK_ITEMS = 8
-MAX_TASK_HOURS = 8
-# 每个用户只允许一个任务：多同步方向 / 多时间点都在任务内配置
-MAX_TASKS_PER_USER = 1
+# 每个任务的限制：只允许 1 条「源 -> 目标」同步配置，触发小时最多 3 个
+# => 单任务每日执行次数 = 1 × 小时数，上限 3 次/天
+MAX_TASK_EXECUTIONS_PER_DAY = 3
+MAX_TASK_ITEMS = 1
+MAX_TASK_HOURS = 3
+# 每个用户可创建的任务数量上限（多任务场景：一个任务 = 一条同步配置 + 一组触发时间）
+MAX_TASKS_PER_USER = 10
 
 
 class TaskItemPayload(BaseModel):
@@ -60,9 +61,9 @@ def _validate_items(
 ) -> Optional[str]:
     """校验同步对列表，返回错误信息或 None"""
     if not items:
-        return "请至少添加一条同步配置（源 -> 目标）"
+        return "请配置一条同步配置（源 -> 目标）"
     if len(items) > MAX_TASK_ITEMS:
-        return f"同步配置最多 {MAX_TASK_ITEMS} 条"
+        return f"每个任务只能配置 {MAX_TASK_ITEMS} 条同步配置，如需更多请新建一个任务"
     seen = set()
     for item in items:
         if item.connect_source_id == item.connect_target_id:
@@ -162,10 +163,12 @@ def save_task(
     if error:
         return {"status": "error", "message": error}
 
-    if len(hours) * len(request.items) > MAX_TASK_EXECUTIONS_PER_DAY:
+    executions = len(hours) * len(request.items)
+    if executions > MAX_TASK_EXECUTIONS_PER_DAY:
         return {
             "status": "error",
-            "message": f"同步配置数 × 执行时间数不能超过 {MAX_TASK_EXECUTIONS_PER_DAY} 次/天",
+            "message": f"单个任务每天最多执行 {MAX_TASK_EXECUTIONS_PER_DAY} 次，"
+            f"当前为 {len(request.items)} 条同步配置 × {len(hours)} 个时间点 = {executions} 次",
         }
 
     if request.id:
@@ -191,8 +194,8 @@ def save_task(
             return {
                 "status": "error",
                 "message": (
-                    f"每个用户只能创建 {MAX_TASKS_PER_USER} 个任务，"
-                    "多个同步方向和执行时间请在已有任务中编辑添加"
+                    f"每个用户最多创建 {MAX_TASKS_PER_USER} 个任务，"
+                    "请先删除不再需要的任务后再新建"
                 ),
             }
         # 旧字段（hour / connect_source_id / connect_target_id）仍写入首条同步对：
