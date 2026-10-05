@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, extract
 
@@ -10,6 +10,7 @@ from app.models.base_connect import BaseConnect
 from app.models.main_activity import MainActivity
 from app.models.user import User
 from app.core.security import get_current_user
+from app.core.cron_auth import _require_cron_token
 from app.services import main_activity_service
 from app.utils.activity_type_config import ACTIVITY_CONFIG
 
@@ -29,6 +30,23 @@ def sync_base_to_main_activity(
     3. id 使用新表的自增主键
     """
     return main_activity_service.sync_base_to_main_activity(db)
+
+
+@router.get("/syncBaseToMainActivityAll")
+def sync_base_to_main_activity_all(
+    days: int = 7,
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    """
+    定时任务专用：将所有用户的主数据源活动记录同步到 t_main_activity。
+
+    仅允许 X-Sync-Token 调用（GitHub Actions 等外部调度器）。
+    默认只扫最近 7 天的记录，传 days=0 走全量（首次/手动补数）。
+    按 connect 逐个隔离，单个连接失败不影响其他人，返回 {total, synced, failed, errors}。
+    """
+    _require_cron_token(request)
+    return main_activity_service.sync_base_to_main_activity_all(db, days=days)
 
 
 @router.get("/getActivitiesByPage")
