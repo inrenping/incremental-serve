@@ -1,3 +1,4 @@
+import io
 import urllib3
 import json
 import boto3
@@ -6,6 +7,7 @@ import certifi
 from boto3.s3.transfer import TransferConfig
 
 
+from app.services.oss import sts_cache
 from app.services.oss.sts_token_error import StsTokenError
 from app.utils.coros_oss_credients_utils import decode
 from app.utils.coros_web_config import build_proxy_url, COOKIE_NAME
@@ -44,6 +46,13 @@ class AwsOssClient:
     return candidates
 
   def _fetch_credentials(self):
+    """依次尝试各个端点，凭证按「区域+桶+service+token」缓存复用。"""
+    cached = sts_cache.get(
+        self.region, self.bucket, self.service, self.v, self.access_token
+    )
+    if cached:
+        return cached, self.v
+
     errors = []
     for url, headers in self._request_candidates():
         try:
@@ -62,7 +71,12 @@ class AwsOssClient:
         if not credentials:
             errors.append(f"{url} 响应缺少 credentials")
             continue
-        return credentials, data.get("v", self.v)
+
+        sts_v = data.get("v", self.v)
+        sts_cache.put(
+            self.region, self.bucket, self.service, sts_v, self.access_token, credentials
+        )
+        return credentials, sts_v
 
     raise StsTokenError("Get AWS OSS STS Token Exception: " + " | ".join(errors))
 
@@ -83,7 +97,15 @@ class AwsOssClient:
             endpoint_url=endpoint_url,
         )
 
-  def multipart_upload(self, filePath, fileName):
+  def put_object(self, data: bytes, key: str) -> str:
+      """小对象一次性上传，比分片上传少两次网络往返。"""
+      try:
+          self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+      except Exception as e:
+          raise Exception(f"AWS S3 上传失败: {e}")
+      return key
+
+  def multipart_upload(self, data: bytes, key: str) -> str:
       # 配置上传选项
       config = TransferConfig(
           multipart_threshold=1024 * 1024 * 5,  # 分片上传的阈值（5MB）
@@ -92,15 +114,15 @@ class AwsOssClient:
           use_threads=True                     # 使用多线程
       )
 
-      # 执行上传
+      # 执行上传（走内存，不落本地磁盘）
       try:
-          # print(f"Uploading {fileName} to AWS S3...")
-          self.client.upload_file(
-              filePath,
+          self.client.upload_fileobj(
+              io.BytesIO(data),
               Bucket=self.bucket,
-              Key=f"{fileName}",
+              Key=key,
               Config=config
           )
-          # print(f"File {fileName} uploaded successfully!")
       except Exception as e:
-          print(f"Upload failed: {e}")
+          # 旧实现把失败吞掉，导致后续的 import 接口去一个不存在的对象，报错更晦涩
+          raise Exception(f"AWS S3 上传失败: {e}")
+      return key

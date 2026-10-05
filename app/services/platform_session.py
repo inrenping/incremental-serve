@@ -1,6 +1,6 @@
 import io
-import json
 import os
+import threading
 import zipfile
 from datetime import datetime, timezone
 
@@ -14,13 +14,9 @@ from garth.http import Client as GarminClient  # noqa: E402
 
 from app.models.base_connect import BaseConnect  # noqa: E402
 from app.models.user import User  # noqa: E402
-from app.services.oss.ali_oss_client import AliOssClient  # noqa: E402
-from app.services.oss.aws_oss_client import AwsOssClient  # noqa: E402
-from app.utils.config import GARMIN_FIT_DIR  # noqa: E402
+from app.services import coros_upload  # noqa: E402
+from app.services.oss.sts_token_error import StsTokenError  # noqa: E402
 from app.utils.coros_region_config import REGIONCONFIG  # noqa: E402
-from app.utils.coros_sts_config import STS_CONFIG  # noqa: E402
-from app.utils.logger_utils import log_request, log_operation_async  # noqa: E402
-from app.utils.md5_utils import calculate_md5_file  # noqa: E402
 
 MAX_WORKERS = 3  # 下载/上传并发上限，低于旧实现（5），降低平台风控概率
 
@@ -157,6 +153,8 @@ class CorosSession:
         self.connect = connect
         self.db = db
         self.current_user = current_user
+        # upload_fit 会在线程池里被并发调用，connect（尤其 access_token）读写都需加锁
+        self._lock = threading.Lock()
 
     def _base_url(self) -> str:
         try:
@@ -173,22 +171,29 @@ class CorosSession:
             "accesstoken": self.connect.access_token,
         }
 
+    def _snapshot(self) -> tuple[str, object, str]:
+        """取一次连接的关键字段快照，避免跨线程读到刷新到一半的状态。"""
+        with self._lock:
+            return self.connect.guid, self.connect.region, self.connect.access_token
+
     def _refresh(self):
         """Coros 令牌失效时，用保存的账号密码重新登录换取新 access_token。
 
         同样可能在线程池 worker 内被调用，故用独立 Session 落库（见 GarminSession._refresh）。
+        加锁是为了避免并发上传时多个线程同时重登、互相覆盖 self.connect。
         """
         from app.db.session import SessionLocal
         from app.services import coros_service
 
-        with SessionLocal() as s:
-            self.connect = coros_service.perform_coros_login(
-                id=self.connect.id,
-                account=self.connect.account,
-                encrypted_password=self.connect.encrypted_password,
-                db=s,
-                current_user=self.current_user,
-            )
+        with self._lock:
+            with SessionLocal() as s:
+                self.connect = coros_service.perform_coros_login(
+                    id=self.connect.id,
+                    account=self.connect.account,
+                    encrypted_password=self.connect.encrypted_password,
+                    db=s,
+                    current_user=self.current_user,
+                )
 
     def list_activities(self, count: int) -> list[dict]:
         query_url = f"{self._base_url()}/activity/query?size={count}&pageNumber=1"
@@ -251,70 +256,35 @@ class CorosSession:
         return file_response.content, f"coros_activity_{activity['activity_id']}.fit"
 
     def upload_fit(self, fit_data: bytes, filename: str) -> dict:
-        """将 FIT 推送到本会话持有的 Coros 账号（保持原有 OSS 中转逻辑不变）。"""
-        os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-        file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
+        """将 FIT 推送到本会话持有的 Coros 账号。
 
-        # 兼容传入裸 FIT 字节的情况（一键同步传入的是解压后的 FIT），先打包成合法 ZIP
-        if not fit_data.startswith(b"PK"):
-            buf = io.BytesIO()
-            inner_name = f"{os.path.splitext(filename)[0]}.fit"
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr(inner_name, fit_data)
-            fit_data = buf.getvalue()
-
-        with open(file_path, "wb") as fb:
-            fb.write(fit_data)
-
-        filesize = os.path.getsize(file_path)
-        md5_hash = calculate_md5_file(file_path)
-
-        # 根据区域选择 Coros 自有对象存储（阿里云 / AWS）
-        oss_path = f"fit_zip/{self.connect.guid}/{md5_hash}.zip"
-        oss_client = AliOssClient() if str(self.connect.region) == "2" else AwsOssClient()
-        oss_client.multipart_upload(file_path, oss_path)
-
-        team_api = self._base_url()
-        upload_url = f"{team_api}/activity/fit/import"
-        rid = int(self.connect.region) if self.connect.region else 1
-        sts = STS_CONFIG.get(rid, STS_CONFIG[1])
-        params = {
-            "source": 1,
-            "timezone": 32,
-            "bucket": sts["bucket"],
-            "md5": md5_hash,
-            "size": filesize,
-            "object": oss_path,
-            "serviceName": sts["service"],
-            "oriFileName": f"{filename}.zip",
-        }
+        复用 coros_upload 的统一流水线（与单条同步同一份实现），避免协议升级时漂移。
+        若取 STS 凭证失败（多为 access_token 过期），刷新一次令牌后重试一次。
+        """
+        guid, region, access_token = self._snapshot()
         try:
-            with log_request(
+            return coros_upload.upload_fit(
+                fit_data,
+                filename,
+                guid=guid,
+                region=region,
+                access_token=access_token,
                 current_user=self.current_user,
-                req_url=upload_url,
-                req_method="POST",
-                req_params=params,
-                log_type="upload",
-                module_name="coros",
-                op_desc=f"高驰上传运动文件{filename}",
-            ) as ctx:
-                res = requests.post(
-                    upload_url,
-                    headers={
-                        "accesstoken": self.connect.access_token,
-                        "Accept": "application/json, text/plain, */*",
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    },
-                    data={"jsonParameter": json.dumps(params)},
-                    timeout=60,
-                ).json()
-                ctx["response"] = res
-        except Exception as e:
-            return {"status": "error", "message": f"上传异常: {str(e)}"}
-        if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
-            return {"status": "success", "message": "已成功同步到高驰", "data": res}
-        return {
-            "status": "error",
-            "message": f"高驰导入失败: {res.get('message', '未知错误')}",
-            "details": res,
-        }
+            )
+        except StsTokenError as first_error:
+            self._refresh()
+            guid, region, access_token = self._snapshot()
+            try:
+                return coros_upload.upload_fit(
+                    fit_data,
+                    filename,
+                    guid=guid,
+                    region=region,
+                    access_token=access_token,
+                    current_user=self.current_user,
+                )
+            except StsTokenError:
+                return {
+                    "status": "error",
+                    "message": f"上传异常: {str(first_error)}",
+                }

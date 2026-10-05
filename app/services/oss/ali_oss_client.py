@@ -1,11 +1,12 @@
+import io
 import urllib3
 import json
 import oss2
-import os
 import certifi
 
 from oss2 import SizedFileAdapter, determine_part_size
 from oss2.models import PartInfo
+from app.services.oss import sts_cache
 from app.services.oss.sts_token_error import StsTokenError
 from app.utils.coros_oss_credients_utils import decode
 from app.utils.coros_web_config import build_proxy_url, COOKIE_NAME
@@ -45,7 +46,16 @@ class AliOssClient:
         return candidates
 
     def _fetch_credentials(self):
-        """依次尝试各个端点，返回 (credentials, v)；全部失败时把上游原因带进异常。"""
+        """依次尝试各个端点，返回 (credentials, v)；全部失败时把上游原因带进异常。
+
+        凭证按「区域+桶+service+token」缓存复用，避免批量同步时每条活动都打一次 STS。
+        """
+        cached = sts_cache.get(
+            self.region, self.bucket, self.service, self.v, self.access_token
+        )
+        if cached:
+            return cached, self.v
+
         errors = []
         for url, headers in self._request_candidates():
             try:
@@ -64,7 +74,12 @@ class AliOssClient:
             if not credentials:
                 errors.append(f"{url} 响应缺少 credentials")
                 continue
-            return credentials, data.get("v", self.v)
+
+            sts_v = data.get("v", self.v)
+            sts_cache.put(
+                self.region, self.bucket, self.service, sts_v, self.access_token, credentials
+            )
+            return credentials, sts_v
 
         raise StsTokenError("获取阿里云OSS STS Token异常: " + " | ".join(errors))
 
@@ -83,19 +98,30 @@ class AliOssClient:
         auth = oss2.StsAuth(self.access_key_id, self.access_key_secret, self.security_token)
         self.client = oss2.Bucket(auth, endpoint, bucket_name)
     
-    def multipart_upload(self, filePath, fileName):
-        key = f"{fileName}"
+    def put_object(self, data: bytes, key: str) -> str:
+        """小对象一次性上传。
+
+        分片上传需要 init + upload_part + complete 三次往返，FIT 压缩包通常只有几百 KB，
+        直接 PUT 可以省掉两次往返，批量同步时收益明显。
+        """
+        result = self.client.put_object(key, data)
+        if result.status != 200:
+            raise AliOssError(f"上传对象失败, status={result.status}")
+        return key
+
+    def multipart_upload(self, data: bytes, key: str) -> str:
+        """大对象分片上传，全程走内存，不落本地磁盘。"""
+        total_size = len(data)
         init_multipart_upload_result = self.client.init_multipart_upload(key)
         if init_multipart_upload_result.status != 200:
             raise AliOssError("初始化阿里云分片上传异常")
         upload_id = init_multipart_upload_result.upload_id
-        total_size = os.path.getsize(filePath)
         # determine_part_size方法用于确定分片大小。
         part_size = determine_part_size(total_size, preferred_size=1024 * 1024)
         parts = []
 
         # 逐个上传分片。
-        with open(filePath, 'rb') as fileobj:
+        with io.BytesIO(data) as fileobj:
             part_number = 1
             offset = 0
             while offset < total_size:
@@ -108,17 +134,10 @@ class AliOssClient:
                 offset += num_to_upload
                 part_number += 1
 
-        # 完成分片上传。
-        # 如需在完成分片上传时设置相关Headers，请参考如下示例代码。
-        headers = dict()
-        # 设置文件访问权限ACL。此处设置为OBJECT_ACL_PRIVATE，表示私有权限。
-        # headers["x-oss-object-acl"] = oss2.OBJECT_ACL_PRIVATE
-        r = self.client.complete_multipart_upload(key, upload_id, parts, headers=headers)
+        r = self.client.complete_multipart_upload(key, upload_id, parts, headers=dict())
         if r.status == 200:
-            # print(f"上传成功，文件Key: {key}")
             return key
-        else:
-            raise AliOssError(f"完成分片上传失败, status={r.status}")
+        raise AliOssError(f"完成分片上传失败, status={r.status}")
 
 class AliOssError(Exception):
     def __init__(self, status):
