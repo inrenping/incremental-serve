@@ -1,5 +1,5 @@
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -401,6 +401,89 @@ def get_daily_heart_rate(
                 for detail in detail_records
             ],
         },
+    }
+
+
+@router.get("/getDailyHeartRateRange")
+def get_daily_heart_rate_range(
+    start: str = Query(None, description="开始日期，格式 YYYY-MM-DD，默认 30 天前"),
+    end: str = Query(None, description="结束日期，格式 YYYY-MM-DD，默认为今天"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """
+    获取一段日期内每日心率汇总（静息/最小/最大心率），用于绘制多日趋势图。
+
+    优先使用当前登录用户；未登录或凭据无效时回退到默认账号 inrenping。
+    缺失数据的日期仍以 null 占位返回，保证趋势图日期轴连续、空白可见。
+    """
+    if end is None:
+        end_date = datetime.now(timezone.utc).date()
+    else:
+        try:
+            end_date = date.fromisoformat(end)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="结束日期格式错误，请使用 YYYY-MM-DD 格式",
+            )
+
+    if start is None:
+        start_date = end_date - timedelta(days=29)
+    else:
+        try:
+            start_date = date.fromisoformat(start)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="开始日期格式错误，请使用 YYYY-MM-DD 格式",
+            )
+
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="开始日期不能晚于结束日期",
+        )
+
+    # 未登录时回退到默认账号 inrenping
+    if current_user is None:
+        current_user = get_user_by_username(db, "inrenping")
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="默认用户 inrenping 不存在",
+        )
+
+    # 查询区间内的每日心率汇总（按当前用户隔离）
+    daily_records = (
+        db.query(HeartRateDaily)
+        .filter(
+            HeartRateDaily.user_id == current_user.id,
+            HeartRateDaily.calendar_date >= start_date,
+            HeartRateDaily.calendar_date <= end_date,
+        )
+        .all()
+    )
+    by_date = {rec.calendar_date: rec for rec in daily_records}
+
+    # 补齐区间内每一天；缺失日期以 null 占位，保证趋势图日期轴连续
+    points = []
+    cursor = start_date
+    while cursor <= end_date:
+        rec = by_date.get(cursor)
+        points.append(
+            {
+                "calendar_date": cursor.isoformat(),
+                "resting_heart_rate": rec.resting_heart_rate if rec else None,
+                "min_heart_rate": rec.min_heart_rate if rec else None,
+                "max_heart_rate": rec.max_heart_rate if rec else None,
+            }
+        )
+        cursor += timedelta(days=1)
+
+    return {
+        "status": "success",
+        "data": points,
     }
 
 
