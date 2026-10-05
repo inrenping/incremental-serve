@@ -1,9 +1,7 @@
 import os
-import io
 import json
-import zipfile
 import requests
-from app.services import base_connect_service
+from app.services import base_connect_service, coros_upload
 
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
@@ -15,24 +13,12 @@ from sqlalchemy.orm import Session
 from app.models.base_connect import BaseConnect
 from app.models.base_activity import BaseActivity
 from app.models.user import User
-from app.services.oss.ali_oss_client import AliOssClient
-from app.services.oss.aws_oss_client import AwsOssClient
-from app.utils.coros_region_config import REGIONCONFIG
-from app.utils.coros_sts_config import STS_CONFIG
-from app.utils.md5_utils import calculate_md5_file
-from app.utils.config import GARMIN_FIT_DIR
 from app.utils.logger_utils import log_operation_async, log_request
 
 
 def get_team_api_base(region_id: str) -> str:
-    """根据区域 ID 获取高驰 Team API 的基准 URL。"""
-    try:
-        rid = int(region_id)
-        if rid in REGIONCONFIG:
-            return REGIONCONFIG[rid]["teamapi"]
-    except (ValueError, TypeError):
-        pass
-    return REGIONCONFIG.get(1, {}).get("teamapi", "https://teamapi.coros.com")
+    """根据区域 ID 获取高驰 Team API 的基准 URL（与 coros_upload 共用一份配置）。"""
+    return coros_upload.team_api_base(region_id)
 
 
 def update_coros_count(db: Session, coros_connect_id: int, total_count: int) -> bool:
@@ -580,104 +566,24 @@ def _upload_fit_zip_to_coros(
     fit_data: bytes,
     filename: str,
 ) -> dict:
-    """
-    内部方法：封装将 FIT ZIP 文件上传到高驰服务器的逻辑。
-    包含打包 ZIP、上传 OSS 及调用导入接口。
+    """把 FIT/ZIP 文件上传到高驰。
+
+    只负责刷新鉴权，打包/算 MD5/传 OSS/调导入接口统一交给 coros_upload，
+    与一键同步共用同一份实现，避免协议升级时再次漂移。
     """
     # 0. 刷新认证
     coros_config = base_connect_service.perform_relogin(
         coros_config.id, db=db, current_user=current_user
     )
-    # 1. 确保本地目录存在，并直接保存原始 ZIP 数据
-    os.makedirs(GARMIN_FIT_DIR, exist_ok=True)
-    file_path = os.path.join(GARMIN_FIT_DIR, f"{filename}.zip")
-
-    # 兼容传入裸 FIT 字节的情况（一键同步传入的是解压后的 FIT），先打包成合法 ZIP
-    if not fit_data.startswith(b"PK"):
-        buf = io.BytesIO()
-        inner_name = f"{os.path.splitext(filename)[0]}.fit"
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(inner_name, fit_data)
-        fit_data = buf.getvalue()
-
-    with open(file_path, "wb") as fb:
-        fb.write(fit_data)
-
-    # 计算文件大小与 MD5 校验码
-    filesize = os.path.getsize(file_path)
-    md5_hash = calculate_md5_file(file_path)
-    print(f"原始 ZIP 已保存: {file_path}, 大小: {filesize} 字节, MD5: {md5_hash}")
-
-    # 2. 上传至 OSS (根据区域选择 阿里云 或 AWS)
-    oss_path = f"fit_zip/{coros_config.guid}/{md5_hash}.zip"
-    print(f"准备上传到 OSS，路径: {oss_path}，区域: {coros_config.region}")
-
     try:
-        oss_client = None
-        rid = int(coros_config.region) if coros_config.region else 1
-        sts_conf = STS_CONFIG.get(rid, STS_CONFIG[1])
-        access_token = coros_config.access_token
-        if coros_config.region == 2 or coros_config.region == "2":
-            oss_client = AliOssClient(access_token=access_token, region=rid)
-        else:
-            oss_client = AwsOssClient(
-                access_token=access_token,
-                region=rid,
-                bucket=sts_conf["bucket"],
-            )
-        oss_client.multipart_upload(file_path, oss_path)
-        print(f"成功上传到 OSS: {oss_path}")
+        return coros_upload.upload_fit(
+            fit_data,
+            filename,
+            guid=coros_config.guid,
+            region=coros_config.region,
+            access_token=coros_config.access_token,
+            current_user=current_user,
+        )
     except Exception as e:
         print(f"上传到 OSS 失败:{str(e)}")
         raise HTTPException(status_code=500, detail=f"上传到 OSS 失败: {str(e)}")
-
-    # 3. 调用 Coros uploadActivity 接口
-    team_api = get_team_api_base(str(coros_config.region))
-    upload_url = f"{team_api}/activity/fit/import"
-    rid = int(coros_config.region) if coros_config.region else 1
-    sts = STS_CONFIG.get(rid, STS_CONFIG[1])
-
-    params = {
-        "source": 1,
-        "timezone": 32,
-        "bucket": sts["bucket"],
-        "md5": md5_hash,
-        "size": filesize,
-        "object": f"{oss_path}",
-        "serviceName": sts["service"],
-        "oriFileName": f"{filename}.zip",
-    }
-    print(f" {upload_url} | { json.dumps(params)}")
-    try:
-        with log_request(
-            current_user=current_user,
-            req_url=upload_url,
-            req_method="POST",
-            req_params=params,
-            log_type="upload",
-            module_name="coros",
-            op_desc=f"高驰上传运动文件{filename}",
-        ) as ctx:
-            res = requests.post(
-                upload_url,
-                headers={
-                    "accesstoken": coros_config.access_token,
-                    "Accept": "application/json, text/plain, */*",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                data={"jsonParameter": json.dumps(params)},
-                timeout=60,
-            ).json()
-            ctx["response"] = res
-            print(f"高驰 uploadActivity 响应: {json.dumps(res)}")
-    except Exception as e:
-        print("高驰 uploadActivity 异常:", e)
-        return {"status": "error", "message": f"上传异常: {str(e)}"}
-    if res.get("result") == "0000" and res.get("data", {}).get("status") == 2:
-        return {"status": "success", "message": "已成功同步到高驰", "data": res}
-    else:
-        return {
-            "status": "error",
-            "message": f"高驰导入失败: {res.get('message', '未知错误')}",
-            "details": res,
-        }
