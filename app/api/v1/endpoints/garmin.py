@@ -18,14 +18,15 @@ from app.models.sleep_detail import SleepDetail
 from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.core.security import get_current_user, get_current_user_optional
-from app.services import garmin_service
+from app.core.cron_auth import CRON_SYNC_TOKEN_HEADER, _require_cron_token
+from app.services import garmin_service, garmin_metrics_service
 from app.services.user_service import get_user_by_username
+from app.models.garmin_fitness_age import GarminFitnessAge
+from app.models.garmin_personal_record import GarminPersonalRecord
+from app.models.garmin_race_prediction import GarminRacePrediction
+from app.models.garmin_training_status import GarminTrainingStatus
 
 router = APIRouter()
-
-# 定时任务专用鉴权头。GitHub Actions 拿不到 Clerk 登录态，
-# 用共享密钥换取指定用户的同步权限（密钥配置在环境变量 CRON_SYNC_TOKEN）。
-CRON_SYNC_TOKEN_HEADER = "X-Sync-Token"
 
 
 def get_sync_principal(
@@ -638,6 +639,175 @@ def get_monthly_sleep(
                     "levels": levels_by_daily.get(record.id, []),
                 }
                 for record in records
+            ],
+        },
+    }
+
+
+# ==================== 体能指标 ====================
+# 训练状态·负荷 / 体能年龄 / 个人纪录 / 比赛成绩预测
+# 四张表都是「一人一份最新快照」，重复同步即覆盖，不记历史。
+
+
+def _find_master_garmin_connect(db: Session, user_id: int) -> BaseConnect:
+    """取该用户主账号（t_base_connect.master=True）那条佳明连接。"""
+    connect = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == user_id,
+            BaseConnect.source_type == "garmin",
+            BaseConnect.master == True,  # noqa: E712 - SQLAlchemy 需要 == True
+            BaseConnect.is_active == True,  # noqa: E712
+        )
+        .first()
+    )
+    if connect is None:
+        raise HTTPException(status_code=404, detail="未找到主账号为佳明的已激活连接")
+    return connect
+
+
+def _num(value):
+    """Decimal 转 float，避免前端拿到字符串。"""
+    return float(value) if value is not None else None
+
+
+@router.get("/syncFitnessMetrics")
+def sync_fitness_metrics(
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认按用户时区取今天"),
+    current_user: User = Depends(get_sync_principal),
+    db: Session = Depends(get_db),
+):
+    """同步当前用户主账号（佳明）的四项体能指标。
+
+    四项：训练状态·负荷、体能年龄、个人纪录、比赛成绩预测。
+    单项失败不影响其他项，失败原因写在对应字段的 reason 里。
+    比赛预测端点对无手表数据的账号会 404，属正常情况，表里保留上次的值。
+    """
+    connect = _find_master_garmin_connect(db, current_user.id)
+    if date is None:
+        date = _today_in_user_tz(current_user)
+
+    result = garmin_metrics_service.sync_garmin_fitness_metrics(
+        connect_id=connect.id, db=db, current_user=current_user, date=date
+    )
+    return {"status": "success", "data": result}
+
+
+@router.get("/syncFitnessMetricsAll")
+def sync_fitness_metrics_all(
+    request: Request,
+    date: str = Query(None, description="日期，格式 YYYY-MM-DD，默认按各用户时区取今天"),
+    db: Session = Depends(get_db),
+):
+    """批量同步：所有「主账号是佳明」的用户各跑一遍。
+
+    定时任务专用，需要 X-Sync-Token 头，普通登录用户不允许触发全量同步。
+    """
+    _require_cron_token(request)
+    summary = garmin_metrics_service.sync_fitness_metrics_for_all_masters(
+        db=db, date=date
+    )
+    return {"status": "success", "data": summary}
+
+
+@router.get("/getFitnessMetrics")
+def get_fitness_metrics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """读取当前用户已同步的体能指标快照，供前端页面展示。"""
+    status = (
+        db.query(GarminTrainingStatus)
+        .filter(GarminTrainingStatus.user_id == current_user.id)
+        .first()
+    )
+    fitness_age = (
+        db.query(GarminFitnessAge)
+        .filter(GarminFitnessAge.user_id == current_user.id)
+        .first()
+    )
+    records = (
+        db.query(GarminPersonalRecord)
+        .filter(GarminPersonalRecord.user_id == current_user.id)
+        .order_by(GarminPersonalRecord.type_id, GarminPersonalRecord.activity_type)
+        .all()
+    )
+    predictions = (
+        db.query(GarminRacePrediction)
+        .filter(GarminRacePrediction.user_id == current_user.id)
+        .order_by(GarminRacePrediction.race_type)
+        .all()
+    )
+
+    return {
+        "status": "success",
+        "data": {
+            "training_status": (
+                {
+                    "calendar_date": (
+                        status.calendar_date.isoformat() if status.calendar_date else None
+                    ),
+                    "training_status": status.training_status,
+                    "training_status_feedback_phrase": status.training_status_feedback_phrase,
+                    "training_paused": status.training_paused,
+                    "weekly_training_load": _num(status.weekly_training_load),
+                    "daily_training_load_acute": _num(status.daily_training_load_acute),
+                    "daily_training_load_chronic": _num(status.daily_training_load_chronic),
+                    "acute_chronic_workload_ratio": _num(status.acute_chronic_workload_ratio),
+                    "acwr_status": status.acwr_status,
+                    "load_tunnel_min": _num(status.load_tunnel_min),
+                    "load_tunnel_max": _num(status.load_tunnel_max),
+                    "vo2_max_value": _num(status.vo2_max_value),
+                    "vo2_max_running": _num(status.vo2_max_running),
+                    "vo2_max_cycling": _num(status.vo2_max_cycling),
+                    "synced_at": status.synced_at.isoformat() if status.synced_at else None,
+                }
+                if status
+                else None
+            ),
+            "fitness_age": (
+                {
+                    "calendar_date": (
+                        fitness_age.calendar_date.isoformat()
+                        if fitness_age.calendar_date
+                        else None
+                    ),
+                    "fitness_age": _num(fitness_age.fitness_age),
+                    "vo2_max_value": _num(fitness_age.vo2_max_value),
+                    "max_met": _num(fitness_age.max_met),
+                    "synced_at": (
+                        fitness_age.synced_at.isoformat() if fitness_age.synced_at else None
+                    ),
+                }
+                if fitness_age
+                else None
+            ),
+            "personal_records": [
+                {
+                    "type_id": record.type_id,
+                    "type_key": record.type_key,
+                    "activity_type": record.activity_type,
+                    "unit": record.unit,
+                    "value": _num(record.value),
+                    "value_seconds": _num(record.value_seconds),
+                    "value_meters": _num(record.value_meters),
+                    "activity_name": record.activity_name,
+                    "achieved_at": record.achieved_at.isoformat() if record.achieved_at else None,
+                    "activity_id": record.activity_id,
+                }
+                for record in records
+            ],
+            "race_predictions": [
+                {
+                    "race_type": prediction.race_type,
+                    "distance_meters": _num(prediction.distance_meters),
+                    "predicted_seconds": _num(prediction.predicted_seconds),
+                    "predicted_time_text": prediction.predicted_time_text,
+                    "synced_at": (
+                        prediction.synced_at.isoformat() if prediction.synced_at else None
+                    ),
+                }
+                for prediction in predictions
             ],
         },
     }

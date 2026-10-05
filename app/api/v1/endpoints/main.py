@@ -1,14 +1,17 @@
 from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, extract
 
 from app.db.session import get_db
+from app.models.base_connect import BaseConnect
 from app.models.main_activity import MainActivity
 from app.models.user import User
 from app.core.security import get_current_user
 from app.services import main_activity_service
+from app.utils.activity_type_config import ACTIVITY_CONFIG
 
 router = APIRouter()
 
@@ -30,17 +33,51 @@ def sync_base_to_main_activity(
 
 @router.get("/getActivitiesByPage")
 def get_activities_by_page(
+    connect_id: Optional[int] = None,
     page_size: int = 10,
     page_count: int = 1,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_types: Optional[str] = None,
+    name: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """分页查询主数据源运动记录（t_main_activity）。
+
+    过滤参数与 /base/getActivitiesByPage 保持一致，前端图表可以直接换 URL 切换数据源。
+    connect_id 省略时返回该用户所有连接的主表记录。
     """
-    分页获取主数据源的运动记录
-    """
-    query = db.query(MainActivity).filter(
-        MainActivity.user_id == current_user.id,
-    )
+    query = db.query(MainActivity).filter(MainActivity.user_id == current_user.id)
+
+    # 1. 按连接过滤（与 base 版本一致：连接不存在或不属于当前用户时返回空）
+    if connect_id:
+        base_connect = (
+            db.query(BaseConnect)
+            .filter(BaseConnect.id == connect_id, BaseConnect.user_id == current_user.id)
+            .first()
+        )
+        if not base_connect:
+            return {"status": "success", "data": [], "total": 0}
+        query = query.filter(MainActivity.base_connect_id == connect_id)
+
+    # 2. 时间区间
+    if start_date:
+        query = query.filter(MainActivity.start_time_local >= start_date)
+    if end_date:
+        query = query.filter(MainActivity.start_time_local <= end_date)
+
+    # 3. 运动类型（支持多选，逗号分隔：既有原始 key 也有展开后的 name）
+    if sport_types:
+        key_list = [t.strip() for t in sport_types.split(",")]
+        key_list.extend(
+            [item["name"] for item in ACTIVITY_CONFIG if item["key"] in key_list]
+        )
+        query = query.filter(MainActivity.sport_type_raw.in_(key_list))
+
+    # 4. 名称模糊搜索
+    if name:
+        query = query.filter(MainActivity.activity_name.ilike(f"%{name}%"))
 
     total = query.count()
 
