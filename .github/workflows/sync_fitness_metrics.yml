@@ -1,0 +1,24 @@
+name: 同步每日体能指标
+
+# 每天同步一次佳明体能指标：训练状态·负荷、体能年龄、个人纪录、比赛成绩预测。
+# 只同步「主账号是佳明」的用户（t_base_connect.master=true 且 source_type=garmin）。
+# 不传 date，由后端按每个用户自己的时区判定「今天」，
+# 避免 GitHub Runner 用 UTC 导致跨天错位。
+on:
+  schedule:
+    - cron: "0 23 * * *"  # 北京时间 07:00
+  workflow_dispatch: # 可手动触发
+
+jobs:
+  sync-fitness-metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 批量同步所有主账号为佳明的用户
+        env:
+          SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
+        run: |
+          echo "开始批量同步体能指标..."
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            --max-time 600 \
+            "https://i.incremental.icu/api/v1/garmin/syncFitnessMetricsAll" \
+            -H "X-Sync-Token: $SYNC_TOKEN"

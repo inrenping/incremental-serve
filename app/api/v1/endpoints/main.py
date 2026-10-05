@@ -1,14 +1,18 @@
 from datetime import datetime, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, extract
 
 from app.db.session import get_db
+from app.models.base_connect import BaseConnect
 from app.models.main_activity import MainActivity
 from app.models.user import User
 from app.core.security import get_current_user
+from app.core.cron_auth import _require_cron_token
 from app.services import main_activity_service
+from app.utils.activity_type_config import ACTIVITY_CONFIG
 
 router = APIRouter()
 
@@ -28,19 +32,70 @@ def sync_base_to_main_activity(
     return main_activity_service.sync_base_to_main_activity(db)
 
 
-@router.get("/getActivitiesByPage")
-def get_activities_by_page(
-    page_size: int = 10,
-    page_count: int = 1,
-    current_user: User = Depends(get_current_user),
+@router.get("/syncBaseToMainActivityAll")
+def sync_base_to_main_activity_all(
+    days: int = 7,
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """
-    分页获取主数据源的运动记录
+    定时任务专用：将所有用户的主数据源活动记录同步到 t_main_activity。
+
+    仅允许 X-Sync-Token 调用（GitHub Actions 等外部调度器）。
+    默认只扫最近 7 天的记录，传 days=0 走全量（首次/手动补数）。
+    按 connect 逐个隔离，单个连接失败不影响其他人，返回 {total, synced, failed, errors}。
     """
-    query = db.query(MainActivity).filter(
-        MainActivity.user_id == current_user.id,
-    )
+    _require_cron_token(request)
+    return main_activity_service.sync_base_to_main_activity_all(db, days=days)
+
+
+@router.get("/getActivitiesByPage")
+def get_activities_by_page(
+    connect_id: Optional[int] = None,
+    page_size: int = 10,
+    page_count: int = 1,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    sport_types: Optional[str] = None,
+    name: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """分页查询主数据源运动记录（t_main_activity）。
+
+    过滤参数与 /base/getActivitiesByPage 保持一致，前端图表可以直接换 URL 切换数据源。
+    connect_id 省略时返回该用户所有连接的主表记录。
+    """
+    query = db.query(MainActivity).filter(MainActivity.user_id == current_user.id)
+
+    # 1. 按连接过滤（与 base 版本一致：连接不存在或不属于当前用户时返回空）
+    if connect_id:
+        base_connect = (
+            db.query(BaseConnect)
+            .filter(BaseConnect.id == connect_id, BaseConnect.user_id == current_user.id)
+            .first()
+        )
+        if not base_connect:
+            return {"status": "success", "data": [], "total": 0}
+        query = query.filter(MainActivity.base_connect_id == connect_id)
+
+    # 2. 时间区间
+    if start_date:
+        query = query.filter(MainActivity.start_time_local >= start_date)
+    if end_date:
+        query = query.filter(MainActivity.start_time_local <= end_date)
+
+    # 3. 运动类型（支持多选，逗号分隔：既有原始 key 也有展开后的 name）
+    if sport_types:
+        key_list = [t.strip() for t in sport_types.split(",")]
+        key_list.extend(
+            [item["name"] for item in ACTIVITY_CONFIG if item["key"] in key_list]
+        )
+        query = query.filter(MainActivity.sport_type_raw.in_(key_list))
+
+    # 4. 名称模糊搜索
+    if name:
+        query = query.filter(MainActivity.activity_name.ilike(f"%{name}%"))
 
     total = query.count()
 

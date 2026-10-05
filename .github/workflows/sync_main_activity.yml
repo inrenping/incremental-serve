@@ -1,0 +1,24 @@
+name: 同步主运动数据
+
+# 每小时把所有用户的主数据源活动记录同步到 t_main_activity。
+# 走 /api/v1/main/syncBaseToMainActivityAll，需 X-Sync-Token 鉴权（CRON_SYNC_TOKEN）。
+# 默认只扫最近 7 天，首次/手动补数可传 days=0 走全量。
+on:
+  schedule:
+    # 每小时第 17 分钟（避开整点拥堵，GitHub 整点调度易延迟）
+    - cron: "17 * * * *"
+  workflow_dispatch: # 可手动触发
+
+jobs:
+  sync-main-activity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步所有用户主运动数据
+        env:
+          SYNC_TOKEN: ${{ secrets.CRON_SYNC_TOKEN }}
+        run: |
+          echo "开始同步主运动数据 (days=7)..."
+          curl -s -w "\nHTTP %{http_code}\n" -X GET \
+            --max-time 900 \
+            "https://i.incremental.icu/api/v1/main/syncBaseToMainActivityAll?days=7" \
+            -H "X-Sync-Token: $SYNC_TOKEN"
