@@ -189,7 +189,9 @@ def get_activities_by_page(
     if start_date:
         query = query.filter(BaseActivity.start_time_local >= start_date)
     if end_date:
-        query = query.filter(BaseActivity.start_time_local <= end_date)
+        # 纯日期(YYYY-MM-DD)当作当天结束，避免漏掉 end_date 当天全部活动
+        _end = end_date if len(end_date) > 10 else end_date + " 23:59:59"
+        query = query.filter(BaseActivity.start_time_local <= _end)
 
     # 4. 增加运动类型过滤 (支持多选，逗号分隔)
     if sport_types:
@@ -264,7 +266,9 @@ def get_activities_by_page_with_files(
     if start_date:
         query = query.filter(BaseActivity.start_time_local >= start_date)
     if end_date:
-        query = query.filter(BaseActivity.start_time_local <= end_date)
+        # 纯日期(YYYY-MM-DD)当作当天结束，避免漏掉 end_date 当天全部活动
+        _end = end_date if len(end_date) > 10 else end_date + " 23:59:59"
+        query = query.filter(BaseActivity.start_time_local <= _end)
 
     # 4. 增加运动类型过滤 (支持多选，逗号分隔)
     if sport_types:

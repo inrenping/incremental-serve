@@ -680,6 +680,18 @@ def get_monthly_sleep(
         .all()
     )
 
+    # 当月缺失日期（供前端触发补拉）；历史月份不计算，避免无谓请求
+    missing_days = []
+    _today_str = _today_in_user_tz(current_user)
+    if month == _today_str[:7]:
+        _today = date.fromisoformat(_today_str)
+        _have = {r.calendar_date for r in records}
+        _cur = month_start
+        while _cur <= _today:
+            if _cur not in _have:
+                missing_days.append(_cur.isoformat())
+            _cur += timedelta(days=1)
+
     def _iso(value):
         return value.isoformat() if value else None
 
@@ -706,6 +718,7 @@ def get_monthly_sleep(
         "status": "success",
         "data": {
             "month": month,
+            "missing_days": missing_days,
             "days": [
                 {
                     "calendar_date": record.calendar_date.isoformat(),
