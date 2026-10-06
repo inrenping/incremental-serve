@@ -138,11 +138,24 @@ def save_garmin_connection(
     if id:
         garmin_auth = db.query(BaseConnect).filter(BaseConnect.id == id).first()
 
-    # 3. 如果还是没找到，则新建
+    # 3. 如果还是没找到，则新建（新增账户时按 guid 判重，避免重复添加）
     if not garmin_auth:
-        print(f"新建 对应 region {region}")
-        garmin_auth = BaseConnect(user_id=user_id, region=region)
-        db.add(garmin_auth)
+        if garmin_guid:
+            dup = (
+                db.query(BaseConnect)
+                .filter(
+                    BaseConnect.user_id == user_id,
+                    BaseConnect.source_type == "garmin",
+                    BaseConnect.guid == garmin_guid,
+                )
+                .first()
+            )
+            if dup:
+                garmin_auth = dup
+        if not garmin_auth:
+            print(f"新建 对应 region {region}")
+            garmin_auth = BaseConnect(user_id=user_id, region=region)
+            db.add(garmin_auth)
 
     # 4. 统一更新字段
     garmin_auth.is_active = True
@@ -1001,6 +1014,18 @@ def save_garmin_daily_heart_rate(
                 heart_rate=heart_rate,
             )
             db.add(detail_record)
+
+    # summary 缺失兜底：max/min 为空时基于本次明细采样补算
+    # （restingHeartRate 无法从明细推算，保持 Garmin 原值/None）
+    _detail_hrs = [
+        hr
+        for ts, hr in heart_rate_values
+        if isinstance(hr, (int, float))
+    ]
+    if daily_record.max_heart_rate is None and _detail_hrs:
+        daily_record.max_heart_rate = max(_detail_hrs)
+    if daily_record.min_heart_rate is None and _detail_hrs:
+        daily_record.min_heart_rate = min(_detail_hrs)
 
     db.commit()
 

@@ -1,6 +1,7 @@
 ACTIVITY_CONFIG = [
   { "key": "100", "name": "running", "name_zh": "跑步/路跑" },
   { "key": "101", "name": "treadmill_running", "name_zh": "跑步机/室内跑" },
+  { "key": "101", "name": "indoor_running", "name_zh": "室内跑步" },
   { "key": "102", "name": "trail_running", "name_zh": "越野跑" },
   { "key": "103", "name": "track_running", "name_zh": "操场跑" },
   { "key": "200", "name": "cycling", "name_zh": "户外骑行" },
