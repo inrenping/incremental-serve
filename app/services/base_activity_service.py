@@ -212,32 +212,89 @@ def upload_activity_to_target(
             return garmin_service.sync_coros_to_garmin(
                 db, current_user, activity_id, target_connect.id
             )
-        elif source_connect.source_type == "suunto":
-            # 颂拓作为源：下载 FIT，再按目标平台上传（不支持 Suunto 作为目标）
-            file_response, filename = suunto_service.download_suunto_activity_response(
-                db, current_user, source_connect.id, activity_id
+        else:
+            # 其余组合统一走「从源平台下载 FIT → 上传到目标平台」，
+            # 覆盖 garmin→suunto / coros→suunto / suunto→coros|garmin|suunto 等。
+            # 注意：这里必须兜住所有组合，否则函数会隐式返回 None，
+            # 接口就返回 null 且不报错（曾经踩过）。
+            return _push_via_fit(
+                source_connect=source_connect,
+                target_connect=target_connect,
+                source_activity=source_activity,
+                db=db,
+                current_user=current_user,
             )
-            file_data = file_response.content
-            if target_connect.source_type == "coros":
-                return coros_service._upload_fit_zip_to_coros(
-                    db, current_user, target_connect, file_data, filename
-                )
-            elif target_connect.source_type.startswith("garmin"):
-                return garmin_service._upload_file_to_garmin(
-                    current_user=current_user,
-                    db=db,
-                    target_config=target_connect,
-                    file_data=file_data,
-                    filename=filename,
-                )
-            else:
-                return {
-                    "status": "error",
-                    "message": f"不支持的目标平台类型: {target_connect.source_type}",
-                }
     except Exception as e:
         print(f"上传失败: {str(e)}")
         return {"status": "error", "message": str(e)}
+
+
+def _platform_family(source_type: str) -> str:
+    """把 source_type 归一成平台族：garmin / coros / suunto（garmin_cn 也算 garmin）。"""
+    st = (source_type or "").strip().lower()
+    if st.startswith("garmin"):
+        return "garmin"
+    if st.startswith("coros"):
+        return "coros"
+    if st.startswith("suunto"):
+        return "suunto"
+    return st
+
+
+def _push_via_fit(
+    source_connect: BaseConnect,
+    target_connect: BaseConnect,
+    source_activity: BaseActivity,
+    db: Session,
+    current_user: User,
+) -> dict:
+    """通用推送：源平台下载 FIT → 目标平台上传。"""
+    src = _platform_family(source_connect.source_type)
+    tgt = _platform_family(target_connect.source_type)
+
+    if src == tgt:
+        return {"status": "error", "message": f"同一个平台的不需要同步（{tgt} → {tgt}）"}
+
+    # ---- 1. 从源平台取 FIT ----
+    if src == "garmin":
+        file_data, filename = garmin_service.get_garmin_activity_download_info(
+            db, current_user, source_activity.id
+        )
+    elif src == "coros":
+        file_response, filename = coros_service.download_coros_activity_response(
+            db, current_user, source_connect.id, source_activity.id
+        )
+        file_data = file_response.content
+    elif src == "suunto":
+        file_response, filename = suunto_service.download_suunto_activity_response(
+            db, current_user, source_connect.id, source_activity.id
+        )
+        file_data = file_response.content
+    else:
+        return {"status": "error", "message": f"不支持的源平台类型: {source_connect.source_type}"}
+
+    # ---- 2. 上传到目标平台 ----
+    if tgt == "coros":
+        return coros_service._upload_fit_zip_to_coros(
+            db, current_user, target_connect, file_data, filename
+        )
+    if tgt == "garmin":
+        return garmin_service._upload_file_to_garmin(
+            current_user=current_user,
+            db=db,
+            target_config=target_connect,
+            file_data=file_data,
+            filename=filename,
+        )
+    if tgt == "suunto":
+        return suunto_service.upload_fit_to_suunto(
+            target_connect,
+            file_data,
+            db=db,
+            current_user=current_user,
+            sport_type_raw=source_activity.sport_type_raw,
+        )
+    return {"status": "error", "message": f"不支持的目标平台类型: {target_connect.source_type}"}
 
 
 def is_same_activity(

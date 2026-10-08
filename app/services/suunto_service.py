@@ -166,6 +166,58 @@ def _suunto_sport_type_raw(activity_id) -> Optional[str]:
     return (SUUNTO_ACTIVITY_NAMES.get(idx) or "").lower() or None
 
 
+# slug → activityId 反查表（上传时把源活动的运动类型带过去）
+SUUNTO_ACTIVITY_ID_BY_SLUG = {}
+for _aid, _slug in SUUNTO_ACTIVITY_TYPE_SLUG.items():
+    SUUNTO_ACTIVITY_ID_BY_SLUG.setdefault(_slug, _aid)
+
+
+def suunto_activity_id_from_slug(slug: Optional[str]) -> Optional[int]:
+    """规范 slug → 颂拓 activityId（上 FIT→SML 时标注运动类型用）。"""
+    if not slug:
+        return None
+    return SUUNTO_ACTIVITY_ID_BY_SLUG.get(str(slug).strip().lower())
+
+
+def upload_fit_to_suunto(
+    config: BaseConnect,
+    file_data: bytes,
+    db: Session = None,
+    current_user: User = None,
+    sport_type_raw: str = None,
+) -> dict:
+    """把一段 FIT 上传到指定颂拓账号（FIT → JSON SML → POST /v1/workout）。
+
+    供"一键推送/单条推送"这类不经过 SuuntoSession 的路径直接调用。
+
+    Args:
+        config: 目标 BaseConnect（source_type="suunto"），会先 relogin 刷新 sessionKey。
+        file_data: 源平台下载下来的 FIT 字节。
+        sport_type_raw: 源活动的规范运动类型 slug，用来给 SML 标注运动类型。
+    """
+    from app.services import base_connect_service  # 延迟导入，避免循环依赖
+
+    if db is not None and current_user is not None:
+        config = base_connect_service.perform_relogin(
+            config.id, db=db, current_user=current_user
+        )
+    if not config or not config.access_token:
+        return {"status": "error", "message": "颂拓授权失效，请重新绑定账号"}
+
+    device_source = f"suunto-{abs(hash(config.account or '')) % 10 ** 9}"
+    sml = suunto_sml.fit_bytes_to_sml(
+        file_data,
+        device_source=device_source,
+        activity_id=suunto_activity_id_from_slug(sport_type_raw),
+    )
+    result = upload_sml(config.access_token, sml, config.region)
+    return {
+        "status": "success",
+        "message": "已上传到颂拓",
+        "detail": result,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 密钥还原与签名（移植自 suuntool/internal/auth）
 # ---------------------------------------------------------------------------
