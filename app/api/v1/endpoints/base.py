@@ -21,7 +21,6 @@ from app.services import (
     coros_service,
     garmin_service,
     suunto_service,
-    suunto_sml,
     quick_sync_service,
 )
 from app.services import sync_run_service
@@ -681,15 +680,11 @@ def log_stream_generator(
                 )
             elif target_config.source_type == "suunto":
                 try:
-                    refreshed = base_connect_service.perform_relogin(
-                        target_config.id, db=db, current_user=current_user
-                    )
-                    sml = suunto_sml.fit_bytes_to_sml(
+                    upload_result = suunto_service.upload_fit_to_suunto(
+                        target_config,
                         source_file,
-                        device_source=f"suunto-{abs(hash(refreshed.account)) % 10 ** 9}",
-                    )
-                    upload_result = suunto_service.upload_sml(
-                        refreshed.access_token, sml, refreshed.region
+                        db=db,
+                        current_user=current_user,
                     )
                 except Exception as e:
                     upload_result = {
