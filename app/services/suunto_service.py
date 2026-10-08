@@ -186,7 +186,7 @@ def upload_fit_to_suunto(
     current_user: User = None,
     sport_type_raw: str = None,
 ) -> dict:
-    """把一段 FIT 上传到指定颂拓账号（FIT → JSON SML → POST /v1/workout）。
+    """把一段 FIT 上传到指定颂拓账号（FIT → legacy SML XML → POST /v1/workout）。
 
     供"一键推送/单条推送"这类不经过 SuuntoSession 的路径直接调用。
 
@@ -205,12 +205,13 @@ def upload_fit_to_suunto(
         return {"status": "error", "message": "颂拓授权失效，请重新绑定账号"}
 
     device_source = f"suunto-{abs(hash(config.account or '')) % 10 ** 9}"
-    sml = suunto_sml.fit_bytes_to_sml(
+    # 上传端点只认 legacy SML **XML**（发 JSON 会让服务端反序列化失败 → 500）
+    sml_xml = suunto_sml.fit_bytes_to_sml_xml(
         file_data,
         device_source=device_source,
         activity_id=suunto_activity_id_from_slug(sport_type_raw),
     )
-    result = upload_sml(config.access_token, sml, config.region)
+    result = upload_sml(config.access_token, sml_xml, config.region)
     return {
         "status": "success",
         "message": "已上传到颂拓",
@@ -497,21 +498,37 @@ def get_workout_sml(session_key: str, key: str, region: str) -> dict:
     return resp.json()
 
 
-def upload_sml(session_key: str, sml: dict, region: str, extensions: dict = None) -> dict:
+def upload_sml(
+    session_key: str,
+    sml,
+    region: str,
+    extensions: dict = None,
+    filename: str = "workout.sml",
+) -> dict:
     """上传 SML 到颂拓（POST /v1/workout，multipart）。
 
-    颂拓私有 API 的写活动端点收的是 **SML**（JSON 形态）；这里直接把
-    ``fit_bytes_to_sml`` 产出的 dict 序列化后作为 ``filePart`` 发送。
     鉴权用 STTAuthorization（sessionKey），该端点不需要 x-totp（与 suuntool 一致）。
+    字段名 ``filePart``、Content-Type ``application/octet-stream``，与 suuntool
+    ``api.WorkoutMultipart`` 完全一致。
 
     Args:
-        sml: ``{"Data": {"Samples": [...]}, "Summary": {...}}`` 结构。
+        sml: SML 内容。**dict 会自动序列化为 JSON**；传 ``str``/``bytes`` 则按原样
+            发送（用于发 legacy SML **XML** —— 实测服务端只认 XML，发 JSON 会 500）。
         extensions: 可选，附加的 extensions JSON（通常传 None）。
+
+    注意：**不使用 raise_for_status**。Sportstracker 服务端把错误放在响应体里
+    （Asko 信封的 error 字段），抛异常会把最有价值的排查信息丢掉——之前就是
+    只看到一个「500 Internal Server Error」而查不出原因。
     """
     base_url = _base_url(region)
-    data = json.dumps(sml).encode("utf-8")
+    if isinstance(sml, dict):
+        data = json.dumps(sml).encode("utf-8")
+    elif isinstance(sml, str):
+        data = sml.encode("utf-8")
+    else:
+        data = sml
     files = {
-        "filePart": ("workout.sml", data, "application/octet-stream"),
+        "filePart": (filename, data, "application/octet-stream"),
     }
     if extensions is not None:
         files["workoutExtensionsPart"] = (
@@ -523,10 +540,40 @@ def upload_sml(session_key: str, sml: dict, region: str, extensions: dict = None
         base_url + "workout",
         files=files,
         headers=_headers(session_key),
-        timeout=30,
+        timeout=60,
     )
-    resp.raise_for_status()
-    return resp.json()
+
+    # 尽量把服务端错误解析成结构化信息
+    body_text = (resp.text or "").strip()
+    parsed = None
+    try:
+        parsed = resp.json()
+    except Exception:
+        parsed = None
+
+    result = {
+        "status_code": resp.status_code,
+        "body": body_text[:2000],
+    }
+    if isinstance(parsed, dict):
+        result["response"] = parsed
+        # Asko 信封：{"error": ..., "payload": ..., "metadata": ...}
+        err = parsed.get("error")
+        if err:
+            result["error"] = err
+
+    if resp.status_code >= 400:
+        detail = result.get("error") or body_text[:500] or f"HTTP {resp.status_code}"
+        raise HTTPException(
+            status_code=502,
+            detail=f"颂拓上传失败(HTTP {resp.status_code}): {detail}",
+        )
+    if isinstance(parsed, dict) and parsed.get("error"):
+        raise HTTPException(
+            status_code=502,
+            detail=f"颂拓上传被拒绝: {parsed.get('error')}",
+        )
+    return result
 
 
 def _position_to_latlon(pos: Optional[dict]) -> tuple:
@@ -939,19 +986,20 @@ class SuuntoSession:
         return data, f"suunto_activity_{activity['activity_id']}.fit"
 
     def upload_fit(self, file_data: bytes, filename: str, activity_id: int = None) -> dict:
-        """把一段 FIT 上传到颂拓（FIT -> JSON SML -> POST /v1/workout）。
+        """把一段 FIT 上传到颂拓（FIT -> legacy SML XML -> POST /v1/workout）。
 
-        颂拓私有 API 不支持直接收 FIT，需要先把 FIT 转成它的 SML 格式再上传。
+        颂拓私有 API 不支持直接收 FIT，也不收 SML 的 JSON 形态：
+        上传端点的 ``filePart`` 必须是 legacy SML **XML**。
         """
         region, access_token, account, _ = self._snapshot()
         try:
             device_source = f"suunto-{abs(hash(account)) % 10 ** 9}"
-            sml = suunto_sml.fit_bytes_to_sml(
+            sml_xml = suunto_sml.fit_bytes_to_sml_xml(
                 file_data,
                 device_source=device_source,
                 activity_id=activity_id,
             )
-            result = upload_sml(access_token, sml, region)
+            result = upload_sml(access_token, sml_xml, region)
         except Exception as e:
             return {"status": "error", "message": f"上传到颂拓失败: {str(e)}"}
         return {
