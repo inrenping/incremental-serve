@@ -21,6 +21,7 @@ from app.services import (
     coros_service,
     garmin_service,
     suunto_service,
+    suunto_sml,
     quick_sync_service,
 )
 from app.services import sync_run_service
@@ -679,10 +680,22 @@ def log_stream_generator(
                     filename=filename,
                 )
             elif target_config.source_type == "suunto":
-                upload_result = {
-                    "status": "error",
-                    "message": "目标平台 Suunto 暂不支持上传（仅支持拉取）",
-                }
+                try:
+                    refreshed = base_connect_service.perform_relogin(
+                        target_config.id, db=db, current_user=current_user
+                    )
+                    sml = suunto_sml.fit_bytes_to_sml(
+                        source_file,
+                        device_source=f"suunto-{abs(hash(refreshed.account)) % 10 ** 9}",
+                    )
+                    upload_result = suunto_service.upload_sml(
+                        refreshed.access_token, sml, refreshed.region
+                    )
+                except Exception as e:
+                    upload_result = {
+                        "status": "error",
+                        "message": f"上传到颂拓失败: {str(e)}",
+                    }
             else:
                 upload_result = {
                     "status": "error",

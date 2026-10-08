@@ -17,6 +17,7 @@ from app.models.base_activity import BaseActivity
 from app.models.user import User
 from app.utils.crypto_utils import CryptoUtils
 from app.utils.logger_utils import log_operation_async, log_request
+from app.services import suunto_sml
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +305,54 @@ def download_fit_bytes(session_key: str, key: str, region: str) -> bytes:
     )
     resp.raise_for_status()
     return resp.content
+
+
+def get_workout_sml(session_key: str, key: str, region: str) -> dict:
+    """拉取某个活动的 JSON SML（GET /v1/workouts/{key}/sml）。
+
+    主要用于：拿真实样本回来比对 fit->SML 转换器造出的字段名是否一致，
+    尤其是 Summary 块（目前转换器里的 Summary 结构是未经真实样本逐字校验的）。
+    """
+    base_url = _base_url(region)
+    resp = requests.get(
+        base_url + f"workouts/{key}/sml",
+        headers=_headers(session_key),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def upload_sml(session_key: str, sml: dict, region: str, extensions: dict = None) -> dict:
+    """上传 SML 到颂拓（POST /v1/workout，multipart）。
+
+    颂拓私有 API 的写活动端点收的是 **SML**（JSON 形态）；这里直接把
+    ``fit_bytes_to_sml`` 产出的 dict 序列化后作为 ``filePart`` 发送。
+    鉴权用 STTAuthorization（sessionKey），该端点不需要 x-totp（与 suuntool 一致）。
+
+    Args:
+        sml: ``{"Data": {"Samples": [...]}, "Summary": {...}}`` 结构。
+        extensions: 可选，附加的 extensions JSON（通常传 None）。
+    """
+    base_url = _base_url(region)
+    data = json.dumps(sml).encode("utf-8")
+    files = {
+        "filePart": ("workout.sml", data, "application/octet-stream"),
+    }
+    if extensions is not None:
+        files["workoutExtensionsPart"] = (
+            "extensions.json",
+            json.dumps(extensions).encode("utf-8"),
+            "application/json",
+        )
+    resp = requests.post(
+        base_url + "workout",
+        files=files,
+        headers=_headers(session_key),
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 def _normalize_workout(it: dict) -> dict:
@@ -595,9 +644,24 @@ class SuuntoSession:
             data = download_fit_bytes(access_token, activity["activity_id"], region)
         return data, f"suunto_activity_{activity['activity_id']}.fit"
 
-    def upload_fit(self, file_data: bytes, filename: str) -> dict:
-        """颂拓暂不支持作为上传目标（仅支持拉取活动列表与下载 FIT）。"""
+    def upload_fit(self, file_data: bytes, filename: str, activity_id: int = None) -> dict:
+        """把一段 FIT 上传到颂拓（FIT -> JSON SML -> POST /v1/workout）。
+
+        颂拓私有 API 不支持直接收 FIT，需要先把 FIT 转成它的 SML 格式再上传。
+        """
+        region, access_token, account, _ = self._snapshot()
+        try:
+            device_source = f"suunto-{abs(hash(account)) % 10 ** 9}"
+            sml = suunto_sml.fit_bytes_to_sml(
+                file_data,
+                device_source=device_source,
+                activity_id=activity_id,
+            )
+            result = upload_sml(access_token, sml, region)
+        except Exception as e:
+            return {"status": "error", "message": f"上传到颂拓失败: {str(e)}"}
         return {
-            "status": "error",
-            "message": "Suunto 暂不支持作为上传目标（仅支持拉取活动与下载 FIT）",
+            "status": "success",
+            "message": "已上传到颂拓",
+            "detail": result,
         }
