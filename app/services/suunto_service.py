@@ -468,7 +468,13 @@ def pull_full_suunto_activities(
             new_saved_count += 1
 
         total_fetched += len(items)
-        until = meta.get("until") or 0
+        # metadata.until 是 unix 毫秒游标；服务端以字符串形式返回（大整数防 JS
+        # 精度丢失），所以这里必须显式转成 int，否则下一行 str <= int 会抛 TypeError。
+        until_raw = meta.get("until")
+        try:
+            until = int(until_raw) if until_raw is not None else 0
+        except (TypeError, ValueError):
+            until = 0
         if stop_fetching or until <= since:
             break
         since = until
