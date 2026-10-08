@@ -520,9 +520,18 @@ def fit_bytes_to_sml_xml(
             _sub(s, "GPSAltitude", _fmt_num(rec["alt"], 2))
         if "spd" in rec:
             _sub(s, "GPSSpeed", _fmt_num(rec["spd"]))
-    #注：FIT 的``power`` 暂不写入 —— SML 里功率不是 Sample 的直接子元素，
+    # 注：FIT 的``power`` 暂不写入 —— SML 里功率不是 Sample 的直接子元素，
     #   而是 ``Sample/AppsData/AppData(Value)``，需要先确定 AppNumber，
     #   贸然加未知元素反而可能让服务端解析失败。等上传打通后再补。
+
+    # ---- parsingResume ----
+    # 真实 Moveslink2 生成的 SML 里``DeviceLog`` 下有这一个元素
+    # （形如 ``sml.DeviceLog.parsingResume.binarySize``，是「上次解析到哪了」的
+    # 断点续传标记）。**JAXB 模型里没有它** —— 说明它不属于训练数据的 XSD
+    # sequence，而是服务端上传入口单独要求的信封元素，属于 523 的候选原因之一。
+    # 放在 Samples 之后（真实文件里它就在样本之后）。
+    resume = ET.SubElement(log, f"{{{_SML_NS}}}parsingResume")
+    resume.set("binarySize", "0")
 
     _indent(sml)
     return ET.tostring(sml, encoding="UTF-8", xml_declaration=True)
