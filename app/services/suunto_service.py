@@ -45,6 +45,128 @@ TOTP_OBFUSCATION_KEY = "Bh8nsTyCeC0Ql2drMen78awk84AE3ZxW"
 
 
 # ---------------------------------------------------------------------------
+# 运动类型表
+#
+# Sports Tracker 的 workouts 列表 **不返回用户自定义标题**（没有 name 字段），
+# 只有数字 activityId。英文枚举名逆向自官方 APK（与 suuntool internal/api/
+# endpoints/activity_types.go 一致，89/98 是枚举空洞）；中文名为本项目映射，
+# 用于填 activity_name —— 否则同步回来的活动名是空字符串。
+# ---------------------------------------------------------------------------
+
+SUUNTO_ACTIVITY_NAMES = {
+    0: "WALKING", 1: "RUNNING", 2: "CYCLING", 3: "CROSS_COUNTRY_SKIING",
+    4: "OTHER_1", 5: "OTHER_2", 6: "OTHER_3", 7: "OTHER_4", 8: "OTHER_5",
+    9: "OTHER_6", 10: "MOUNTAIN_BIKING", 11: "HIKING", 12: "ROLLER_SKATING",
+    13: "DOWNHILL_SKIING", 14: "PADDLING", 15: "ROWING", 16: "GOLF",
+    17: "INDOOR", 18: "PARKOUR", 19: "BALLGAMES", 20: "OUTDOOR_GYM",
+    21: "SWIMMING", 22: "TRAIL_RUNNING", 23: "GYM", 24: "NORDIC_WALKING",
+    25: "HORSEBACK_RIDING", 26: "MOTOR_SPORTS", 27: "SKATEBOARDING",
+    28: "WATER_SPORTS", 29: "CLIMBING", 30: "SNOWBOARDING", 31: "SKI_TOURING",
+    32: "FITNESS_CLASS", 33: "SOCCER", 34: "TENNIS", 35: "BASKETBALL",
+    36: "BADMINTON", 37: "BASEBALL", 38: "VOLLEYBALL", 39: "AMERICAN_FOOTBALL",
+    40: "TABLE_TENNIS", 41: "RACQUETBALL", 42: "SQUASH", 43: "FLOORBALL",
+    44: "HANDBALL", 45: "SOFTBALL", 46: "BOWLING", 47: "CRICKET", 48: "RUGBY",
+    49: "ICE_SKATING", 50: "ICE_HOCKEY", 51: "YOGA", 52: "INDOOR_CYCLING",
+    53: "TREADMILL", 54: "CROSSFIT", 55: "CROSSTRAINER", 56: "ROLLER_SKIING",
+    57: "INDOOR_ROWING", 58: "STRETCHING", 59: "TRACK_AND_FIELD",
+    60: "ORIENTEERING", 61: "SUP", 62: "COMBAT_SPORTS", 63: "KETTLEBELL",
+    64: "DANCING", 65: "SNOWSHOEING", 66: "FRISBEE_GOLF", 67: "FUTSAL",
+    68: "MULTISPORT", 69: "AEROBICS", 70: "TREKKING", 71: "SAILING",
+    72: "KAYAKING", 73: "CIRCUIT_TRAINING", 74: "TRIATHLON", 75: "PADEL",
+    76: "CHEERLEADING", 77: "BOXING", 78: "SCUBADIVING", 79: "FREEDIVING",
+    80: "ADVENTURE_RACING", 81: "GYMNASTICS", 82: "CANOEING",
+    83: "MOUNTAINEERING", 84: "TELEMARKSKIING", 85: "OPENWATER_SWIMMING",
+    86: "WINDSURFING", 87: "KITESURFING_KITING", 88: "PARAGLIDING",
+    90: "SNORKELING", 91: "SURFING", 92: "SWIMRUN", 93: "DUATHLON",
+    94: "AQUATHLON", 95: "OBSTACLE_RACING", 96: "FISHING", 97: "HUNTING",
+    99: "GRAVEL_CYCLING", 100: "MERMAIDING", 101: "SPEARFISHING",
+    102: "JUMP_ROPE", 103: "TRACK_RUNNING", 104: "CALISTHENICS",
+    105: "E_BIKING", 106: "E_MTB", 107: "BACKCOUNTRY_SKIING",
+    108: "WHEELCHAIR", 109: "HAND_CYCLING", 110: "SPLIT_BOARDING",
+    111: "BIATHLON", 112: "MEDITATION", 113: "FIELD_HOCKEY", 114: "CYCLOCROSS",
+    115: "VERTICAL_RUN", 116: "SKI_MOUNTAINEERING", 117: "SKATE_SKIING",
+    118: "CLASSIC_SKIING", 119: "CHORES", 120: "PILATES", 121: "NEW_YOGA",
+}
+
+SUUNTO_ACTIVITY_NAMES_ZH = {
+    0: "步行", 1: "跑步", 2: "骑行", 3: "越野滑雪", 4: "其他", 5: "其他",
+    6: "其他", 7: "其他", 8: "其他", 9: "其他", 10: "山地骑行", 11: "徒步",
+    12: "轮滑", 13: "高山滑雪", 14: "划桨", 15: "赛艇", 16: "高尔夫",
+    17: "室内运动", 18: "跑酷", 19: "球类运动", 20: "户外健身", 21: "游泳",
+    22: "越野跑", 23: "健身", 24: "北欧健走", 25: "骑马", 26: "赛车",
+    27: "滑板", 28: "水上运动", 29: "攀岩", 30: "单板滑雪", 31: "滑雪穿越",
+    32: "团体健身", 33: "足球", 34: "网球", 35: "篮球", 36: "羽毛球",
+    37: "棒球", 38: "排球", 39: "美式橄榄球", 40: "乒乓球", 41: "壁球",
+    42: "壁式网球", 43: "地板球", 44: "手球", 45: "垒球", 46: "保龄球",
+    47: "板球", 48: "橄榄球", 49: "滑冰", 50: "冰球", 51: "瑜伽",
+    52: "室内骑行", 53: "跑步机", 54: "CrossFit", 55: "交叉训练",
+    56: "轮滑滑雪", 57: "室内划船", 58: "拉伸", 59: "田径", 60: "定向越野",
+    61: "桨板(SUP)", 62: "格斗", 63: "壶铃", 64: "舞蹈", 65: "雪地徒步",
+    66: "飞盘高尔夫", 67: "五人制足球", 68: "多项运动", 69: "有氧操",
+    70: "徒步旅行", 71: "帆船", 72: "皮划艇", 73: "循环训练", 74: "铁人三项",
+    75: "板式网球", 76: "啦啦操", 77: "拳击", 78: "水肺潜水", 79: "自由潜水",
+    80: "探险赛", 81: "体操", 82: "独木舟", 83: "高山攀登", 84: "远程滑雪",
+    85: "公开水域游泳", 86: "风帆冲浪", 87: "风筝冲浪", 88: "滑翔伞",
+    90: "浮潜", 91: "冲浪", 92: "游泳跑步", 93: "两项赛", 94: "水中两项",
+    95: "障碍赛", 96: "钓鱼", 97: "狩猎", 99: "砾石骑行", 100: "美人鱼泳",
+    101: "鱼枪捕鱼", 102: "跳绳", 103: "场地跑", 104: "自重健身",
+    105: "电助力骑行", 106: "电助力山地车", 107: "野滑雪", 108: "轮椅",
+    109: "手推自行车", 110: "分体滑板", 111: "冬季两项", 112: "冥想",
+    113: "曲棍球", 114: "越野自行车", 115: "垂直跑", 116: "滑雪登山",
+    117: "滑轮滑雪", 118: "传统滑雪", 119: "家务", 120: "普拉提",
+    121: "新瑜伽",
+}
+
+
+def _suunto_activity_name(activity_id) -> str:
+    """把数字 activityId 映射成中文运动名（列表接口没有用户自定义标题）。"""
+    if activity_id is None:
+        return ""
+    try:
+        idx = int(activity_id)
+    except (TypeError, ValueError):
+        return ""
+    name = SUUNTO_ACTIVITY_NAMES_ZH.get(idx)
+    if name:
+        return name
+    # 枚举空洞（89/98）或新版 APK 新增的类型：退回英文枚举名，都没有则标注原始 id
+    return SUUNTO_ACTIVITY_NAMES.get(idx) or f"颂拓运动 {idx}"
+
+
+# sport_type_raw 用规范 slug（对齐 app/utils/activity_type_config.py 的 ACTIVITY_CONFIG
+# 与前端 activity-icons 的匹配规则），否则三处都会失效：
+#   1) 活动页「运动类型」筛选：后端把 key(100) 展开成 name(running) 再匹配 sport_type_raw；
+#   2) 前端图标：getActivityIconName 查不到就退化成通用 IconActivity；
+#   3) 前端类型标签：ActivityTypes.<slug> 查不到就直接显示原始值。
+# 没有对应等价类型的 sport_type_raw 存英文枚举名的小写形式（前端仍可按关键字匹配图标）。
+SUUNTO_ACTIVITY_TYPE_SLUG = {
+    0: "walking", 1: "running", 2: "cycling", 3: "cross_country_skiing",
+    10: "mountain_biking", 11: "hiking", 14: "paddlesports", 15: "rowing",
+    21: "swimming", 22: "trail_running", 24: "walking", 28: "water_sports",
+    30: "resort_skiing_snowboarding_ws", 31: "resort_skiing_snowboarding_ws",
+    51: "yoga", 52: "indoor_cycling", 53: "treadmill_running", 59: "track_and_field",
+    61: "paddlesports", 70: "hiking", 71: "sailing", 72: "rowing_v2",
+    74: "triathlon", 85: "open_water_swimming", 86: "windsurfing",
+    91: "surfing", 99: "cycling", 103: "track_running", 105: "e_biking",
+    106: "e_mtb", 107: "backcountry_skiing_snowboarding_ws", 114: "cycling",
+}
+
+
+def _suunto_sport_type_raw(activity_id) -> Optional[str]:
+    """数字 activityId → 规范运动类型 slug（小写英文）。"""
+    if activity_id is None:
+        return None
+    try:
+        idx = int(activity_id)
+    except (TypeError, ValueError):
+        return None
+    slug = SUUNTO_ACTIVITY_TYPE_SLUG.get(idx)
+    if slug:
+        return slug
+    return (SUUNTO_ACTIVITY_NAMES.get(idx) or "").lower() or None
+
+
+# ---------------------------------------------------------------------------
 # 密钥还原与签名（移植自 suuntool/internal/auth）
 # ---------------------------------------------------------------------------
 
@@ -355,28 +477,154 @@ def upload_sml(session_key: str, sml: dict, region: str, extensions: dict = None
     return resp.json()
 
 
+def _position_to_latlon(pos: Optional[dict]) -> tuple:
+    """把 Sports Tracker 的位置块转成 (纬度, 经度) 度数。
+
+    真实响应（@petitchevalroux/sports-tracker-client 样本）里位置是
+    ``{"x": <经度>, "y": <纬度>}`` —— x 是经度、y 是纬度；
+    suuntool 的 LatLon 结构体写成 latitude/longitude 是错的（它从不消费该字段）。
+    这里两种键名都兼容。
+
+    另外 JSON SML 里的经纬度是**弧度**，而 workouts 列表接口是**度数**；为防
+    哪天服务端口径变化，这里做一次范围判定：超出度数范围且落在弧度范围内就换算。
+    """
+    if not isinstance(pos, dict):
+        return None, None
+    lat = pos.get("y")
+    lon = pos.get("x")
+    if lat is None and lon is None:
+        lat = pos.get("latitude")
+        lon = pos.get("longitude")
+    if lat is None or lon is None:
+        return None, None
+    try:
+        lat = float(lat)
+        lon = float(lon)
+    except (TypeError, ValueError):
+        return None, None
+    # 弧度兜底判定（正常数据不会走到这里）
+    if abs(lat) <= 3.15 and abs(lon) <= 3.15:
+        import math
+
+        lat = math.degrees(lat)
+        lon = math.degrees(lon)
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None, None
+    return lat, lon
+
+
+def _num(*candidates):
+    """取第一个非 None 的数值候选（用于多来源字段的优先级回退）。"""
+    for c in candidates:
+        if c is None:
+            continue
+        try:
+            f = float(c)
+        except (TypeError, ValueError):
+            continue
+        if f > 0:
+            return f
+    return None
+
+
+def _int_or_none(value):
+    """Integer 列不要浮点：四舍五入成 int，无值返回 None。"""
+    if value is None:
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 def _normalize_workout(it: dict) -> dict:
-    """把 Suunto workouts 列表项映射成与 BaseActivity 对齐的归一化字典。"""
+    """把 Suunto workouts 列表项映射成与 BaseActivity 对齐的归一化字典。
+
+    覆盖列表接口能给的**全部**字段：起止时间、距离/时长、爬升下降、热量、
+    平均/最大心率、平均/最大速度、平均/最大踏频、起点经纬度、活动名。
+    """
     start_ts = it.get("startTime")
+    stop_ts = it.get("stopTime")
     start_dt = None
     if start_ts:
         start_dt = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
+    end_dt = None
+    if stop_ts:
+        end_dt = datetime.fromtimestamp(stop_ts / 1000, tz=timezone.utc)
+
+    hr = it.get("hrdata") or {}
+    cadence = it.get("cadence") or {}
+    distance = it.get("totalDistance")
+    duration = it.get("totalTime")
+    start_lat, start_lon = _position_to_latlon(it.get("startPosition"))
+
     return {
-        "activity_id": str(it.get("key")),
+        "activity_id": str(it.get("key") or it.get("workoutKey") or ""),
         "source_type": "suunto",
-        "activity_name": "",
-        "sport_type_raw": str(it.get("activityId")) if it.get("activityId") is not None else None,
+        # 列表接口没有用户标题，用运动类型名兜底
+        "activity_name": _suunto_activity_name(it.get("activityId")),
+        # 规范 slug（供筛选/图标/标签匹配），原始枚举 id 存进 sport_mode_raw
+        "sport_type_raw": _suunto_sport_type_raw(it.get("activityId")),
+        "sport_mode_raw": _int_or_none(it.get("activityId")),
         "start_time_gmt": start_dt,
         "start_time_local": datetime.fromtimestamp(start_ts / 1000) if start_ts else None,
-        "distance_meters": it.get("totalDistance"),
-        "duration_seconds": it.get("totalTime"),
+        "end_time_gmt": end_dt,
+        "distance_meters": distance,
+        "duration_seconds": duration,
+        # 列表接口没有净运动时长，总时长先兜住，避免前端显示空
+        "moving_duration_seconds": duration,
         "calories": it.get("energyConsumption"),
-        "average_hr": (it.get("hrdata") or {}).get("avg"),
-        "max_hr": (it.get("hrdata") or {}).get("max"),
+        # workoutAvgHR/workoutMaxHR 是本次活动的值；avg/max 是设备档位，优先用前者
+        "average_hr": _int_or_none(_num(hr.get("workoutAvgHR"), hr.get("avg"))),
+        "max_hr": _int_or_none(_num(hr.get("workoutMaxHR"), hr.get("max"))),
+        "average_cadence": _int_or_none(_num(cadence.get("avg"))),
+        "max_cadence": _int_or_none(_num(cadence.get("max"))),
+        # avgSpeed 单位是 m/s；缺失时用 距离/时长 兜底
+        "average_speed": _num(
+            it.get("avgSpeed"),
+            (distance / duration) if distance and duration else None,
+        ),
+        "max_speed": _num(it.get("maxSpeed")),
+        "start_lat": start_lat,
+        "start_lon": start_lon,
         "elevation_gain": it.get("totalAscent"),
         "elevation_loss": it.get("totalDescent"),
         "_raw": it,
     }
+
+
+def _backfill_missing_fields(row: BaseActivity, norm: dict) -> bool:
+    """只把库里为空的字段补上，不覆盖已有值。返回是否发生了补齐。
+
+    例外：旧版本把数字 activityId 直接写进了 ``sport_type_raw``，那种值要**替换**
+    成规范 slug —— 否则前端的类型筛选/图标/标签对这几条永远失效。
+    """
+    changed = False
+    for field in (
+        "activity_name",
+        "sport_type_raw",
+        "sport_mode_raw",
+        "end_time_gmt",
+        "moving_duration_seconds",
+        "average_cadence",
+        "max_cadence",
+        "average_speed",
+        "max_speed",
+        "start_lat",
+        "start_lon",
+    ):
+        value = norm.get(field)
+        if value in (None, ""):
+            continue
+        current = getattr(row, field, None)
+        if field == "sport_type_raw" and isinstance(current, str) and current.isdigit():
+            setattr(row, field, value)
+            changed = True
+            continue
+        if current in (None, ""):
+            setattr(row, field, value)
+            changed = True
+    return changed
 
 
 def pull_full_suunto_activities(
@@ -406,6 +654,7 @@ def pull_full_suunto_activities(
     total_count = 0
     total_fetched = 0
     new_saved_count = 0
+    total_backfilled = 0
     since = 0
     stop_fetching = False
 
@@ -422,47 +671,47 @@ def pull_full_suunto_activities(
             # 粗略总数：用本页长度估算；服务端未直接返回 count
             total_count = len(items)
 
-        keys = [str(it.get("key")) for it in items if it.get("key")]
-        existing_ids = set()
+        keys = [
+            str(it.get("key") or it.get("workoutKey"))
+            for it in items
+            if it.get("key") or it.get("workoutKey")
+        ]
+        existing_rows = {}
         if keys:
-            existing_ids = {
-                lid
-                for (lid,) in db.query(BaseActivity.activity_id)
-                .filter(BaseActivity.activity_id.in_(keys))
+            existing_rows = {
+                str(row.activity_id): row
+                for row in db.query(BaseActivity)
+                .filter(
+                    BaseActivity.user_id == current_user.id,
+                    BaseActivity.source_type == "suunto",
+                    BaseActivity.activity_id.in_(keys),
+                )
                 .all()
             }
 
         for it in items:
-            key = str(it.get("key"))
-            if key in existing_ids:
+            key = str(it.get("key") or it.get("workoutKey") or "")
+            if not key:
+                continue
+            norm = _normalize_workout(it)
+            existing = existing_rows.get(key)
+            if existing is not None:
+                # 旧数据里这些字段可能是空的（早期版本只填了距离/时长/心率），补齐
+                if _backfill_missing_fields(existing, norm):
+                    total_backfilled += 1
+                # 如果增量拉取则停止
                 if incremental:
                     stop_fetching = True
                     break
                 continue
-            norm = _normalize_workout(it)
-            start_gmt = norm["start_time_gmt"]
-            start_local = norm["start_time_local"]
+            # _raw 是原始响应不落库；source_type 已在上面显式给出，避免重复传参
+            norm.pop("_raw", None)
+            norm.pop("source_type", None)
             new_activity = BaseActivity(
                 base_connect_id=base_connect.id,
                 user_id=current_user.id,
                 source_type="suunto",
-                activity_id=key,
-                activity_name=norm["activity_name"],
-                sport_type_raw=norm["sport_type_raw"],
-                start_time_gmt=start_gmt,
-                start_time_local=start_local,
-                end_time_gmt=(
-                    datetime.fromtimestamp(it.get("stopTime") / 1000, tz=timezone.utc)
-                    if it.get("stopTime")
-                    else None
-                ),
-                distance_meters=norm["distance_meters"],
-                duration_seconds=norm["duration_seconds"],
-                calories=norm["calories"],
-                average_hr=norm["average_hr"],
-                max_hr=norm["max_hr"],
-                elevation_gain=norm["elevation_gain"],
-                elevation_loss=norm["elevation_loss"],
+                **norm,
             )
             db.add(new_activity)
             new_saved_count += 1
@@ -487,6 +736,7 @@ def pull_full_suunto_activities(
         "total_in_platform": total_count,
         "fetched_count": total_fetched,
         "new_saved_count": new_saved_count,
+        "backfilled_count": total_backfilled,
     }
 
 
@@ -557,24 +807,10 @@ def fetch_latest_suunto_activities(
     items, _ = list_workouts(config.access_token, config.region, since=0, limit=count)
     activities = []
     for it in items:
-        key = str(it.get("key"))
-        start_ts = it.get("startTime")
-        activities.append(
-            {
-                "activity_id": key,
-                "source_type": "suunto",
-                "activity_name": "",
-                "sport_type_raw": str(it.get("activityId")) if it.get("activityId") is not None else None,
-                "start_time_gmt": (
-                    datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc)
-                    if start_ts
-                    else None
-                ),
-                "start_time_local": datetime.fromtimestamp(start_ts / 1000) if start_ts else None,
-                "distance_meters": it.get("totalDistance"),
-                "_raw": it,
-            }
-        )
+        norm = _normalize_workout(it)
+        if not norm["activity_id"]:
+            continue
+        activities.append(norm)
     return activities
 
 
