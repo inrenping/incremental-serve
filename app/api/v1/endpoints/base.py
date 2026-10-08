@@ -20,6 +20,7 @@ from app.services import (
     base_activity_service,
     coros_service,
     garmin_service,
+    suunto_service,
     quick_sync_service,
 )
 from app.services import sync_run_service
@@ -43,6 +44,7 @@ class LoginRequest(BaseModel):
     password: str
     action: ActionType
     master: Optional[bool] = False
+    source_type: Optional[str] = None
 
 
 @router.get("/health")
@@ -89,12 +91,19 @@ def login(
     登录并将认证信息存入数据库。
     成功后将保存 accessToken 到对应的连接表中。
     """
-    # 查找现有连接（通过用户ID、账号和区域）
+    # 查找现有连接（通过用户ID、账号、平台类型与区域）
+    # source_type 优先用前端显式传入；旧版前端不传时按 region 推导（coros / garmin），
+    # 与 perform_login 的路由逻辑保持一致。新增 suunto 后必须带 source_type 区分，
+    # 否则 garmin 的 region='cn' 会与 suunto 的 region='cn' 在去重里撞车。
+    source_type = login_request.source_type
+    if not source_type:
+        source_type = "coros" if login_request.region == "coros" else "garmin"
     existing_connect = (
         db.query(BaseConnect)
         .filter(
             BaseConnect.user_id == current_user.id,
             BaseConnect.account == login_request.email,
+            BaseConnect.source_type == source_type,
             BaseConnect.region == login_request.region,
         )
         .first()
@@ -116,6 +125,7 @@ def login(
         email=login_request.email,
         password=login_request.password,
         region=login_request.region,
+        source_type=source_type,
         db=db,
         current_user=current_user,
     )
@@ -636,6 +646,14 @@ def log_stream_generator(
                     current_user=current_user,
                 )
                 source_file_list.append((file_data.content, filename))
+            elif source_item.source_type == "suunto":
+                file_response, filename = suunto_service.download_suunto_activity_response(
+                    activity_id=source_item.id,
+                    connect_id=source_id,
+                    db=db,
+                    current_user=current_user,
+                )
+                source_file_list.append((file_response.content, filename))
             else:
                 file_data = coros_service._download_garmin_activity(
                     activity=source_item,
@@ -660,6 +678,11 @@ def log_stream_generator(
                     file_data=source_file,
                     filename=filename,
                 )
+            elif target_config.source_type == "suunto":
+                upload_result = {
+                    "status": "error",
+                    "message": "目标平台 Suunto 暂不支持上传（仅支持拉取）",
+                }
             else:
                 upload_result = {
                     "status": "error",

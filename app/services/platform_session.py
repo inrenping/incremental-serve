@@ -15,6 +15,7 @@ from garth.http import Client as GarminClient  # noqa: E402
 from app.models.base_connect import BaseConnect  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.services import coros_upload  # noqa: E402
+from app.services.suunto_service import SuuntoSession  # noqa: E402
 from app.services.oss.sts_token_error import StsTokenError  # noqa: E402
 from app.utils.coros_region_config import REGIONCONFIG  # noqa: E402
 
@@ -28,6 +29,8 @@ def build_session(connect: BaseConnect, db: Session, current_user: User):
         return CorosSession(connect, db, current_user)
     if source_type.startswith("garmin"):
         return GarminSession(connect, db, current_user)
+    if source_type == "suunto":
+        return SuuntoSession(connect, db, current_user)
     raise ValueError(f"不支持的平台类型: {source_type}")
 
 

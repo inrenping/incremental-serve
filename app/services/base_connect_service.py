@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from app.models.base_connect import BaseConnect
 from app.models.user import User
-from app.services import coros_service, garmin_service
+from app.services import coros_service, garmin_service, suunto_service
 from fastapi import HTTPException
 
 
@@ -81,13 +81,28 @@ def test_connect(id: int, db: Session, current_user: User):
             return base_connect
         else:
             return {"status": "error", "message": "garmin 测试失败"}
+    elif base_connect.source_type == "suunto":
+        if suunto_service.test_suunto_token(base_connect.id, db, current_user):
+            return base_connect
+        else:
+            return {"status": "error", "message": "suunto 测试失败"}
     return {"status": "error", "message": "测试失败"}
 
 
 def perform_login(
-    id: int, email: str, password: str, region: str, db: Session, current_user: User
+    id: int, email: str, password: str, region: str, db: Session, current_user: User, source_type: str = None
 ) -> BaseConnect:
-    print(f"perform_login->region:{region }")
+    print(f"perform_login->region:{region } source_type:{source_type}")
+    # 颂拓：source_type 显式传入，按 source_type 路由（与 region 平台选择器解耦）
+    if source_type == "suunto":
+        return suunto_service.perform_suunto_login(
+            id=id,
+            account=email,
+            encrypted_password=password,
+            region=region,
+            db=db,
+            current_user=current_user,
+        )
     if region == "coros":
         coros_auth = coros_service.perform_coros_login(
             id=id,
@@ -160,4 +175,18 @@ def perform_relogin(connect_id: int, db: Session, current_user: User) -> dict[st
                     base_connect.id, db, current_user
                 )
                 return base_connect
+    # 如果是颂拓，判断会话密钥有效性，失效则用保存的凭据（AES 密文）重新登录
+    elif base_connect.source_type == "suunto":
+        if suunto_service.test_suunto_token(base_connect.id, db, current_user):
+            return base_connect
+        else:
+            base_connect = suunto_service.perform_suunto_login(
+                id=base_connect.id,
+                db=db,
+                current_user=current_user,
+                account=base_connect.account,
+                encrypted_password=base_connect.encrypted_password,
+                region=base_connect.region,
+            )
+            return base_connect
     return None

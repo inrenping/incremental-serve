@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.base_activity import BaseActivity
 from app.models.base_connect import BaseConnect
 from app.models.user import User
-from app.services import base_connect_service, garmin_service, coros_service
+from app.services import base_connect_service, garmin_service, coros_service, suunto_service
 from app.services.oss import oss_service
 from app.utils.logger_utils import log_operation_async
 
@@ -44,6 +44,14 @@ def pull_full_activities(
     elif platform == "coros":
         # 调用 Coros 同步接口
         return coros_service.pull_full_coros_activities(
+            current_user=current_user,
+            db=db,
+            connect_id=base_connect.id,
+            incremental=incremental,
+        )
+    elif platform == "suunto":
+        # 调用 Suunto 同步接口
+        return suunto_service.pull_full_suunto_activities(
             current_user=current_user,
             db=db,
             connect_id=base_connect.id,
@@ -112,6 +120,11 @@ def download_activity(activity_id: int, db: Session, current_user: User):
         file_data, filename = garmin_service.get_garmin_activity_download_info(
             db, current_user, activity_id
         )
+    elif base_activity.source_type == "suunto":
+        file_response, filename = suunto_service.download_suunto_activity_response(
+            db, current_user, base_connect.id, activity_id
+        )
+        file_data = file_response.content
 
     if not file_data:
         return {"status": "error", "message": "不支持的设备类型"}
@@ -199,6 +212,29 @@ def upload_activity_to_target(
             return garmin_service.sync_coros_to_garmin(
                 db, current_user, activity_id, target_connect.id
             )
+        elif source_connect.source_type == "suunto":
+            # 颂拓作为源：下载 FIT，再按目标平台上传（不支持 Suunto 作为目标）
+            file_response, filename = suunto_service.download_suunto_activity_response(
+                db, current_user, source_connect.id, activity_id
+            )
+            file_data = file_response.content
+            if target_connect.source_type == "coros":
+                return coros_service._upload_fit_zip_to_coros(
+                    db, current_user, target_connect, file_data, filename
+                )
+            elif target_connect.source_type.startswith("garmin"):
+                return garmin_service._upload_file_to_garmin(
+                    current_user=current_user,
+                    db=db,
+                    target_config=target_connect,
+                    file_data=file_data,
+                    filename=filename,
+                )
+            else:
+                return {
+                    "status": "error",
+                    "message": f"不支持的目标平台类型: {target_connect.source_type}",
+                }
     except Exception as e:
         print(f"上传失败: {str(e)}")
         return {"status": "error", "message": str(e)}
@@ -296,6 +332,11 @@ def cache_activity_fit_to_storage(
         file_data, _ = garmin_service.get_garmin_activity_download_info(
             db, current_user, activity_id
         )
+    elif base_activity.source_type == "suunto":
+        file_response, _ = suunto_service.download_suunto_activity_response(
+            db, current_user, base_connect.id, activity_id
+        )
+        file_data = file_response.content
 
     if not file_data:
         return {"status": "error", "message": "不支持的设备类型或下载失败"}
@@ -430,6 +471,11 @@ def batch_upload_fit_to_storage(db: Session, limit: int = None) -> dict:
                     file_data, _ = garmin_service.get_garmin_activity_download_info(
                         db, user, activity.id
                     )
+                elif activity.source_type == "suunto":
+                    file_response, _ = suunto_service.download_suunto_activity_response(
+                        db, user, base_connect.id, activity.id
+                    )
+                    file_data = file_response.content
                 else:
                     fail_count += 1
                     errors.append(
