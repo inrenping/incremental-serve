@@ -503,7 +503,12 @@ def fit_bytes_to_sml_xml(
         _sub(hr, "MinTime", _fmt_num(times[min(hr_min_i, len(times) - 1)], 2))
 
     _sub(hdr, "ActivityType", int(activity_id))
-    _sub(hdr, "Activity", activity_name or "")
+    # 关键：真实服务端 SML（real.sml）即便活动名为空也始终输出 ``<Activity />``，
+    # 且团队 ``verify.py`` 也断言该元素必须存在。_sub 会在 text 为空时跳过，
+    # 导致 Header 缺 ``<Activity>`` —— 这是 523「neither binary or SML was provided」
+    # 的最强候选根因（服务端 SML 解析/嗅探要求 Header 含此元素）。
+    # 因此这里**始终**输出该元素：有名写名、无名写空。
+    ET.SubElement(hdr, f"{{{_SML_NS}}}Activity").text = activity_name or None
     # 注意：JAXB 模型里 Header.Distance 是 Integer（米），写浮点会让服务端
     # unmarshal 抛 NumberFormatException → 整个文档解析失败 → 523。必须取整。
     _sub(hdr, "Distance", int(round(distance)) if distance is not None else None)
