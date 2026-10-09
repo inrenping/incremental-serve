@@ -719,7 +719,11 @@ def upload_workout(
                 "payload": (result.get("response") or {}).get("payload"),
             }
         except HTTPException as e:
-            # 日志里打完整信息；汇总串只留摘要，否则 10 条拼起来前端根本看不全
+            # 注意：项目未配置 logging，uvicorn 的 dictConfig 默认
+            # disable_existing_loggers=True 会静默禁用本模块的 logger.warning，
+            # 导致服务端真实响应体根本不进 journald。改走 print（stdout，绕过
+            # logging），保证失败详情一定可见，便于定位 523 真因。
+            print(f"[suunto] 上传形态 {label} 失败详情: {e.detail}", flush=True)
             logger.warning("上传形态 %s 失败: %s", label, e.detail)
             errors.append(f"{label}={_brief_error(e.detail)}")
 
