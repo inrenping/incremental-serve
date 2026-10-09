@@ -38,7 +38,7 @@ blunt-serv/
 │   └── main.py                # FastAPI entry point
 ├── tests/                     # Test files
 ├── requirements.txt           # Python dependencies
-└── readme.rst                 # Project documentation
+└── README.md                  # Project documentation
 ```
 
 ## Getting Started
