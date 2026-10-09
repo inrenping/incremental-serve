@@ -305,23 +305,16 @@ def _fmt_num(value, digits: int = 6) -> Optional[str]:
 def _sml_datetime(dt: datetime) -> str:
     """SML 时间格式 ``yyyy-MM-ddTHH:mm:ss``（JAXB SmlDateAdapter 的 pattern）。
 
-    用于 ``Header/DateTime`` —— 与 ``polar_training2sml`` 一致（它给 Header.DateTime
-    用 ``%Y-%m-%dT%H:%M:%S``，不带 Z）。
+    用于 ``Header/DateTime`` 与 ``Sample/UTC`` —— 与 ``polar_training2sml`` 一致
+    （它给 Header.DateTime 用 ``%Y-%m-%dT%H:%M:%S``，不带 Z）。
+
+    注意：SmlDateAdapter 的 pattern 是 ``"yyyy-MM-dd'T'HH:mm:ss"``，**不带 Z、
+    不带毫秒**。带 Z 的 ISO8601 串会让 SimpleDateFormat 抛 ParseException →
+    unmarshal 失败 → 服务端回 523。所以这里一律输出无 Z 的形态。
     """
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt.strftime("%Y-%m-%dT%H:%M:%S")
-
-
-def _sml_datetime_z(dt: datetime) -> str:
-    """Sample/UTC 用**带 Z** 的格式（与 ``polar_training2sml`` 一致）。
-
-    polar 给每个 Sample 的 ``UTC`` 写 ``%Y-%m-%dT%H:%M:%SZ``，而它的产出被颂拓 App
-    接受。我们的旧实现两处时间都不带 Z，是对 proven uploader 的偏离。
-    """
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sub(parent, tag: str, text) -> None:
@@ -461,8 +454,12 @@ def fit_bytes_to_sml_xml(
     # ---- Header（顺序严格按 XSD） ----
     hdr = ET.SubElement(log, f"{{{_SML_NS}}}Header")
     _sub(hdr, "Duration", _fmt_num(duration, 3))
-    _sub(hdr, "Ascent", _fmt_num(ascent, 2))
-    _sub(hdr, "Descent", _fmt_num(descent, 2))
+    # 注意：JAXB 模型里 Header.Ascent / Header.Descent 是 **Integer**（米）。
+    # 写浮点会让服务端 unmarshal 抛 NumberFormatException → 整个文档解析失败 → 523。
+    # polar_training2sml（被颂拓 App 接受的权威实现）对这两个字段用 `.round`
+    # 取整，这里保持一致。
+    _sub(hdr, "Ascent", int(round(ascent)) if ascent is not None else None)
+    _sub(hdr, "Descent", int(round(descent)) if descent is not None else None)
 
     if spd_all:
         spd_max_i, spd_max = _max_at(spd_all)
@@ -483,6 +480,12 @@ def fit_bytes_to_sml_xml(
         alt_min_i = min(range(len(alt_all)), key=lambda i: alt_all[i])
         alt_max_i, alt_max = _max_at(alt_all)
         alt = ET.SubElement(hdr, f"{{{_SML_NS}}}Altitude")
+        # 关键：JAXB 模型 ``com.github.mihaildemidoff.header.Altitude`` 只有
+        # Max / Min / MaxTime / MinTime 四个字段，**没有 Avg**。
+        # 多写一个 <Avg> 会是未知元素，JAXB unmarshal 默认抛异常 → 整个文档
+        # 解析失败 → 服务端回 523 "neither binary or SML was provided"。
+        # （polar_training2sml 写了 Avg 但仍被接受，是因为它的产出走的是另一条
+        # 容忍度更高的消费链路；严格按本模型，绝不能写 Avg。）
         _sub(alt, "Max", _fmt_num(alt_max, 2))
         _sub(alt, "Min", _fmt_num(min(alt_all), 2))
         _sub(alt, "MaxTime", _fmt_num(times[min(alt_max_i, len(times) - 1)], 2))
@@ -511,7 +514,9 @@ def fit_bytes_to_sml_xml(
 
     gps_idx = next((i for i, r in enumerate(records) if "lat" in r), None)
     if gps_idx is not None:
-        _sub(hdr, "TimeToFirstFix", _fmt_num(times[gps_idx], 2))
+        # Header.TimeToFirstFix 在 JAXB 模型里是 Integer（秒），写浮点会 523。
+        # polar_training2sml 对它也用整数秒。
+        _sub(hdr, "TimeToFirstFix", int(round(times[gps_idx])))
     _sub(hdr, "BatteryChargeAtStart", "1")
     _sub(hdr, "BatteryCharge", "0")
     _sub(hdr, "DistanceBeforeCalibrationChange", "0")
@@ -549,7 +554,10 @@ def fit_bytes_to_sml_xml(
             _sub(s, "Distance", int(round(rec["dist"])))
         if "spd" in rec:
             _sub(s, "Speed", _fmt_num(rec["spd"]))
-        _sub(s, "UTC", _sml_datetime_z(rec["dt"]))
+        # 关键：Sample.UTC 是 Date 字段，由 SmlDateAdapter 解析，其 pattern 是
+        # "yyyy-MM-dd'T'HH:mm:ss"（**无 Z、无毫秒**）。带 Z 的 ISO8601 串会被
+        # SimpleDateFormat 抛 ParseException → unmarshal 失败 → 523。
+        _sub(s, "UTC", _sml_datetime(rec["dt"]))
         if "lat" in rec:
             _sub(s, "Latitude", _fmt_num(rec["lat"]))
             _sub(s, "Longitude", _fmt_num(rec["lon"]))
@@ -562,13 +570,12 @@ def fit_bytes_to_sml_xml(
     #   贸然加未知元素反而可能让服务端解析失败。等上传打通后再补。
 
     # ---- parsingResume ----
-    # 真实 Moveslink2 生成的 SML 里 ``DeviceLog`` 下有这个元素
-    # （论坛 PowerShell 脚本直接读 ``sml.DeviceLog.parsingResume.binarySize``），
-    # 是「上次解析到哪了」的断点续传标记。JAXB 读模型里没有它（未知元素被忽略，
-    # 不会因它而 523），但真实文件里有，且服务端上传入口按真实格式校验。
-    # 放在 Samples 之后（真实文件里它就在样本之后）。binarySize 填源 FIT 字节数。
-    resume = ET.SubElement(log, f"{{{_SML_NS}}}parsingResume")
-    resume.set("binarySize", str(len(fit_bytes)))
+    # 历史上我们在这里加过 ``<parsingResume binarySize="..."/>``（依据论坛里某
+    # 个 Moveslink2 样本的 PowerShell 读取脚本）。但被颂拓 App 接受的权威实现
+    # ``gkfabs/polar_training2sml`` 的产出**不含**这个元素，且其上传能成功，
+    # 说明上传入口对 SML 的容忍边界以「已知元素」为准。为降低「未知元素触发
+    # 严格解析失败 → 523」的风险，这里保持与权威实现一致，不产出 parsingResume。
+    # 如果将来拿到真正被服务端接受的样本且含有该元素，再据实加回。
 
     _indent(sml)
     return ET.tostring(sml, encoding="UTF-8", xml_declaration=True)
