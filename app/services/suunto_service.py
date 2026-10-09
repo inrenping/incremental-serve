@@ -634,6 +634,11 @@ UPLOAD_VARIANTS: list[tuple[str, str, bool, str, str, str]] = [
      "application/octet-stream"),
     ("part-sml-sml", "sml", False, "sml", "workout.sml",
      "application/octet-stream"),
+    # 523 原文：``neither binary or SML was provided`` —— 服务端很可能按
+    # ``binary`` / ``sml`` 两个字段名识别载荷。suuntool 只发 ``filePart``，
+    # 但 523 字面点名 ``binary``，故补一个 ``binary`` 字段名 + SML 内容的组合。
+    ("part-binary-sml", "sml", False, "binary", "workout.sml",
+     "application/octet-stream"),
     ("raw-octet-fit", "fit", True, None, None, "application/octet-stream"),
     ("part-binary-fit", "fit", False, "binary", "activity.fit",
      "application/octet-stream"),
