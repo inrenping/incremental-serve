@@ -292,7 +292,6 @@ def _push_via_fit(
             file_data,
             db=db,
             current_user=current_user,
-            sport_type_raw=source_activity.sport_type_raw,
         )
     return {"status": "error", "message": f"不支持的目标平台类型: {target_connect.source_type}"}
 
