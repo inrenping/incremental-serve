@@ -31,6 +31,17 @@
 第4 步是解决 523 的最短路径：读接口 ``GET /v1/workouts/{key}/sml`` 返回的
 字段名与层级就是服务端内部模型本身，拿它跟我们生成的 XML 逐层对比，
 缺什么立刻可见——不必去猜那份没公开的 legacy SML spec。
+
+重要：先自检再上传
+-----------------
+实测（2026-10-09）**原始 FIT 直传也被拒**，报同样的 523
+``neither binary or SML was provided``。FIT 是二进制，不存在「XML 结构不对」
+这回事 —— 两种完全不同的载荷报同一句话，说明服务端在进入格式判定**之前**
+就没拿到有效载荷，问题更可能在 **sessionKey / 权限** 而不在格式。
+
+所以默认流程会先跑只读自检（``GET user`` / ``workouts/count`` / ``activitytypes``），
+不通就直接停下并提示重新登录，不浪费上传请求、也不会往账号写垃圾数据。
+自检通过才继续发上传。想跳过用 ``--skip-session-check``（或 ``--force`` 强行试）。
 """
 
 from __future__ import annotations
@@ -108,6 +119,64 @@ def _probe(session_key: str, region: str, label: str, filename: str,
         "body": body[:500],
         "payload": payload,
     }
+
+
+def _check_session(session_key: str, region: str) -> bool:
+    """会话自检：**先确认这个 sessionKey 能不能读数据**，再谈上传。
+
+    为什么必须先做这一步
+    ------------------
+    实测（2026-10-09）原始 FIT 直传也被拒，报同样的 523
+    ``neither binary or SML was provided``。FIT 是二进制格式，不存在
+    「XML 结构不对」这回事 —— 两种完全不同的载荷报**同一句话**，
+    说明服务端在进入格式判定**之前**就没拿到有效载荷，
+    即问题更可能在 **sessionKey / 权限** 而不在格式。
+
+    先用只读端点验证凭据，一刀切开「凭据问题」和「格式问题」：
+      - 读也失败  → sessionKey 无效或没权限，后面所有上传尝试都是白试
+      - 读成功    → 凭据没问题，523 就是格式问题，可以放心调格式
+    """
+    import requests
+
+    from app.services import suunto_service  # 延迟导入
+
+    base_url = suunto_service._base_url(region)
+    headers = suunto_service._headers(session_key)
+
+    print("会话自检（只读，不写入任何数据）")
+    ok = False
+    # 挑几个最轻的只读端点，逐个确认鉴权是否通
+    probes = [
+        ("GET", "user", "当前用户"),
+        ("GET", "workouts/count", "训练数量"),
+        ("GET", "activitytypes", "运动类型"),
+    ]
+    for method, path, label in probes:
+        try:
+            resp = requests.request(method, base_url + path,
+                                    headers=headers, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            print(f"  [{label:<10}] ❌ 请求异常: {e}")
+            continue
+        # 只看鉴权结果：200=通，401/403=凭据问题
+        mark = "✅ 通" if resp.status_code == 200 else f"❌ HTTP {resp.status_code}"
+        print(f"  [{label:<10}] {mark}")
+        if resp.status_code == 200:
+            ok = True
+        elif resp.status_code in (401, 403):
+            print(f"      响应: {resp.text[:200]}")
+    print()
+    if not ok:
+        print("⚠️  **没有任何只读端点通过 —— sessionKey 可能已失效或无权限。**")
+        print("    这种情况下上传必然失败，修格式没有意义。")
+        print("    重新登录拿新 sessionKey 后再试：")
+        print("      python3 scripts/probe_suunto_upload.py --username <用户> --password <密码> ...")
+        print("    或浏览器登录 sports-tracker.com → F12 → Network →")
+        print("    任意 api.sports-tracker.com 请求 → 复制 STTAuthorization 头。")
+    else:
+        print("✅ sessionKey 可读 —— 凭据没问题。")
+        print("   若上传仍报 523，则可确定是**载荷格式**问题，放心调 SML 结构。")
+    return ok
 
 
 def _dump_reference_sml(session_key: str, region: str, activity_key: str, outdir: str) -> bool:
@@ -226,6 +295,10 @@ def main():
                          "存成结构基准，不做任何上传")
     ap.add_argument("--outdir", default="/tmp/suunto-probe",
                     help="基准文件保存目录，默认 /tmp/suunto-probe")
+    ap.add_argument("--skip-session-check", action="store_true",
+                    help="跳过上传前的只读会话自检（不建议）")
+    ap.add_argument("--force", action="store_true",
+                    help="即使会话自检未通过也继续发上传请求（会写入账号，慎用）")
     ap.add_argument("--out", help="把JSON 结果写到文件")
     args = ap.parse_args()
 
@@ -248,6 +321,16 @@ def main():
 
     if not args.fit:
         ap.error("需要 --fit，或用 --dump-ref <ACTIVITY_KEY> 只拉基准")
+
+    # 前置门槛：先确认 sessionKey 能读。只读端点都过不了的话，
+    # 上传必然报 523，继续发上传请求纯属浪费（还会往账号写垃圾数据）。
+    if not args.skip_session_check and not _check_session(session_key, args.region):
+        if not args.force:
+            ap.error(
+                "sessionKey 未通过只读自检，已跳过上传探测。\n"
+                "  重新登录拿新 sessionKey，或加 --force 强行试上传。"
+            )
+
     with open(args.fit, "rb") as f:
         fit = f.read()
     print(f"FIT: {args.fit}（{len(fit)} 字节）\n")
