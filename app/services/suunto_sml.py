@@ -303,10 +303,25 @@ def _fmt_num(value, digits: int = 6) -> Optional[str]:
 
 
 def _sml_datetime(dt: datetime) -> str:
-    """SML 时间格式 ``yyyy-MM-ddTHH:mm:ss``（JAXB SmlDateAdapter 的 pattern）。"""
+    """SML 时间格式 ``yyyy-MM-ddTHH:mm:ss``（JAXB SmlDateAdapter 的 pattern）。
+
+    用于 ``Header/DateTime`` —— 与 ``polar_training2sml`` 一致（它给 Header.DateTime
+    用 ``%Y-%m-%dT%H:%M:%S``，不带 Z）。
+    """
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _sml_datetime_z(dt: datetime) -> str:
+    """Sample/UTC 用**带 Z** 的格式（与 ``polar_training2sml`` 一致）。
+
+    polar 给每个 Sample 的 ``UTC`` 写 ``%Y-%m-%dT%H:%M:%SZ``，而它的产出被颂拓 App
+    接受。我们的旧实现两处时间都不带 Z，是对 proven uploader 的偏离。
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _sub(parent, tag: str, text) -> None:
@@ -534,7 +549,7 @@ def fit_bytes_to_sml_xml(
             _sub(s, "Distance", int(round(rec["dist"])))
         if "spd" in rec:
             _sub(s, "Speed", _fmt_num(rec["spd"]))
-        _sub(s, "UTC", _sml_datetime(rec["dt"]))
+        _sub(s, "UTC", _sml_datetime_z(rec["dt"]))
         if "lat" in rec:
             _sub(s, "Latitude", _fmt_num(rec["lat"]))
             _sub(s, "Longitude", _fmt_num(rec["lon"]))
@@ -546,10 +561,14 @@ def fit_bytes_to_sml_xml(
     #   而是 ``Sample/AppsData/AppData(Value)``，需要先确定 AppNumber，
     #   贸然加未知元素反而可能让服务端解析失败。等上传打通后再补。
 
-    # 不要加 ``parsingResume`` 之类的「信封元素」：JAXB 模型
-    # （mihaildemidoff/suunto-sml-model）和已验证可用的 polar_training2sml
-    # 产出里都没有它。服务端上传入口按 XSD 解析，未知元素会触发校验失败 → 523。
-    # 经验证，标准结构（DeviceLog → Header/Device/Samples）已足够被服务端接受。
+    # ---- parsingResume ----
+    # 真实 Moveslink2 生成的 SML 里 ``DeviceLog`` 下有这个元素
+    # （论坛 PowerShell 脚本直接读 ``sml.DeviceLog.parsingResume.binarySize``），
+    # 是「上次解析到哪了」的断点续传标记。JAXB 读模型里没有它（未知元素被忽略，
+    # 不会因它而 523），但真实文件里有，且服务端上传入口按真实格式校验。
+    # 放在 Samples 之后（真实文件里它就在样本之后）。binarySize 填源 FIT 字节数。
+    resume = ET.SubElement(log, f"{{{_SML_NS}}}parsingResume")
+    resume.set("binarySize", str(len(fit_bytes)))
 
     _indent(sml)
     return ET.tostring(sml, encoding="UTF-8", xml_declaration=True)
