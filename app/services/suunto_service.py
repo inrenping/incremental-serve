@@ -18,7 +18,6 @@ from app.models.base_activity import BaseActivity
 from app.models.user import User
 from app.utils.crypto_utils import CryptoUtils
 from app.utils.logger_utils import log_operation_async, log_request
-from app.services import suunto_sml
 
 
 # ---------------------------------------------------------------------------
@@ -167,37 +166,19 @@ def _suunto_sport_type_raw(activity_id) -> Optional[str]:
     return (SUUNTO_ACTIVITY_NAMES.get(idx) or "").lower() or None
 
 
-# slug → activityId 反查表（上传时把源活动的运动类型带过去）
-SUUNTO_ACTIVITY_ID_BY_SLUG = {}
-for _aid, _slug in SUUNTO_ACTIVITY_TYPE_SLUG.items():
-    SUUNTO_ACTIVITY_ID_BY_SLUG.setdefault(_slug, _aid)
-
-
-def suunto_activity_id_from_slug(slug: Optional[str]) -> Optional[int]:
-    """规范 slug → 颂拓 activityId（上 FIT→SML 时标注运动类型用）。"""
-    if not slug:
-        return None
-    return SUUNTO_ACTIVITY_ID_BY_SLUG.get(str(slug).strip().lower())
-
-
 def upload_fit_to_suunto(
     config: BaseConnect,
     file_data: bytes,
     db: Session = None,
     current_user: User = None,
-    sport_type_raw: str = None,
 ) -> dict:
-    """把一段 FIT 上传到指定颂拓账号（SML XML → 原始 FIT 自动降级）。
+    """把一段 FIT 上传到指定颂拓账号（走官方 FIT 导入通道）。
 
     供"一键推送/单条推送"这类不经过 SuuntoSession 的路径直接调用。
-
-    服务端 ``POST /v1/workout`` 会自己嗅探载荷类型（认 ``binary`` 与 ``SML`` 两种），
-    具体由 :func:`upload_workout` 处理降级。
 
     Args:
         config: 目标 BaseConnect（source_type="suunto"），会先 relogin 刷新 sessionKey。
         file_data: 源平台下载下来的 FIT 字节。
-        sport_type_raw: 源活动的规范运动类型 slug，用来给SML 标注运动类型。
     """
     from app.services import base_connect_service  # 延迟导入，避免循环依赖
 
@@ -208,13 +189,10 @@ def upload_fit_to_suunto(
     if not config or not config.access_token:
         return {"status": "error", "message": "颂拓授权失效，请重新绑定账号"}
 
-    device_source = f"suunto-{abs(hash(config.account or '')) % 10 ** 9}"
     result = upload_workout(
         config.access_token,
         config.region,
         file_data,
-        sport_type_raw=sport_type_raw,
-        device_source=device_source,
     )
     return {
         "status": "success",
@@ -520,22 +498,6 @@ def download_fit_bytes(session_key: str, key: str, region: str) -> bytes:
     return resp.content
 
 
-def get_workout_sml(session_key: str, key: str, region: str) -> dict:
-    """拉取某个活动的 JSON SML（GET /v1/workouts/{key}/sml）。
-
-    主要用于：拿真实样本回来比对 fit->SML 转换器造出的字段名是否一致，
-    尤其是 Summary 块（目前转换器里的 Summary 结构是未经真实样本逐字校验的）。
-    """
-    base_url = _base_url(region)
-    resp = requests.get(
-        base_url + f"workouts/{key}/sml",
-        headers=_headers(session_key),
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
 def upload_fit_import(
     session_key: str,
     region: str,
@@ -554,12 +516,6 @@ def upload_fit_import(
     - axios 全局拦截器强制注入``STTAuthorization: <token>``
     - 字段名 ``file``（源码 ``a.append("file", z.raw)``，组件 ``ImportActive``，
       类型固定 ``fit``）
-
-    与 :func:`upload_sml` 打的 ``/apiserver/v1/workout`` **是两个不同端点**：后者是
-    suuntool 逆向出的 SML 接口，其 upload_test 只断言 multipart 构造，作者并未真机
-    验证过 SML 生成。此前 ``/v1/workout`` 各种字段名/Content-Type 组合一律返回
-    ``523 neither binary or SML was provided``（且四种字段名结果完全一致），
-    根因就是打错了端点，而非字段名。
 
     注意：门户用的是 ``api.suunto.cn``（国际版也是这个 host）。国内版对应
     ``cloud-api.suunto.cn``，由 ``_base_url(region)`` 决定。
@@ -618,285 +574,71 @@ def upload_fit_import(
     return result
 
 
-def upload_sml(
-    session_key: str,
-    sml,
-    region: str,
-    extensions: dict = None,
-    filename: str = "workout.sml",
-    field: str = "filePart",
-    content_type: str = "application/octet-stream",
-    raw: bool = False,
-) -> dict:
-    """上传 SML 到颂拓（POST /v1/workout）。
-
-    鉴权用 STTAuthorization（sessionKey），该端点不需要 x-totp（与 suuntool 一致）。
-    默认形态与 suuntool ``api.WorkoutMultipart`` 一致：multipart、字段名
-    ``filePart``、part Content-Type ``application/octet-stream``。
-
-    Args:
-        sml: SML 内容。**dict 会自动序列化为 JSON**；传 ``str``/``bytes`` 则按原样
-            发送（用于发 legacy SML **XML** —— 实测服务端只认 XML，发 JSON 会 500）。
-        extensions: 可选，附加的 extensions JSON（通常传 None）。
-        field: multipart 的字段名（``raw=True`` 时忽略）。
-        filename: multipart 的 filename（``raw=True`` 时忽略）。
-        content_type: ``raw=True`` 时是**整个请求**的 Content-Type；
-            否则是 multipart 里那一个 part 的 Content-Type。
-        raw: **True = 不用 multipart，直接把载荷作为请求体发送**。
-            suuntool 的 guides 上传（``POST /v1/suuntoplus/guides/files``）就是这种
-            形态，说明这套后端并非所有上传入口都用 multipart。
-
-    注意：**不使用 raise_for_status**。Sportstracker 服务端把错误放在响应体里
-    （Asko 信封的 error 字段），抛异常会把最有价值的排查信息丢掉——之前就是
-    只看到一个「500 Internal Server Error」而查不出原因。
-    """
-    base_url = _base_url(region)
-    if isinstance(sml, dict):
-        data = json.dumps(sml).encode("utf-8")
-    elif isinstance(sml, str):
-        data = sml.encode("utf-8")
-    else:
-        data = sml
-
-    headers = _headers(session_key)
-
-    if raw:
-        headers["Content-Type"] = content_type
-        resp = requests.post(
-            base_url + "workout",
-            data=data,
-            headers=headers,
-            timeout=60,
-        )
-    else:
-        files = {
-            field: (filename, data, content_type),
-        }
-        if extensions is not None:
-            files["workoutExtensionsPart"] = (
-                "extensions.json",
-                json.dumps(extensions).encode("utf-8"),
-                "application/json",
-            )
-        resp = requests.post(
-            base_url + "workout",
-            files=files,
-            headers=headers,
-            timeout=60,
-        )
-
-    # 尽量把服务端错误解析成结构化信息
-    body_text = (resp.text or "").strip()
-    parsed = None
-    try:
-        parsed = resp.json()
-    except Exception:
-        parsed = None
-
-    result = {
-        "status_code": resp.status_code,
-        "body": body_text[:2000],
-    }
-    if isinstance(parsed, dict):
-        result["response"] = parsed
-        # Asko 信封：{"error": ..., "payload": ..., "metadata": ...}
-        err = parsed.get("error")
-        if err:
-            result["error"] = err
-
-    if resp.status_code >= 400:
-        detail = result.get("error") or body_text[:500] or f"HTTP {resp.status_code}"
-        raise HTTPException(
-            status_code=502,
-            detail=f"颂拓上传失败(HTTP {resp.status_code}): {detail}",
-        )
-    if isinstance(parsed, dict) and parsed.get("error"):
-        raise HTTPException(
-            status_code=502,
-            detail=f"颂拓上传被拒绝: {parsed.get('error')}",
-        )
-    return result
-
-
-# ---------------------------------------------------------------------------
-# 上传「形态矩阵」——为什么需要试多种形态
-#
-# 2026-10-09 实测：SML XML 与原始 FIT **报完全相同的 523**
-# （``Workout was not saved because neither binary or SML was provided``）。
-# 已排除凭据：本地用假 sessionKey 打同一端点是 **403 Forbidden**，而生产拿到的是
-# 523，说明 sessionKey 有效、请求已经进了业务处理。
-#
-# 剩下的解释只有一个：**服务端没在它期望的位置找到载荷**，即请求的**形态**不对。
-# 旁证：suuntool 的 guides 上传（``POST /v1/suuntoplus/guides/files``）用的是
-# **raw body 而不是 multipart**；而 workouts 上传它用 multipart/``filePart``，
-# 作者并未声称验证过自己生成的 SML（原话 "This command does NOT generate SML"）。
-# 所以 multipart/``filePart`` 这一形态本身也可能是猜的。
-#
-# 因此这里把候选形态全试一遍，第一个成功即返回，并记进日志。
-# **确认哪种形态可用后请精简本表**（每种失败形态都是一次真实网络请求）。
-#
-# 字段含义：(label, 载荷类型, 是否 raw body, multipart 字段名, filename, Content-Type)
-# ---------------------------------------------------------------------------
-
-UPLOAD_VARIANTS: list[tuple[str, str, bool, str, str, str]] = [
-    ("raw-octet-sml", "sml", True, None, None, "application/octet-stream"),
-    ("raw-xml-sml", "sml", True, None, None, "text/xml"),
-    ("part-filePart-octet", "sml", False, "filePart", "workout.sml",
-     "application/octet-stream"),
-    ("part-filePart-xml", "sml", False, "filePart", "workout.sml",
-     "application/xml"),
-    ("part-filePart-textxml", "sml", False, "filePart", "workout.sml", "text/xml"),
-    ("part-file-sml", "sml", False, "file", "workout.sml",
-     "application/octet-stream"),
-    ("part-sml-sml", "sml", False, "sml", "workout.sml",
-     "application/octet-stream"),
-    # 523 原文：``neither binary or SML was provided`` —— 服务端很可能按
-    # ``binary`` / ``sml`` 两个字段名识别载荷。suuntool 只发 ``filePart``，
-    # 但 523 字面点名 ``binary``，故补一个 ``binary`` 字段名 + SML 内容的组合。
-    ("part-binary-sml", "sml", False, "binary", "workout.sml",
-     "application/octet-stream"),
-    # 2026-10-09 诊断实测：字段名 filePart / file / sml / binary 四者返回**完全相同**
-    # 的 523，与字段名无关。但服务端文案写作 ``neither binary or SML``——binary 小写、
-    # SML 全大写，形似两个表单字段名的字面写法，疑该字段名大小写敏感。
-    ("part-SML-octet", "sml", False, "SML", "workout.sml",
-     "application/octet-stream"),
-    ("part-SML-xml", "sml", False, "SML", "workout.sml",
-     "application/xml"),
-    ("part-Sml-octet", "sml", False, "Sml", "workout.sml",
-     "application/octet-stream"),
-    ("raw-octet-fit", "fit", True, None, None, "application/octet-stream"),
-    ("part-binary-fit", "fit", False, "binary", "activity.fit",
-     "application/octet-stream"),
-    ("part-filePart-fit", "fit", False, "filePart", "activity.fit",
-     "application/octet-stream"),
-]
-
-
 def upload_workout(
     session_key: str,
     region: str,
     fit_bytes: bytes,
-    activity_id: int = None,
-    sport_type_raw: str = None,
-    device_source: str = None,
-    variants: list = None,
 ) -> dict:
-    """把 FIT 上传到颂拓。
+    """把 FIT 上传到颂拓（官方 FIT 导入通道）。
 
-    **主路线（2026-10-09 起）**：走官方 FIT 导入门户同款端点
+    走官方 FIT 导入门户同款端点
     ``POST /apiserver/management/user/import/fit``、字段名 ``file``、直传原始 FIT，
     见 :func:`upload_fit_import`。这是逆向 ``fit.suunto.cn`` 前端 bundle 得到的
     官方真实协议，也是官方用户实际导入历史 FIT 走的通道。
 
-    **降级路线（已证伪为无效，仅保留对照）**：suuntool 的 ``/v1/workout`` SML
-    端点。2026-10-09 实测该端点下 11 种形态（raw/multipart × filePart/file/sml/
-    binary/SML/Sml × 多种 Content-Type）**全部**返回
-    ``523 neither binary or SML was provided``，且四种字段名结果完全一致
-    ——说明问题在端点而非字段名。仅当官方端点失败且设了
-    ``SUUNTO_UPLOAD_VARIANTS=1`` 时才逐形态尝试并记日志。
+    历史背景（已废弃，勿再走）：此前打的是 suuntool 逆向出的
+    ``/apiserver/v1/workout``（SML 端点），2026-10-09 实测该端点下 11 种形态
+    （raw/multipart × filePart/file/sml/binary/SML/Sml × 多种 Content-Type）
+    **全部**返回 ``523 neither binary or SML was provided``，且四种字段名结果完全
+    一致 —— 根因是**打错了端点**，不是字段名或载荷内容。相关SML 代码已移除。
 
     Args:
         session_key: 目标账号的 sessionKey。
         region: ``intl`` / ``cn``。
         fit_bytes: 源平台下载下来的 FIT 字节。
-        activity_id: 显式指定 ActivityType（仅 SML 降级路线使用）。
-        sport_type_raw: 源活动的规范运动类型 slug（仅 SML 降级路线使用）。
-        device_source: SML 里的设备标识（仅 SML 降级路线使用）。
-        variants: 覆盖降级形态表（测试用）。
 
     Returns:
-        ``{"status": "success", "used_format": <label>, ...}``；
-        ``used_format="official-import-fit"`` 表示走的是官方 FIT 导入通道。
+        ``{"status": "success", "used_format": "official-import-fit", ...}``。
+
+    Raises:
+        HTTPException: 502，detail 含服务端真实响应体（便于按返回码定位）。
     """
     logger = logging.getLogger(__name__)
-    device_source = device_source or f"suunto-{abs(hash(session_key)) % 10 ** 9}"
-    if activity_id is None:
-        activity_id = suunto_activity_id_from_slug(sport_type_raw)
 
-    if variants is None:
-        if os.getenv("SUUNTO_UPLOAD_VARIANTS", "0") == "1":
-            # 诊断模式：官方端点失败后，把 SML 降级形态全试一遍，第一个成功即返回。
-            variants = UPLOAD_VARIANTS
-        else:
-            # 默认：官方端点失败即抛错，不做无意义的 SML 形态重试
-            # （该端点已证实11 种形态全 523）。
-            variants = []
-
-    payloads: dict[str, bytes] = {"fit": fit_bytes}
-    try:
-        payloads["sml"] = suunto_sml.fit_bytes_to_sml_xml(
-            fit_bytes,
-            device_source=device_source,
-            activity_id=activity_id,
-        )
-    except Exception as e:  # noqa: BLE001
-        # FIT 里没有可用 record 时 XML 生成会失败，只留原始 FIT
-        logger.warning("生成 SML XML 失败，只能发原始 FIT: %s", e)
-
-    errors: list[str] = []
-
-    # 首选：官方 FIT 导入门户同款端点（原始 FIT，不做 SML 转换）。
     # 2026-10-09 逆向 fit.suunto.cn 确认真实协议为
     # POST /apiserver/management/user/import/fit + 字段名 ``file``。
-    # 之前的 523 是因为一直打 suuntool 的 /v1/workout（SML 端点）——打错了端点。
     # 设 SUUNTO_SKIP_FIT_IMPORT=1 可跳过（仅用于诊断对照）。
-    if os.getenv("SUUNTO_SKIP_FIT_IMPORT", "0") != "1":
-        try:
-            result = upload_fit_import(session_key, region, fit_bytes)
-            print(
-                f"[suunto] 官方 FIT 导入端点上传成功: HTTP {result.get('status_code')}",
-                flush=True,
-            )
-            logger.info("颂拓 FIT 导入成功（官方 import/fit 端点）")
-            return {
-                "status": "success",
-                "used_format": "official-import-fit",
-                "detail": result,
-                "payload": (result.get("response") or {}).get("payload"),
-            }
-        except HTTPException as e:
-            print(f"[suunto] 官方 FIT 导入端点失败详情: {e.detail}", flush=True)
-            logger.warning("官方 FIT 导入端点失败: %s", e.detail)
-            errors.append(f"official-import-fit={_brief_error(e.detail)}")
+    if os.getenv("SUUNTO_SKIP_FIT_IMPORT", "0") == "1":
+        raise HTTPException(
+            status_code=502,
+            detail="颂拓上传失败：SUUNTO_SKIP_FIT_IMPORT=1 已跳过官方 FIT 导入端点",
+        )
 
-    for label, kind, raw, field, filename, ctype in variants:
-        data = payloads.get(kind)
-        if data is None:
-            continue
-        try:
-            result = upload_sml(
-                session_key,
-                data,
-                region,
-                filename=filename or "workout.sml",
-                field=field or "filePart",
-                content_type=ctype,
-                raw=raw,
-            )
-            logger.info("颂拓上传成功，形态 = %s", label)
-            return {
-                "status": "success",
-                "used_format": label,
-                "detail": result,
-                "payload": (result.get("response") or {}).get("payload"),
-            }
-        except HTTPException as e:
-            # 注意：项目未配置 logging，uvicorn 的 dictConfig 默认
-            # disable_existing_loggers=True 会静默禁用本模块的 logger.warning，
-            # 导致服务端真实响应体根本不进 journald。改走 print（stdout，绕过
-            # logging），保证失败详情一定可见，便于定位 523 真因。
-            print(f"[suunto] 上传形态 {label} 失败详情: {e.detail}", flush=True)
-            logger.warning("上传形态 %s 失败: %s", label, e.detail)
-            errors.append(f"{label}={_brief_error(e.detail)}")
+    try:
+        result = upload_fit_import(session_key, region, fit_bytes)
+    except HTTPException as e:
+        # 注意：项目未配置 logging，uvicorn 的 dictConfig 默认
+        # disable_existing_loggers=True 会静默禁用本模块的 logger.warning，
+        # 导致服务端真实响应体根本不进 journald。改走 print（stdout，绕过
+        # logging），保证失败详情一定可见。
+        print(f"[suunto] 官方 FIT 导入端点失败详情: {e.detail}", flush=True)
+        logger.warning("官方 FIT 导入端点失败: %s", e.detail)
+        raise HTTPException(
+            status_code=502,
+            detail=f"颂拓上传失败(official-import-fit={_brief_error(e.detail)}): {e.detail}",
+        )
 
-    if not errors:
-        errors.append("未尝试任何降级形态（默认只走官方 FIT 导入端点）")
-
-    raise HTTPException(
-        status_code=502,
-        detail="颂拓上传失败（已试 %d 种形态，完整信息见服务日志）: " % len(errors)
-        + ", ".join(errors),
+    print(
+        f"[suunto] 官方 FIT 导入端点上传成功: HTTP {result.get('status_code')}",
+        flush=True,
     )
+    logger.info("颂拓 FIT 导入成功（官方 import/fit 端点）")
+    return {
+        "status": "success",
+        "used_format": "official-import-fit",
+        "detail": result,
+        "payload": (result.get("response") or {}).get("payload"),
+    }
 
 
 def _brief_error(detail: str) -> str:
@@ -919,7 +661,7 @@ def _position_to_latlon(pos: Optional[dict]) -> tuple:
     suuntool 的 LatLon 结构体写成 latitude/longitude 是错的（它从不消费该字段）。
     这里两种键名都兼容。
 
-    另外 JSON SML 里的经纬度是**弧度**，而 workouts 列表接口是**度数**；为防
+    另外该接口历史上曾以弧度返回过经纬度，而 workouts 列表接口是**度数**；为防
     哪天服务端口径变化，这里做一次范围判定：超出度数范围且落在弧度范围内就换算。
     """
     if not isinstance(pos, dict):
@@ -1321,21 +1063,15 @@ class SuuntoSession:
         return data, f"suunto_activity_{activity['activity_id']}.fit"
 
     def upload_fit(self, file_data: bytes, filename: str, activity_id: int = None) -> dict:
-        """把一段 FIT 上传到颂拓（SML XML → 原始 FIT 自动降级）。
+        """把一段 FIT 上传到颂拓（官方 FIT 导入通道）。
 
-        颂拓私有 API 不支持直接收 FIT 也不收 SML 的 JSON 形态；服务端 ``POST
-        /v1/workout`` 会自己嗅探载荷类型（认 ``binary`` 与 ``SML``），具体降级
-        逻辑见 :func:`upload_workout`。
+        具体走 ``POST /apiserver/management/user/import/fit``，逻辑见
+        :func:`upload_workout`。``filename`` / ``activity_id`` 为统一调用契约保留，
+        官方导入通道不消费这两个参数。
         """
-        region, access_token, account, _ = self._snapshot()
+        region, access_token, _account, _ = self._snapshot()
         try:
-            result = upload_workout(
-                access_token,
-                region,
-                file_data,
-                activity_id=activity_id,
-                device_source=f"suunto-{abs(hash(account)) % 10 ** 9}",
-            )
+            result = upload_workout(access_token, region, file_data)
         except Exception as e:
             return {"status": "error", "message": f"上传到颂拓失败: {str(e)}"}
         return {

@@ -91,8 +91,7 @@ blunt-serv/
 │   │   ├── garmin_service.py    # 佳明接入 + 心率/睡眠/指标同步
 │   │   ├── coros_service.py     # 高驰接入
 │   │   ├── coros_upload.py      # 高驰 OSS STS v2 上传通道
-│   │   ├── suunto_service.py    # 颂拓(SportsTracker) 私有 API 接入
-│   │   ├── suunto_sml.py        # FIT → legacy SML XML 生成
+│   │   ├── suunto_service.py    # 颂拓(SportsTracker) 私有 API 接入 + 官方 FIT 导入
 │   │   ├── base_connect_service.py / base_activity_service.py
 │   │   ├── quick_sync_service.py# 一键同步(纯内存 diff)
 │   │   ├── platform_session.py  # 各平台会话管理
@@ -141,7 +140,7 @@ blunt-serv/
 |---|---|---|
 | **Garmin** | 官方 `garth` SDK + OAuth1/2 | 完整：拉取、FIT 下载、心率/睡眠/指标同步、上传到别家 |
 | **COROS** | 私有 Team API + OSS STS v2 上传通道（逆向实现） | 完整：登录、下载、FIT 上传 |
-| **Suunto / Sports Tracker** | 私有 API（逆向自官方 APK，TOTP 签名，与开源 `suuntool` 一致） | **上传链路攻坚中**：服务端仅接受 legacy SML XML，`suunto_sml.py` 负责 FIT→SML 生成，当前在调通 `POST /v1/workout` 的载荷格式 |
+| **Suunto / Sports Tracker** | 私有 API（逆向自官方 APK，TOTP 签名，与开源 `suuntool` 一致）+ 官方 FIT 导入通道 | 活动读取、FIT 下载已完成；上传走官方 `POST /apiserver/management/user/import/fit`（逆向自 `fit.suunto.cn`），区分 `intl` / `cn` 两套集群 |
 
 > ⚠️ COROS 与 Suunto 均依赖非官方接口，可能随时无通知变更，且涉及各平台服务条款。属于已知技术风险，已被接受。
 
@@ -259,7 +258,7 @@ sudo journalctl -u incremental-serve.service -f
 
 ## 已知限制 / 注意事项
 
-- **上传链路**：Suunto 上传仍依赖 legacy SML 生成，正在调通；COROS 上传依赖私有 OSS 通道，接口可能变更。
+- **上传链路**：Suunto 上传走官方 FIT 导入接口（`intl` / `cn` 分集群），鉴权方式待生产验证；COROS 上传依赖私有 OSS 通道，接口可能变更。
 - **接口口径坑**（开发时注意）：
   - `getActivitiesByPage` 的 `end_date` 有 off-by-one，需传 `YYYY-MM-DD 23:59:59`。
   - `getRunningTotal` 仅认 `master` 账号，无 master 时静默返回 0。
