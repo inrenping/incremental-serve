@@ -508,17 +508,27 @@ def upload_sml(
     region: str,
     extensions: dict = None,
     filename: str = "workout.sml",
+    field: str = "filePart",
+    content_type: str = "application/octet-stream",
+    raw: bool = False,
 ) -> dict:
-    """上传 SML 到颂拓（POST /v1/workout，multipart）。
+    """上传 SML 到颂拓（POST /v1/workout）。
 
     鉴权用 STTAuthorization（sessionKey），该端点不需要 x-totp（与 suuntool 一致）。
-    字段名 ``filePart``、Content-Type ``application/octet-stream``，与 suuntool
-    ``api.WorkoutMultipart`` 完全一致。
+    默认形态与 suuntool ``api.WorkoutMultipart`` 一致：multipart、字段名
+    ``filePart``、part Content-Type ``application/octet-stream``。
 
     Args:
         sml: SML 内容。**dict 会自动序列化为 JSON**；传 ``str``/``bytes`` 则按原样
             发送（用于发 legacy SML **XML** —— 实测服务端只认 XML，发 JSON 会 500）。
         extensions: 可选，附加的 extensions JSON（通常传 None）。
+        field: multipart 的字段名（``raw=True`` 时忽略）。
+        filename: multipart 的 filename（``raw=True`` 时忽略）。
+        content_type: ``raw=True`` 时是**整个请求**的 Content-Type；
+            否则是 multipart 里那一个 part 的 Content-Type。
+        raw: **True = 不用 multipart，直接把载荷作为请求体发送**。
+            suuntool 的 guides 上传（``POST /v1/suuntoplus/guides/files``）就是这种
+            形态，说明这套后端并非所有上传入口都用 multipart。
 
     注意：**不使用 raise_for_status**。Sportstracker 服务端把错误放在响应体里
     （Asko 信封的 error 字段），抛异常会把最有价值的排查信息丢掉——之前就是
@@ -531,21 +541,33 @@ def upload_sml(
         data = sml.encode("utf-8")
     else:
         data = sml
-    files = {
-        "filePart": (filename, data, "application/octet-stream"),
-    }
-    if extensions is not None:
-        files["workoutExtensionsPart"] = (
-            "extensions.json",
-            json.dumps(extensions).encode("utf-8"),
-            "application/json",
+
+    headers = _headers(session_key)
+
+    if raw:
+        headers["Content-Type"] = content_type
+        resp = requests.post(
+            base_url + "workout",
+            data=data,
+            headers=headers,
+            timeout=60,
         )
-    resp = requests.post(
-        base_url + "workout",
-        files=files,
-        headers=_headers(session_key),
-        timeout=60,
-    )
+    else:
+        files = {
+            field: (filename, data, content_type),
+        }
+        if extensions is not None:
+            files["workoutExtensionsPart"] = (
+                "extensions.json",
+                json.dumps(extensions).encode("utf-8"),
+                "application/json",
+            )
+        resp = requests.post(
+            base_url + "workout",
+            files=files,
+            headers=headers,
+            timeout=60,
+        )
 
     # 尽量把服务端错误解析成结构化信息
     body_text = (resp.text or "").strip()
@@ -580,6 +602,46 @@ def upload_sml(
     return result
 
 
+# ---------------------------------------------------------------------------
+# 上传「形态矩阵」——为什么需要试多种形态
+#
+# 2026-10-09 实测：SML XML 与原始 FIT **报完全相同的 523**
+# （``Workout was not saved because neither binary or SML was provided``）。
+# 已排除凭据：本地用假 sessionKey 打同一端点是 **403 Forbidden**，而生产拿到的是
+# 523，说明 sessionKey 有效、请求已经进了业务处理。
+#
+# 剩下的解释只有一个：**服务端没在它期望的位置找到载荷**，即请求的**形态**不对。
+# 旁证：suuntool 的 guides 上传（``POST /v1/suuntoplus/guides/files``）用的是
+# **raw body 而不是 multipart**；而 workouts 上传它用 multipart/``filePart``，
+# 作者并未声称验证过自己生成的 SML（原话 "This command does NOT generate SML"）。
+# 所以 multipart/``filePart`` 这一形态本身也可能是猜的。
+#
+# 因此这里把候选形态全试一遍，第一个成功即返回，并记进日志。
+# **确认哪种形态可用后请精简本表**（每种失败形态都是一次真实网络请求）。
+#
+# 字段含义：(label, 载荷类型, 是否 raw body, multipart 字段名, filename, Content-Type)
+# ---------------------------------------------------------------------------
+
+UPLOAD_VARIANTS: list[tuple[str, str, bool, str, str, str]] = [
+    ("raw-octet-sml", "sml", True, None, None, "application/octet-stream"),
+    ("raw-xml-sml", "sml", True, None, None, "text/xml"),
+    ("part-filePart-octet", "sml", False, "filePart", "workout.sml",
+     "application/octet-stream"),
+    ("part-filePart-xml", "sml", False, "filePart", "workout.sml",
+     "application/xml"),
+    ("part-filePart-textxml", "sml", False, "filePart", "workout.sml", "text/xml"),
+    ("part-file-sml", "sml", False, "file", "workout.sml",
+     "application/octet-stream"),
+    ("part-sml-sml", "sml", False, "sml", "workout.sml",
+     "application/octet-stream"),
+    ("raw-octet-fit", "fit", True, None, None, "application/octet-stream"),
+    ("part-binary-fit", "fit", False, "binary", "activity.fit",
+     "application/octet-stream"),
+    ("part-filePart-fit", "fit", False, "filePart", "activity.fit",
+     "application/octet-stream"),
+]
+
+
 def upload_workout(
     session_key: str,
     region: str,
@@ -587,20 +649,14 @@ def upload_workout(
     activity_id: int = None,
     sport_type_raw: str = None,
     device_source: str = None,
+    variants: list = None,
 ) -> dict:
-    """把 FIT 上传到颂拓，**自动在两种载荷间降级**。
+    """把 FIT 上传到颂拓，**按 :data:`UPLOAD_VARIANTS` 依次尝试各种请求形态**。
 
-    服务端 ``POST /v1/workout`` 会自己嗅探载荷类型，它认两种：
+    每次尝试都会把「形态 + 服务端返回」写进日志，全部失败才抛 502。
+    这样一次线上点击就能拿到完整诊断表，不必去猜。
 
-    - ``binary``：原始 FIT 二进制（服务端有 ``GET /v1/workout/exportFit/{key}``
-      能导出 FIT，说明内部就有 FIT 解析能力，导入大概率也收 FIT）
-    - ``SML``：legacy SML XML
-
-    实测（2026-10-08）：我们生成的 SML XML 被拒，报
-    ``code=523 "neither binary or SML was provided"`` —— 说明 XML 的**结构**
-    还差东西（suuntool 作者提到 legacy SML 还需 "service header /
-    legacy workout sections / delta-chain GPS encoding"），但**载荷本身**是通路。
-    所以这里先试 XML、失败再退到原始 FIT。
+    设环境变量 ``SUUNTO_UPLOAD_VARIANTS=0`` 可退回「只试 suuntool 同款形态」。
 
     Args:
         session_key: 目标账号的 sessionKey。
@@ -609,44 +665,64 @@ def upload_workout(
         activity_id: 显式指定 ActivityType；与 ``sport_type_raw`` 二选一。
         sport_type_raw: 源活动的规范运动类型 slug。
         device_source: SML 里的设备标识，默认按 sessionKey 生成。
+        variants: 覆盖默认形态表（测试用）。
 
     Returns:
-        ``{"status": "success", "used_format": "sml-xml"|"fit-binary", ...}``
+        ``{"status": "success", "used_format": <label>, ...}``
     """
+    logger = logging.getLogger(__name__)
     device_source = device_source or f"suunto-{abs(hash(session_key)) % 10 ** 9}"
     if activity_id is None:
         activity_id = suunto_activity_id_from_slug(sport_type_raw)
 
-    attempts: list[tuple[str, str, bytes]] = []
+    if variants is None:
+        if os.getenv("SUUNTO_UPLOAD_VARIANTS", "1") == "0":
+            variants = [
+                v for v in UPLOAD_VARIANTS if v[0] == "part-filePart-octet"
+            ] + [v for v in UPLOAD_VARIANTS if v[0] == "part-filePart-fit"]
+        else:
+            variants = UPLOAD_VARIANTS
+
+    payloads: dict[str, bytes] = {"fit": fit_bytes}
     try:
-        sml_xml = suunto_sml.fit_bytes_to_sml_xml(
+        payloads["sml"] = suunto_sml.fit_bytes_to_sml_xml(
             fit_bytes,
             device_source=device_source,
             activity_id=activity_id,
         )
-        attempts.append(("sml-xml", "workout.sml", sml_xml))
     except Exception as e:  # noqa: BLE001
-        # FIT 里没有可用 record 时 XML 生成会失败，直接走原始 FIT
-        logging.getLogger(__name__).warning("生成 SML XML 失败，改发原始 FIT: %s", e)
-    attempts.append(("fit-binary", "activity.fit", fit_bytes))
+        # FIT 里没有可用 record 时 XML 生成会失败，只留原始 FIT
+        logger.warning("生成 SML XML 失败，只能发原始 FIT: %s", e)
 
     errors: list[str] = []
-    for fmt, filename, data in attempts:
+    for label, kind, raw, field, filename, ctype in variants:
+        data = payloads.get(kind)
+        if data is None:
+            continue
         try:
-            result = upload_sml(session_key, data, region, filename=filename)
+            result = upload_sml(
+                session_key,
+                data,
+                region,
+                filename=filename or "workout.sml",
+                field=field or "filePart",
+                content_type=ctype,
+                raw=raw,
+            )
+            logger.info("颂拓上传成功，形态 = %s", label)
             return {
                 "status": "success",
-                "used_format": fmt,
+                "used_format": label,
                 "detail": result,
                 "payload": (result.get("response") or {}).get("payload"),
             }
         except HTTPException as e:
-            errors.append(f"{fmt}: {e.detail}")
-            logging.getLogger(__name__).warning("上传 %s 失败: %s", fmt, e.detail)
+            errors.append(f"{label}: {e.detail}")
+            logger.warning("上传形态 %s 失败: %s", label, e.detail)
 
     raise HTTPException(
         status_code=502,
-        detail="颂拓上传失败（已尝试 SML XML 与原始 FIT）: " + " | ".join(errors),
+        detail="颂拓上传失败（已试 %d 种形态）: " % len(errors) + " | ".join(errors),
     )
 
 
