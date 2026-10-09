@@ -44,6 +44,13 @@ class BaseConnect(Base):
     account = Column(
         String(255), nullable=True, comment="三方平台登录账号（如邮箱或手机号）"
     )
+    sort_order = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="展示排序位，越小越靠前；由用户在账号页拖拽调整",
+    )
     guid = Column(
         String(255),
         nullable=True,
