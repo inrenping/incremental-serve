@@ -67,15 +67,15 @@ def _probe(session_key: str, region: str, label: str, filename: str,
     """发一次上传，打印并返回结果（不抛异常）。"""
     import requests
 
-    from app.services import suunto_service  # 延迟导入：只在真发请求时拉依赖
+    from app.services import suunto_probe  # 零DB 依赖的轻量 HTTP 入口：只在真发请求时拉依赖
 
-    base_url = suunto_service._base_url(region)
+    base_url = suunto_probe.base_url(region)
     files = {"filePart": (filename, data, ctype)}
     try:
         resp = requests.post(
             base_url + "workout",
             files=files,
-            headers=suunto_service._headers(session_key),
+            headers=suunto_probe.headers(session_key),
             timeout=90,
         )
     except Exception as e:  # noqa: BLE001
@@ -138,10 +138,10 @@ def _check_session(session_key: str, region: str) -> bool:
     """
     import requests
 
-    from app.services import suunto_service  # 延迟导入
+    from app.services import suunto_probe  # 零DB 依赖的轻量 HTTP 入口
 
-    base_url = suunto_service._base_url(region)
-    headers = suunto_service._headers(session_key)
+    base_url = suunto_probe.base_url(region)
+    headers = suunto_probe.headers(session_key)
 
     print("会话自检（只读，不写入任何数据）")
     ok = False
@@ -188,14 +188,14 @@ def _dump_reference_sml(session_key: str, region: str, activity_key: str, outdir
     """
     import requests
 
-    from app.services import suunto_service  # 延迟导入
+    from app.services import suunto_probe  # 零DB 依赖的轻量 HTTP 入口
 
-    base_url = suunto_service._base_url(region)
+    base_url = suunto_probe.base_url(region)
     print(f"拉取服务端 SML 基准（activity_key={activity_key}）…")
     try:
         resp = requests.get(
             base_url + f"workouts/{activity_key}/sml",
-            headers=suunto_service._headers(session_key),
+            headers=suunto_probe.headers(session_key),
             timeout=60,
         )
     except Exception as e:  # noqa: BLE001

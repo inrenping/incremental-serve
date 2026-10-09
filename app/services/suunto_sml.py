@@ -486,7 +486,9 @@ def fit_bytes_to_sml_xml(
 
     _sub(hdr, "ActivityType", int(activity_id))
     _sub(hdr, "Activity", activity_name or "")
-    _sub(hdr, "Distance", _fmt_num(distance, 2))
+    # 注意：JAXB 模型里 Header.Distance 是 Integer（米），写浮点会让服务端
+    # unmarshal 抛 NumberFormatException → 整个文档解析失败 → 523。必须取整。
+    _sub(hdr, "Distance", int(round(distance)) if distance is not None else None)
     _sub(hdr, "LogItemCount", len(records))
     # Energy 单位是焦耳（FIT 给的是 kcal）
     if energy_kcal is not None:
@@ -524,10 +526,12 @@ def fit_bytes_to_sml_xml(
         _sub(s, "Time", _fmt_num(times[i], 2))
         # 有 GPS 的样本标 gps-base（gps 定位基准），其余标 periodic
         _sub(s, "SampleType", "gps-base" if "lat" in rec else "periodic")
+        # JAXB 模型里 Sample.Altitude / Sample.Distance 都是 Integer（米）。
+        # 写浮点会让服务端 unmarshal 失败 → 整个文档 523。必须取整。
         if "alt" in rec:
-            _sub(s, "Altitude", _fmt_num(rec["alt"], 2))
+            _sub(s, "Altitude", int(round(rec["alt"])))
         if "dist" in rec:
-            _sub(s, "Distance", _fmt_num(rec["dist"], 2))
+            _sub(s, "Distance", int(round(rec["dist"])))
         if "spd" in rec:
             _sub(s, "Speed", _fmt_num(rec["spd"]))
         _sub(s, "UTC", _sml_datetime(rec["dt"]))
@@ -542,14 +546,10 @@ def fit_bytes_to_sml_xml(
     #   而是 ``Sample/AppsData/AppData(Value)``，需要先确定 AppNumber，
     #   贸然加未知元素反而可能让服务端解析失败。等上传打通后再补。
 
-    # ---- parsingResume ----
-    # 真实 Moveslink2 生成的 SML 里``DeviceLog`` 下有这一个元素
-    # （形如 ``sml.DeviceLog.parsingResume.binarySize``，是「上次解析到哪了」的
-    # 断点续传标记）。**JAXB 模型里没有它** —— 说明它不属于训练数据的 XSD
-    # sequence，而是服务端上传入口单独要求的信封元素，属于 523 的候选原因之一。
-    # 放在 Samples 之后（真实文件里它就在样本之后）。
-    resume = ET.SubElement(log, f"{{{_SML_NS}}}parsingResume")
-    resume.set("binarySize", "0")
+    # 不要加 ``parsingResume`` 之类的「信封元素」：JAXB 模型
+    # （mihaildemidoff/suunto-sml-model）和已验证可用的 polar_training2sml
+    # 产出里都没有它。服务端上传入口按 XSD 解析，未知元素会触发校验失败 → 523。
+    # 经验证，标准结构（DeviceLog → Header/Device/Samples）已足够被服务端接受。
 
     _indent(sml)
     return ET.tostring(sml, encoding="UTF-8", xml_declaration=True)
