@@ -717,13 +717,27 @@ def upload_workout(
                 "payload": (result.get("response") or {}).get("payload"),
             }
         except HTTPException as e:
-            errors.append(f"{label}: {e.detail}")
+            # 日志里打完整信息；汇总串只留摘要，否则 10 条拼起来前端根本看不全
             logger.warning("上传形态 %s 失败: %s", label, e.detail)
+            errors.append(f"{label}={_brief_error(e.detail)}")
 
     raise HTTPException(
         status_code=502,
-        detail="颂拓上传失败（已试 %d 种形态）: " % len(errors) + " | ".join(errors),
+        detail="颂拓上传失败（已试 %d 种形态，完整信息见服务日志）: " % len(errors)
+        + ", ".join(errors),
     )
+
+
+def _brief_error(detail: str) -> str:
+    """把一长串错误压成 ``HTTP500/523`` 这种摘要，便于在汇总里并排列出。"""
+    import re
+
+    text = str(detail)
+    m = re.search(r"HTTP (\d+)", text)
+    http = m.group(1) if m else "?"
+    m = re.search(r"['\"]code['\"]:\s*['\"]?(\d+)", text)
+    code = m.group(1) if m else ""
+    return f"HTTP{http}/{code}" if code else f"HTTP{http}"
 
 
 def _position_to_latlon(pos: Optional[dict]) -> tuple:
