@@ -639,6 +639,15 @@ UPLOAD_VARIANTS: list[tuple[str, str, bool, str, str, str]] = [
     # 但 523 字面点名 ``binary``，故补一个 ``binary`` 字段名 + SML 内容的组合。
     ("part-binary-sml", "sml", False, "binary", "workout.sml",
      "application/octet-stream"),
+    # 2026-10-09 诊断实测：字段名 filePart / file / sml / binary 四者返回**完全相同**
+    # 的 523，与字段名无关。但服务端文案写作 ``neither binary or SML``——binary 小写、
+    # SML 全大写，形似两个表单字段名的字面写法，疑该字段名大小写敏感。
+    ("part-SML-octet", "sml", False, "SML", "workout.sml",
+     "application/octet-stream"),
+    ("part-SML-xml", "sml", False, "SML", "workout.sml",
+     "application/xml"),
+    ("part-Sml-octet", "sml", False, "Sml", "workout.sml",
+     "application/octet-stream"),
     ("raw-octet-fit", "fit", True, None, None, "application/octet-stream"),
     ("part-binary-fit", "fit", False, "binary", "activity.fit",
      "application/octet-stream"),
