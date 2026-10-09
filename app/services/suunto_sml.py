@@ -310,8 +310,15 @@ def _sml_datetime(dt: datetime) -> str:
 
 
 def _sub(parent, tag: str, text) -> None:
-    """在 ``parent`` 下追加一个 ``<tag>text</tag>``；text 为 None 时跳过。"""
+    """在 ``parent`` 下追加一个 ``<tag>text</tag>``。
+
+    text 为 ``None`` 或空字符串时**跳过不写**：SML 里的可选字段缺失是有意义的
+    （表示「没有这个数据」），而 ``<Activity />`` 这种空元素可能被服务端解析器
+    当成「字段存在但值为空」，反而触发校验失败。
+    """
     if text is None:
+        return
+    if isinstance(text, str) and not text.strip():
         return
     ET.SubElement(parent, f"{{{_SML_NS}}}{tag}").text = str(text)
 
@@ -393,6 +400,17 @@ def fit_bytes_to_sml_xml(
     ascent = _sess("total_ascent")
     descent = _sess("total_descent")
     energy_kcal = _sess("total_calories")
+
+    # 活动名：FIT 里放在 session 的 ``unknown_110``（Garmin 中文固件写的名称，
+    # 例如「跑步」）。取不到就用 sport 兜底，别留空元素 ——
+    # 空``<Activity />`` 在部分服务端解析器上会被当成缺字段。
+    if not activity_name:
+        activity_name = _sess("unknown_110") or _sess("name") or ""
+        if not activity_name:
+            activity_name = {
+                "running": "跑步", "cycling": "骑行", "walking": "步行",
+                "swimming": "游泳", "hiking": "徒步",
+            }.get(str(_sess("sport") or ""), "")
 
     def _vals(key):
         return [r[key] for r in records if key in r]
