@@ -309,6 +309,32 @@ def sign_params(path: str, params: list[tuple[str, str]]) -> str:
 # 默认值使国内账号开箱即用，无需先配环境变量；仍可用 SUUNTO_CN_BASE_URL 覆盖。
 SUUNTO_CN_BASE_URL_DEFAULT = "https://cloud-api.suunto.cn/apiserver/v1/"
 
+# 服务**根** URL（不含 ``/apiserver/v1/``）。官方 FIT 导入门户（fit.suunto.cn）
+# 的 axios baseURL 就是 ``https://api.suunto.cn``，其 FIT 导入路径是
+# ``/apiserver/management/user/import/fit``——注意是 ``/apiserver/`` 开头、
+# **没有 ``/v1``**。
+#
+# 踩坑记录（2026-10-09）：若拿 _base_url()（含 /apiserver/v1/）去拼该路径，会得到
+# ``/apiserver/v1/management/user/import/fit``，实测返回 **404**；去掉 /v1 才是
+# 正确的 ``/apiserver/management/...``，实测 403（仅缺认证）。两者仅差一个 ``/v1``，
+# 但结果一个 404 一个 403，极易误判为"端点不存在"或"鉴权失败"。
+SUUNTO_CN_ROOT_DEFAULT = "https://cloud-api.suunto.cn"
+SUUNTO_INTL_ROOT_DEFAULT = "https://api.sports-tracker.com"
+
+
+def _service_root(region: str) -> str:
+    """返回服务**根** URL（不含 ``/apiserver/v1/``），供 ``/apiserver/*`` 非 v1 路径使用。
+
+    从 :func:`_base_url` 的值反推：去掉结尾的 ``apiserver/v1/``。这样环境变量
+    （``SUUNTO_INTL_BASE_URL`` / ``SUUNTO_CN_BASE_URL``）仍能统一配置，不需要新增变量。
+    """
+    base = _base_url(region)
+    for suffix in ("apiserver/v1/", "apiserver/v1"):
+        if base.endswith(suffix):
+            return base[: -len(suffix)].rstrip("/")
+    # 兜底：若环境变量给了不含 apiserver 的根，直接去掉尾部斜杠
+    return base.rstrip("/")
+
 
 def _base_url(region: str) -> str:
     """按 region 解析 base URL。
@@ -552,7 +578,10 @@ def upload_fit_import(
         HTTPException: HTTP >= 400，或响应体里带 error。
     """
     headers = _headers(session_key)
-    url = _base_url(region) + "management/user/import/fit"
+    # 注意用_service_root()（不含 /apiserver/v1/），不能用 _base_url()。
+    # 官方门户 baseURL 是服务根，其 FIT 导入路径为 /apiserver/management/...（无 /v1）；
+    # 误用 _base_url() 会多出一层 /v1，实测 404。
+    url = _service_root(region) + "/apiserver/management/user/import/fit"
     resp = requests.post(
         url,
         files={field: (filename, fit_bytes, "application/octet-stream")},
