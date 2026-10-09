@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -186,14 +187,17 @@ def upload_fit_to_suunto(
     current_user: User = None,
     sport_type_raw: str = None,
 ) -> dict:
-    """把一段 FIT 上传到指定颂拓账号（FIT → legacy SML XML → POST /v1/workout）。
+    """把一段 FIT 上传到指定颂拓账号（SML XML → 原始 FIT 自动降级）。
 
     供"一键推送/单条推送"这类不经过 SuuntoSession 的路径直接调用。
+
+    服务端 ``POST /v1/workout`` 会自己嗅探载荷类型（认 ``binary`` 与 ``SML`` 两种），
+    具体由 :func:`upload_workout` 处理降级。
 
     Args:
         config: 目标 BaseConnect（source_type="suunto"），会先 relogin 刷新 sessionKey。
         file_data: 源平台下载下来的 FIT 字节。
-        sport_type_raw: 源活动的规范运动类型 slug，用来给 SML 标注运动类型。
+        sport_type_raw: 源活动的规范运动类型 slug，用来给SML 标注运动类型。
     """
     from app.services import base_connect_service  # 延迟导入，避免循环依赖
 
@@ -205,13 +209,13 @@ def upload_fit_to_suunto(
         return {"status": "error", "message": "颂拓授权失效，请重新绑定账号"}
 
     device_source = f"suunto-{abs(hash(config.account or '')) % 10 ** 9}"
-    # 上传端点只认 legacy SML **XML**（发 JSON 会让服务端反序列化失败 → 500）
-    sml_xml = suunto_sml.fit_bytes_to_sml_xml(
+    result = upload_workout(
+        config.access_token,
+        config.region,
         file_data,
+        sport_type_raw=sport_type_raw,
         device_source=device_source,
-        activity_id=suunto_activity_id_from_slug(sport_type_raw),
     )
-    result = upload_sml(config.access_token, sml_xml, config.region)
     return {
         "status": "success",
         "message": "已上传到颂拓",
@@ -574,6 +578,76 @@ def upload_sml(
             detail=f"颂拓上传被拒绝: {parsed.get('error')}",
         )
     return result
+
+
+def upload_workout(
+    session_key: str,
+    region: str,
+    fit_bytes: bytes,
+    activity_id: int = None,
+    sport_type_raw: str = None,
+    device_source: str = None,
+) -> dict:
+    """把 FIT 上传到颂拓，**自动在两种载荷间降级**。
+
+    服务端 ``POST /v1/workout`` 会自己嗅探载荷类型，它认两种：
+
+    - ``binary``：原始 FIT 二进制（服务端有 ``GET /v1/workout/exportFit/{key}``
+      能导出 FIT，说明内部就有 FIT 解析能力，导入大概率也收 FIT）
+    - ``SML``：legacy SML XML
+
+    实测（2026-10-08）：我们生成的 SML XML 被拒，报
+    ``code=523 "neither binary or SML was provided"`` —— 说明 XML 的**结构**
+    还差东西（suuntool 作者提到 legacy SML 还需 "service header /
+    legacy workout sections / delta-chain GPS encoding"），但**载荷本身**是通路。
+    所以这里先试 XML、失败再退到原始 FIT。
+
+    Args:
+        session_key: 目标账号的 sessionKey。
+        region: ``intl`` / ``cn``。
+        fit_bytes: 源平台下载下来的 FIT 字节。
+        activity_id: 显式指定 ActivityType；与 ``sport_type_raw`` 二选一。
+        sport_type_raw: 源活动的规范运动类型 slug。
+        device_source: SML 里的设备标识，默认按 sessionKey 生成。
+
+    Returns:
+        ``{"status": "success", "used_format": "sml-xml"|"fit-binary", ...}``
+    """
+    device_source = device_source or f"suunto-{abs(hash(session_key)) % 10 ** 9}"
+    if activity_id is None:
+        activity_id = suunto_activity_id_from_slug(sport_type_raw)
+
+    attempts: list[tuple[str, str, bytes]] = []
+    try:
+        sml_xml = suunto_sml.fit_bytes_to_sml_xml(
+            fit_bytes,
+            device_source=device_source,
+            activity_id=activity_id,
+        )
+        attempts.append(("sml-xml", "workout.sml", sml_xml))
+    except Exception as e:  # noqa: BLE001
+        # FIT 里没有可用 record 时 XML 生成会失败，直接走原始 FIT
+        logging.getLogger(__name__).warning("生成 SML XML 失败，改发原始 FIT: %s", e)
+    attempts.append(("fit-binary", "activity.fit", fit_bytes))
+
+    errors: list[str] = []
+    for fmt, filename, data in attempts:
+        try:
+            result = upload_sml(session_key, data, region, filename=filename)
+            return {
+                "status": "success",
+                "used_format": fmt,
+                "detail": result,
+                "payload": (result.get("response") or {}).get("payload"),
+            }
+        except HTTPException as e:
+            errors.append(f"{fmt}: {e.detail}")
+            logging.getLogger(__name__).warning("上传 %s 失败: %s", fmt, e.detail)
+
+    raise HTTPException(
+        status_code=502,
+        detail="颂拓上传失败（已尝试 SML XML 与原始 FIT）: " + " | ".join(errors),
+    )
 
 
 def _position_to_latlon(pos: Optional[dict]) -> tuple:
@@ -986,20 +1060,21 @@ class SuuntoSession:
         return data, f"suunto_activity_{activity['activity_id']}.fit"
 
     def upload_fit(self, file_data: bytes, filename: str, activity_id: int = None) -> dict:
-        """把一段 FIT 上传到颂拓（FIT -> legacy SML XML -> POST /v1/workout）。
+        """把一段 FIT 上传到颂拓（SML XML → 原始 FIT 自动降级）。
 
-        颂拓私有 API 不支持直接收 FIT，也不收 SML 的 JSON 形态：
-        上传端点的 ``filePart`` 必须是 legacy SML **XML**。
+        颂拓私有 API 不支持直接收 FIT 也不收 SML 的 JSON 形态；服务端 ``POST
+        /v1/workout`` 会自己嗅探载荷类型（认 ``binary`` 与 ``SML``），具体降级
+        逻辑见 :func:`upload_workout`。
         """
         region, access_token, account, _ = self._snapshot()
         try:
-            device_source = f"suunto-{abs(hash(account)) % 10 ** 9}"
-            sml_xml = suunto_sml.fit_bytes_to_sml_xml(
+            result = upload_workout(
+                access_token,
+                region,
                 file_data,
-                device_source=device_source,
                 activity_id=activity_id,
+                device_source=f"suunto-{abs(hash(account)) % 10 ** 9}",
             )
-            result = upload_sml(access_token, sml_xml, region)
         except Exception as e:
             return {"status": "error", "message": f"上传到颂拓失败: {str(e)}"}
         return {
