@@ -303,17 +303,25 @@ def sign_params(path: str, params: list[tuple[str, str]]) -> str:
 # ---------------------------------------------------------------------------
 
 
+# 2026-10-09 实测：``https://{cloud-api,api}.suunto.cn/apiserver/v1/servertime``
+# 均返回 200，说明国内版是**独立服务集群**，但沿用同一套 ``/apiserver/v1/`` 路径
+# 结构（fit.suunto.cn 这个官方FIT 导入门户用的正是 cloud-api.suunto.cn）。
+# 默认值使国内账号开箱即用，无需先配环境变量；仍可用 SUUNTO_CN_BASE_URL 覆盖。
+SUUNTO_CN_BASE_URL_DEFAULT = "https://cloud-api.suunto.cn/apiserver/v1/"
+
+
 def _base_url(region: str) -> str:
-    """按 region 解析 base URL。国际版硬编码（可用 SUUNTO_INTL_BASE_URL 覆盖），
-    国内版走 SUUNTO_CN_BASE_URL 环境变量——抓到国内版 host 后填进去即生效，零代码改动。"""
+    """按 region 解析 base URL。
+
+    国际版默认 ``api.sports-tracker.com``；国内版默认 ``cloud-api.suunto.cn``。
+    两边都可用对应环境变量覆盖（``SUUNTO_INTL_BASE_URL`` / ``SUUNTO_CN_BASE_URL``）。
+
+    重要：打错服务集群是 523 的一个独立成因——国际版集群不认识国内账号的
+    sessionKey/载荷时会返回与"载荷没识别"同一句文案，容易误判成格式问题。
+    """
     region = (region or "intl").lower()
     if region == "cn":
-        url = os.getenv("SUUNTO_CN_BASE_URL", "")
-        if not url:
-            raise HTTPException(
-                status_code=500,
-                detail="国内版后端地址未配置，请在环境变量中设置 SUUNTO_CN_BASE_URL",
-            )
+        url = os.getenv("SUUNTO_CN_BASE_URL") or SUUNTO_CN_BASE_URL_DEFAULT
         return url.rstrip("/") + "/"
     return (
         os.getenv(
