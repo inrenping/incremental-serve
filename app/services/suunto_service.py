@@ -656,7 +656,8 @@ def upload_workout(
     每次尝试都会把「形态 + 服务端返回」写进日志，全部失败才抛 502。
     这样一次线上点击就能拿到完整诊断表，不必去猜。
 
-    设环境变量 ``SUUNTO_UPLOAD_VARIANTS=0`` 可退回「只试 suuntool 同款形态」。
+    默认只试 ``part-filePart-octet``（与 suuntool 同款、已确认唯一有效）。
+    设 ``SUUNTO_UPLOAD_VARIANTS=1`` 进入诊断模式，把全部候选形态试一遍并逐一记日志。
 
     Args:
         session_key: 目标账号的 sessionKey。
@@ -676,12 +677,13 @@ def upload_workout(
         activity_id = suunto_activity_id_from_slug(sport_type_raw)
 
     if variants is None:
-        if os.getenv("SUUNTO_UPLOAD_VARIANTS", "1") == "0":
-            variants = [
-                v for v in UPLOAD_VARIANTS if v[0] == "part-filePart-octet"
-            ] + [v for v in UPLOAD_VARIANTS if v[0] == "part-filePart-fit"]
-        else:
+        if os.getenv("SUUNTO_UPLOAD_VARIANTS", "0") == "1":
+            # 诊断模式：把候选形态全试一遍，第一个成功即返回并记日志。
             variants = UPLOAD_VARIANTS
+        else:
+            # 默认：只试与 suuntool 同款、且已确认唯一有效的形态
+            # （raw body 必然 500、FIT 直传必然 523，均已排除，不必再试）。
+            variants = [v for v in UPLOAD_VARIANTS if v[0] == "part-filePart-octet"]
 
     payloads: dict[str, bytes] = {"fit": fit_bytes}
     try:
