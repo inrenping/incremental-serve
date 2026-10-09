@@ -10,10 +10,41 @@ def get_connects(db: Session, current_user: User):
     connect_configs = (
         db.query(BaseConnect)
         .filter(BaseConnect.user_id == current_user.id, BaseConnect.is_active == True)
-        .order_by(BaseConnect.created_at.desc())
+        .order_by(BaseConnect.sort_order.asc(), BaseConnect.created_at.desc())
         .all()
     )
     return connect_configs
+
+
+def reorder_connects(db: Session, current_user: User, ordered_ids: list[int]):
+    """按前端拖拽提交的 id 顺序重写 sort_order。
+
+    只接受属于当前用户的 id，且忽略不在列表里的 id（避免越权改他人账号）。
+    返回重排后的完整账号列表。
+    """
+    if not ordered_ids:
+        return []
+
+    owned = (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.user_id == current_user.id,
+            BaseConnect.id.in_(ordered_ids),
+        )
+        .all()
+    )
+    owned_map = {c.id: c for c in owned}
+
+    # 按提交的顺序逐个写入位次。提交的重复 id 会取到最后一个位次，
+    # 属于脏数据但不会破坏其他记录的顺序。
+    for position, connect_id in enumerate(ordered_ids):
+        target = owned_map.get(connect_id)
+        if target is not None:
+            target.sort_order = position
+
+    db.commit()
+
+    return get_connects(db, current_user)
 
 
 def get_connect(id: int, db: Session, current_user: User):

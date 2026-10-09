@@ -47,6 +47,12 @@ class LoginRequest(BaseModel):
     source_type: Optional[str] = None
 
 
+class ReorderConnectsRequest(BaseModel):
+    """账号排序请求模型"""
+
+    connect_ids: list[int]
+
+
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     try:
@@ -69,6 +75,30 @@ def get_connect_config(
     """
     connect_configs = base_connect_service.get_connects(db, current_user)
     return connect_configs
+
+
+@router.post("/reorderConnectConfigs")
+def reorder_connect_configs(
+    payload: ReorderConnectsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    按前端拖拽提交的顺序持久化账号展示排序。
+
+    所有页面的账号下拉框都复用 getConnectConfigs 的返回顺序，
+    所以这里改一次，全站下拉框顺序即同步。
+
+    Args:
+        payload (ReorderConnectsRequest): 有序的 connect id 列表。
+        current_user (User): 当前认证用户。
+        db (Session): 数据库会话。
+    Returns:
+        list: 重排后的账号连接配置列表。
+    """
+    return base_connect_service.reorder_connects(
+        db, current_user, payload.connect_ids
+    )
 
 
 @router.get("/testConnect")
