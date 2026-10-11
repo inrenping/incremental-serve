@@ -22,7 +22,33 @@ def _resolve_task_hours(task: Task) -> list:
     return [task.hour] if task.hour is not None else []
 
 
-def run_cron_execute2_internal() -> None:
+def _claim_slot(db, task_id: int, run_slot: str) -> bool:
+    """幂等占坑：同一 (task_id, run_slot) 只返回 True 一次。
+
+    用 DB 唯一约束解决「应用内调度器 / 外部无鉴权接口 / 多 worker 实例」之间的并发竞态。
+    采用 INSERT ... ON CONFLICT DO NOTHING，靠 rowcount 判断（1=新占坑，0=已被占），
+    不抛 IntegrityError，因此不会触发会话 rollback、影响同一事务内其余任务的执行记录写入。
+    """
+    from sqlalchemy import text
+
+    res = db.execute(
+        text(
+            "INSERT INTO t_task_execution (task_id, run_slot) "
+            "VALUES (:task_id, :run_slot) ON CONFLICT (task_id, run_slot) DO NOTHING"
+        ),
+        {"task_id": task_id, "run_slot": run_slot},
+    )
+    return res.rowcount == 1
+
+
+def _build_run_slot(local_dt, force: bool, task_id: int) -> str:
+    """构造执行槽位标识。定时执行锚定到『本地日期 小时:分钟』，手动触发用独立前缀。"""
+    if force:
+        return f"manual-{local_dt.strftime('%Y%m%d%H%M%S')}-{task_id}"
+    return f"{local_dt.strftime('%Y-%m-%d')} {local_dt.hour:02d}:{local_dt.minute:02d}"
+
+
+def run_cron_execute2_internal(force_minute: bool = False) -> None:
     db = SessionLocal()
     try:
         now_utc = datetime.now(timezone.utc)
@@ -39,8 +65,18 @@ def run_cron_execute2_internal() -> None:
                 continue
 
             user_tz = user.timezone or "Asia/Shanghai"
-            local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
-            if local_hour not in task_hours:
+            local_dt = now_utc.astimezone(ZoneInfo(user_tz))
+            if local_dt.hour not in task_hours:
+                continue
+
+            # 错峰：定时模式下只在「定死的分钟」命中才执行；手动触发(force)忽略分钟。
+            target_minute = task.minute if task.minute is not None else 0
+            if not force_minute and local_dt.minute != target_minute:
+                continue
+
+            # 幂等占坑：同一槽位只执行一次，杜绝重复触发。
+            run_slot = _build_run_slot(local_dt, force_minute, task.id)
+            if not _claim_slot(db, task.id, run_slot):
                 continue
 
             items = db.query(TaskItem).filter(TaskItem.task_id == task.id).all()
@@ -88,15 +124,15 @@ def register_jobs() -> None:
     scheduler.add_job(
         run_cron_execute2_internal,
         trigger="cron",
-        minute=0,
-        id="cron_execute2_hourly",
+        minute="*",
+        id="cron_execute2_minutely",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=120,
         coalesce=True,
         max_instances=1,
     )
     logger.info(
-        "[scheduler] registered jobs: cron_execute2_hourly (every hour at minute 0, UTC)"
+        "[scheduler] registered jobs: cron_execute2_minutely (every minute, UTC)"
     )
 
 

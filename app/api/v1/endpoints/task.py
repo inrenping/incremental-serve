@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 import logging
+import random
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -141,6 +142,7 @@ def _task_to_dict(task: Task, items: List[TaskItem]) -> dict:
         "id": task.id,
         "user_id": task.user_id,
         "hours": task.hours or ([task.hour] if task.hour is not None else []),
+        "minute": task.minute,
         "is_active": task.is_active,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
@@ -257,6 +259,7 @@ def save_task(
             hours=hours,
             is_active=request.is_active,
             hour=hours[0],
+            minute=random.randint(0, 59),
             connect_source_id=request.items[0].connect_source_id,
             connect_target_id=request.items[0].connect_target_id,
         )
@@ -371,13 +374,16 @@ def cron_execute(
 ):
     """
     定时任务回调接口（无认证，仅内部/定时任务调用）。
-    遍历所有有效 task，若当前小时匹配 task.hours 之一，
-    则执行该任务下所有「源 -> 目标」同步对，并将 SSE 输出记录到 task_result 中。
+
+    与调度器共用同一套「分钟匹配 + 槽位幂等」逻辑：
+      1. 当前本地小时命中 task.hours 且本地分钟命中 task.minute 才执行（NULL minute 视为 0）；
+      2. 执行前对 (task_id, run_slot) 做幂等占坑，与调度器/多实例互相去重，绝不重复执行。
     """
     import json
     from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
     from app.api.v1.endpoints.base import log_stream_generator
+    from app.core.scheduler import _claim_slot, _build_run_slot
 
     now_utc = datetime.now(timezone.utc)
     tasks = db.query(Task).filter(Task.is_active == True).all()
@@ -392,10 +398,20 @@ def cron_execute(
         if not task_hours:
             continue
 
-        # 根据用户的时区计算当前本地小时
+        # 根据用户的时区计算当前本地时间
         user_tz = user.timezone or "Asia/Shanghai"
-        local_hour = now_utc.astimezone(ZoneInfo(user_tz)).hour
-        if local_hour not in task_hours:
+        local_dt = now_utc.astimezone(ZoneInfo(user_tz))
+        if local_dt.hour not in task_hours:
+            continue
+
+        # 错峰：只在定死的分钟命中才执行
+        target_minute = task.minute if task.minute is not None else 0
+        if local_dt.minute != target_minute:
+            continue
+
+        # 幂等占坑（与调度器共用同一槽位公式，互相去重）
+        run_slot = _build_run_slot(local_dt, force=False, task_id=task.id)
+        if not _claim_slot(db, task.id, run_slot):
             continue
 
         items = db.query(TaskItem).filter(TaskItem.task_id == task.id).all()
@@ -426,7 +442,7 @@ def cron_execute(
     db.commit()
     return {
         "status": "success",
-        "message": f"已检查 {len(tasks)} 个任务，匹配当前小时并执行了 {executed_count} 个",
+        "message": f"已检查 {len(tasks)} 个任务，匹配当前时间槽并执行了 {executed_count} 个",
     }
 
 
@@ -434,13 +450,13 @@ def cron_execute(
 def cron_execute2():
     """
     手动触发 cron-execute2 定时任务（复用 scheduler 内部逻辑）。
-    遍历所有有效 task，若当前小时匹配 task.hours 之一，
-    则对该任务下每个「源 -> 目标」同步对调用 execute_task2，
-    并将结果 JSON 记录到 task_result 日志中。
+
+    使用 force_minute=True：忽略「定死的分钟」，对当前小时命中的任务立即执行一次，
+    槽位用 manual- 前缀、不参与定时去重，因此不会与正常的错峰调度互相干扰。
     """
     from app.core.scheduler import run_cron_execute2_internal
 
-    run_cron_execute2_internal()
+    run_cron_execute2_internal(force_minute=True)
     return {"status": "success", "message": "cron-execute2 triggered successfully"}
 
 
