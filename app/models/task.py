@@ -54,6 +54,11 @@ class Task(Base):
         nullable=True,
         comment="任务触发小时列表（如 [8, 20]），本地时区 0-23",
     )
+    minute = Column(
+        Integer,
+        nullable=True,
+        comment="执行分钟(0-59)，创建时随机定死，配合 hours 实现错峰；NULL 视为 0（整点）",
+    )
     is_active = Column(
         Boolean,
         default=True,

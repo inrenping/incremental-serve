@@ -1,6 +1,6 @@
 # Incremental Serv — 后端 API
 
-`incremental.icu` 健身数据聚合平台的**后端服务**（仓库 `blunt-serv`）。
+`incremental.icu` 健身数据聚合平台的**后端服务**（仓库 `incremental-serv`）。
 
 它负责把用户绑定的多个运动平台账号（Garmin / COROS / Suunto）的数据统一拉取、存储、并在平台之间**单向同步**，同时对外提供心率、睡眠、训练指标等分析接口，以及供 AI 客户端（ChatGPT GPT Actions / MCP）接入的 OAuth 2.1 授权服务。
 
@@ -45,7 +45,7 @@
 ## 技术栈
 
 | 层 | 选型 |
-|---|---|
+| --- | --- |
 | Web 框架 | FastAPI `0.135` + Uvicorn |
 | ORM / 数据库 | SQLAlchemy `2.0` + PostgreSQL |
 | 后台调度 | APScheduler（进程内，随 lifespan 启停） |
@@ -125,7 +125,7 @@ blunt-serv/
 服务同时存在三套凭证体系：
 
 | 体系 | 用途 | 有效期 |
-|---|---|---|
+| --- | --- | --- |
 | 用户 JWT（`Authorization: Bearer`） | 前端调用 API | Access 60 min / Refresh 7 天 |
 | OAuth 2.1 授权码（AI 接入） | ChatGPT / MCP | 授权码 10 min / Access 365 天 / Refresh 400 天 |
 | `X-Sync-Token` | GitHub Actions 定时任务 | 长期随机串（环境变量 `CRON_SYNC_TOKEN`） |
@@ -137,7 +137,7 @@ blunt-serv/
 ## 平台接入现状
 
 | 平台 | 接入方式 | 状态 |
-|---|---|---|
+| --- | --- | --- |
 | **Garmin** | 官方 `garth` SDK + OAuth1/2 | 完整：拉取、FIT 下载、心率/睡眠/指标同步、上传到别家 |
 | **COROS** | 私有 Team API + OSS STS v2 上传通道（逆向实现） | 完整：登录、下载、FIT 上传 |
 | **Suunto / Sports Tracker** | 私有 API（逆向自官方 APK，TOTP 签名，与开源 `suuntool` 一致）+ 官方 FIT 导入通道 | 活动读取、FIT 下载已完成；上传走官方 `POST /apiserver/management/user/import/fit`（逆向自 `fit.suunto.cn`），区分 `intl` / `cn` 两套集群 |
@@ -160,7 +160,7 @@ blunt-serv/
 复制 `.env.example` 为 `.env` 并填写。生产由 `deploy.yml` 用 GitHub Secrets 注入覆盖。
 
 | 变量 | 说明 |
-|---|---|
+| --- | --- |
 | `DATABASE_URL` | PostgreSQL 连接串（**必填**，缺失即启动报错） |
 | `SECRET_KEY` | HS256 JWT 签名密钥 |
 | `CLERK_SECRET_KEY` / `CLERK_ISSUER` / `CLERK_WEBHOOK_SECRET` | Clerk 鉴权 |
@@ -243,7 +243,7 @@ sudo journalctl -u incremental-serve.service -f
 ## 定时工作流（`.github/workflows/`）
 
 | 文件 | 作用 | 频率 |
-|---|---|---|
+| --- | --- | --- |
 | `deploy.yml` | 测试 + 部署 | push 到 `master` |
 | `sync_daily_heart_rate.yml` | 每日同步心率 | 定时 |
 | `sync_daily_sleep.yml` | 每日同步睡眠 | 定时 |
