@@ -4,7 +4,6 @@ import requests
 from app.services import base_connect_service, coros_upload
 
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
-import garth
 from datetime import datetime, timezone
 from typing import Tuple
 from fastapi import HTTPException
@@ -492,15 +491,10 @@ def sync_garmin_to_coros(
     )
     if not target_config:
         raise HTTPException(status_code=404, detail="未找到有效的高驰授权")
-    # 刷新 佳明数据源的 认证
-    source_config = base_connect_service.perform_relogin(
-        source_config.id, db, current_user
-    )
-    # 下载 Garmin 文件
-    if source_config.region and source_config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    # 下载 Garmin 文件（使用本连接独立 client，不再依赖全局 garth）
+    from app.services import garmin_service
+
+    client = garmin_service._garmin_client(source_config, db, current_user)
 
     download_url = "/download-service/files/activity"
     url = f"{download_url}/{activity.activity_id}"
@@ -514,7 +508,7 @@ def sync_garmin_to_coros(
             module_name="garmin",
             op_desc=f"下载佳明运动文件{activity.activity_id}",
         ) as ctx:
-            raw = garth.client.download(url)
+            raw = client.download(url)
             print("raw 的类型是:", type(raw))
             if not raw:
                 raise Exception("下载内容为空")
@@ -531,10 +525,11 @@ def sync_garmin_to_coros(
 def _download_garmin_activity(
     current_user: User, garmin_config: BaseConnect, activity: BaseActivity
 ) -> bytes:
-    if garmin_config.region and garmin_config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    from app.services import garmin_service
+
+    client = garmin_service._new_garmin_client(garmin_config)
+    if garmin_config.secret_string:
+        client.loads(garmin_config.secret_string)
 
     download_url = "/download-service/files/activity"
     url = f"{download_url}/{activity.activity_id}"
@@ -548,7 +543,7 @@ def _download_garmin_activity(
             module_name="garmin",
             op_desc=f"下载佳明运动文件{activity.activity_id}",
         ) as ctx:
-            raw = garth.client.download(url)
+            raw = client.download(url)
             print("raw 的类型是:", type(raw))
             if not raw:
                 raise Exception("下载内容为空")
