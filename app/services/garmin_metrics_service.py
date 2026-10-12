@@ -21,7 +21,6 @@ import os
 
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 
-import garth  # noqa: E402
 from datetime import datetime  # noqa: E402
 from typing import Any, Optional  # noqa: E402
 from zoneinfo import ZoneInfo  # noqa: E402
@@ -164,40 +163,23 @@ def _to_datetime(value: Any):
 
 def _prepare_garmin_client(
     connect_id: int, db: Session, current_user: User
-) -> BaseConnect:
-    """装载该连接的凭证到 garth，并配置好域名。
+) -> tuple[BaseConnect, Any]:
+    """构造本连接独立 GarminClient（装载本连接凭证）。
 
-    与心率 / 睡眠链路同构：先探活，失效先用账号密码重登，再退回 OAuth2 刷新。
-    沿用 garth 模块级单例（并发跨用户场景有已知隐患，与既有实现保持一致）。
+    不再依赖全局 garth 单例，避免多用户并发时凭证互相覆盖、把他人指标
+    写进当前用户账号。返回 (base_connect, client)。
     """
     config = garmin_service.get_garmin_connect(connect_id, db, current_user)
     if not config:
         raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
-
-    if garmin_service.test_garmin_token(config.id, db, current_user):
-        base_connect = config
-    else:
-        try:
-            base_connect = garmin_service.refresh_garmin_secret_string(
-                config.id, db, current_user
-            )
-        except HTTPException:
-            base_connect = garmin_service.refresh_garmin_access_token(
-                config.id, db, current_user
-            )
-
-    domain = (
-        "garmin.cn"
-        if (base_connect.region or "").upper() == "CN"
-        else "garmin.com"
-    )
-    garth.client.configure(domain=domain, ssl_verify=(domain != "garmin.cn"))
-    return base_connect
+    client = garmin_service._garmin_client(config, db, current_user)
+    return config, client
 
 
-def _fetch(path: str, current_user: User, op_desc: str, params=None, raises=True):
-    """带日志地打一个 connectapi 端点；失败按 raises 决定抛异常还是返回 None。"""
-    full_url = f"https://connect.{garth.client.domain}{path}"
+def _fetch(client, path: str, current_user: User, op_desc: str, params=None, raises=True):
+    """带日志地用本连接独立 client 打一个 connectapi 端点；失败按 raises 决定抛异常还是返回 None。"""
+    domain = getattr(client, "domain", None) or "garmin.com"
+    full_url = f"https://connect.{domain}{path}"
     try:
         with log_request(
             current_user=current_user,
@@ -208,7 +190,7 @@ def _fetch(path: str, current_user: User, op_desc: str, params=None, raises=True
             module_name="garmin",
             op_desc=op_desc,
         ):
-            return garth.connectapi(path, params=params) if params else garth.connectapi(path)
+            return client.connectapi(path, params=params) if params else client.connectapi(path)
     except Exception as e:
         message = f"{op_desc}失败: {str(e)}"
         print(message)
@@ -540,7 +522,7 @@ def sync_garmin_fitness_metrics(
     :param date: 数据日期 YYYY-MM-DD，默认按用户时区取今天
     :return: 四项的同步结果汇总，单项失败不影响其他项
     """
-    base_connect = _prepare_garmin_client(connect_id, db, current_user)
+    base_connect, client = _prepare_garmin_client(connect_id, db, current_user)
     if date is None:
         date = _today_in_user_tz(current_user)
 
@@ -554,6 +536,7 @@ def sync_garmin_fitness_metrics(
     # 1. 训练状态与负荷
     try:
         raw = _fetch(
+            client,
             f"{PATH_TRAINING_STATUS}/{date}",
             current_user,
             f"获取 Garmin {date} 训练状态与负荷",
@@ -570,6 +553,7 @@ def sync_garmin_fitness_metrics(
     # 2. 体能年龄
     try:
         raw = _fetch(
+            client,
             f"{PATH_MAX_MET}/{date}/{date}",
             current_user,
             f"获取 Garmin {date} 体能年龄",
@@ -586,7 +570,7 @@ def sync_garmin_fitness_metrics(
     # 3. 个人纪录（路径必须带 displayName，传 userProfileId 会 403）
     try:
         profile = _fetch(
-            PATH_SOCIAL_PROFILE, current_user, "获取 Garmin 社交资料(displayName)"
+            client, PATH_SOCIAL_PROFILE, current_user, "获取 Garmin 社交资料(displayName)"
         )
         display_name = _pick(profile, "displayName") if isinstance(profile, dict) else None
         if not display_name:
@@ -596,6 +580,7 @@ def sync_garmin_fitness_metrics(
             }
         else:
             raw = _fetch(
+                client,
                 f"{PATH_PERSONAL_RECORDS}/{display_name}",
                 current_user,
                 "获取 Garmin 个人纪录",
@@ -610,6 +595,7 @@ def sync_garmin_fitness_metrics(
     # 4. 比赛成绩预测（404 属正常情况，只跳过不报错）
     try:
         raw = _fetch(
+            client,
             PATH_RACE_PREDICTIONS,
             current_user,
             f"获取 Garmin {date} 比赛成绩预测",

@@ -2,6 +2,7 @@ import os
 
 os.environ["GARTH_TELEMETRY_ENABLED"] = "false"
 import garth
+from garth.http import Client as GarminClient
 import io
 import zipfile
 import json
@@ -22,7 +23,52 @@ from app.models.sleep_detail import SleepDetail
 from app.models.user import User
 from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
-from app.utils.logger_utils import log_request
+from app.utils.logger_utils import log_request, log_operation_async
+
+
+# ---------------------------------------------------------------------------
+# 每连接独立 GarminClient（修复多用户并发凭证互相覆盖导致拉到他人数据的安全 bug）
+# 替代模块级全局 garth 单例：每个 BaseConnect 一个 client，持有自己的 OAuth 凭证，
+# 不再因进程内残留/并发覆盖而用别人的 token 去拉活动/心率/睡眠并写进当前用户账号。
+# ---------------------------------------------------------------------------
+
+
+def _new_garmin_client(config: BaseConnect) -> GarminClient:
+    """构造并配置本连接的独立 GarminClient（不装载凭证）。"""
+    client = GarminClient()
+    region = (config.region or "").upper()
+    domain = "garmin.cn" if region == "CN" else "garmin.com"
+    client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+    return client
+
+
+def _relogin_garmin(config: BaseConnect, db: Session, current_user: User) -> BaseConnect:
+    """刷新本连接佳明凭证并返回最新 BaseConnect（不触碰全局 garth）。
+
+    先尝试账号密码重新登录，失败再退回 OAuth2 刷新。
+    """
+    try:
+        return refresh_garmin_secret_string(config.id, db, current_user)
+    except HTTPException:
+        return refresh_garmin_access_token(config.id, db, current_user)
+
+
+def _garmin_client(config: BaseConnect, db: Session, current_user: User) -> GarminClient:
+    """返回装载了本连接有效凭证的独立 GarminClient。
+
+    不再依赖模块级全局 garth：彻底消除多用户并发时凭证互相覆盖、把他人
+    活动/心率/睡眠拉进当前用户账号的隐患。secret 缺失或装载失败时自动刷新。
+    """
+    client = _new_garmin_client(config)
+    if config.secret_string:
+        try:
+            client.loads(config.secret_string)
+            return client
+        except Exception:
+            pass
+    refreshed = _relogin_garmin(config, db, current_user)
+    client.loads(refreshed.secret_string)
+    return client
 
 
 def get_garmin_connect(
@@ -48,7 +94,7 @@ def get_garmin_configs(db: Session, current_user: User) -> list[type[BaseConnect
 
 
 def test_garmin_token(connect_id: int, db: Session, current_user: User) -> bool:
-    """测试 Token 有效性"""
+    """测试 Token 有效性（使用本连接独立 client，不触碰全局 garth）。"""
     base_connect = (
         db.query(BaseConnect)
         .filter(BaseConnect.user_id == current_user.id, BaseConnect.id == connect_id)
@@ -59,19 +105,12 @@ def test_garmin_token(connect_id: int, db: Session, current_user: User) -> bool:
         return False
     try:
         start, limit = 0, 1
-        # print(base_connect.region)
-        if base_connect.region == "CN" or base_connect.region == "cn":
-            garth.configure(domain="garmin.cn", ssl_verify=False)
-        else:
-            garth.configure(domain="garmin.com")
+        client = _garmin_client(base_connect, db, current_user)
         api_url = "/activitylist-service/activities/search/activities"
         params = {"start": start, "limit": limit}
-        response = garth.connectapi(path=api_url, params=params)
+        response = client.connectapi(path=api_url, params=params)
         print(f"测试佳明 ({base_connect.region}) token 有效性。{response}")
-        if response:
-            return True
-        else:
-            return False
+        return bool(response)
     except Exception as e:
         print(f"测试佳明 token 有效性失败: {str(e)}")
         return False
@@ -224,26 +263,28 @@ def get_garmin_secret_string(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"密码解密失败: {str(e)}")
     print(f"开始佳明模拟登录，{region}")
+    # 使用独立 client 登录，不污染模块级全局 garth（避免并发时串号）
+    client = GarminClient()
     try:
         if region and region.upper() == "CN":
             base_url = "garmin.cn"
-            garth.configure(domain=base_url, ssl_verify=False)
+            client.configure(domain=base_url, ssl_verify=False)
         else:
             base_url = "garmin.com"
-            garth.configure(domain=base_url)
+            client.configure(domain=base_url)
 
         print(f"{account} | {raw_password} | {region}")
         with log_request(
             current_user=current_user,
-            req_url=base_url + " | garth.login",
+            req_url=base_url + " | garmin.login",
             req_method="GET",
             req_params=account,
             log_type="login",
             module_name="garmin",
             op_desc="佳明模拟登录",
         ) as ctx:
-            garth.login(account, raw_password)
-            secret_string = garth.client.dumps()
+            client.login(account, raw_password)
+            secret_string = client.dumps()
             print(f"佳明 { region } 模拟登录成功")
             ctx["response"] = secret_string
 
@@ -284,20 +325,22 @@ def refresh_garmin_access_token(
     if not garmin_config or not garmin_config.secret_string:
         raise HTTPException(status_code=404, detail="找不到有效的佳明配置或凭证字符串")
 
+    # 使用独立 client，不污染模块级全局 garth（避免并发时串号）
+    client = GarminClient()
     try:
         if garmin_config.region and str(garmin_config.region).upper() == "CN":
-            garth.configure(domain="garmin.cn", ssl_verify=False)
+            client.configure(domain="garmin.cn", ssl_verify=False)
         else:
-            garth.configure(domain="garmin.com")
+            client.configure(domain="garmin.com")
 
         # print(f"secret_string = {garmin_config.secret_string}")
 
-        garth.client.loads(garmin_config.secret_string)
+        client.loads(garmin_config.secret_string)
 
-        if garth.client.oauth2_token:
+        if client.oauth2_token:
             # 刷新 OAuth2 令牌
-            garth.client.refresh_oauth2()
-            new_secret_string = garth.client.dumps()
+            client.refresh_oauth2()
+            new_secret_string = client.dumps()
 
             # print(f"garmin 登录成功:{ new_secret_string }")
 
@@ -350,7 +393,7 @@ def refresh_garmin_access_token(
             )
             return base_connect
 
-        oauth2_token = garth.client.oauth2_token
+        oauth2_token = client.oauth2_token
         if not oauth2_token or not oauth2_token.access_token:
             raise Exception("佳明 OAuth2 Token 或 access_token 字段为空")
 
@@ -379,21 +422,19 @@ def _sync_garmin_activities_internal(
     limit: int = 5,
     incremental: bool = True,
 ) -> Tuple[int, int]:
-    """辅助方法：使用 garth 抓取并保存活动。"""
+    """辅助方法：使用本连接独立 client 抓取并保存活动。"""
 
-    # 1. 动态配置 garth 的域名（根据 CN 或 国际区）
-    if config.region and config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
-
-    # 对应原原接口的相对路径
+    # 每个连接独立 client，装载本连接凭证，不再依赖全局 garth（避免并发串号）
     api_path = "/activitylist-service/activities/search/activities"
     api_params = {"start": start, "limit": limit}
+    region = (config.region or "").upper()
+    domain = "garmin.cn" if region == "CN" else "garmin.com"
+
+    client = _garmin_client(config, db, current_user)
 
     try:
         # 使用原有的日志记录器，这里将完整的 URL 拼接出来供日志使用
-        full_url = f"https://connect.{garth.client.domain}{api_path}"
+        full_url = f"https://connect.{domain}{api_path}"
 
         with log_request(
             current_user=current_user,
@@ -404,11 +445,16 @@ def _sync_garmin_activities_internal(
             module_name="garmin",
             op_desc="获取佳明运动记录",
         ) as ctx:
-            # 使用 garth 的内置 client 发送请求，它会自动处理授权 Headers
-            response = garth.connectapi(api_path, params=api_params)
+            try:
+                response = client.connectapi(api_path, params=api_params)
+            except Exception:
+                # token 可能过期：刷新本连接凭证后重试一次
+                config = _relogin_garmin(config, db, current_user)
+                client = _garmin_client(config, db, current_user)
+                response = client.connectapi(api_path, params=api_params)
             ctx["response"] = response
 
-        # garth 返回的直接就是解析后的 JSON 数据（通常是 list 或 dict）
+        # 返回的直接就是解析后的 JSON 数据（通常是 list 或 dict）
         activities_data = response
         print(f"获取佳明运动记录，{activities_data}")
 
@@ -418,6 +464,25 @@ def _sync_garmin_activities_internal(
 
     if not activities_data or not isinstance(activities_data, list):
         return 0, 0
+
+    # 纵深防御：仅当活动自带归属标识且与本连接 guid 不一致时才丢弃，防止凭证残留串号
+    if config.guid:
+        kept = []
+        for it in activities_data:
+            pk = it.get("userProfilePK") or it.get("ownerId") or it.get("userId")
+            if pk and str(pk) != str(config.guid):
+                log_operation_async(
+                    user_id=current_user.id,
+                    log_type="SECURITY_DENIED",
+                    module_name="garmin",
+                    op_desc=(
+                        f"丢弃归属不符的活动：connect_id={config.id} "
+                        f"pk={pk} expect_guid={config.guid}"
+                    ),
+                )
+                continue
+            kept.append(it)
+        activities_data = kept
 
     # 2. 提取 ID 并去重 (统一映射至 Garmin 真实的驼峰命名 'activityId')
     activity_ids = [
@@ -597,13 +662,8 @@ def get_garmin_activity_download_info(
     if not config:
         raise HTTPException(status_code=404, detail="未找到有效的佳明授权")
 
-    # 刷新佳明数据源的认证
-    config = base_connect_service.perform_relogin(config.id, db, current_user)
-
-    if config.region and config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    # 使用本连接独立 client（装载本连接凭证），不再依赖全局 garth
+    client = _garmin_client(config, db, current_user)
 
     download_url = "/download-service/files/activity"
     url = f"{download_url}/{activity.activity_id}"
@@ -617,7 +677,12 @@ def get_garmin_activity_download_info(
             module_name="garmin",
             op_desc=f"下载佳明运动文件，{activity.activity_id}",
         ):
-            raw = garth.client.download(url)
+            try:
+                raw = client.download(url)
+            except Exception:
+                config = _relogin_garmin(config, db, current_user)
+                client = _garmin_client(config, db, current_user)
+                raw = client.download(url)
         if not raw:
             raise Exception("下载内容为空")
 
@@ -643,12 +708,11 @@ def fetch_latest_garmin_activities(config: BaseConnect, count: int) -> list[dict
 
     返回归一化后的活动字典列表，字段与 BaseActivity 对齐，便于后续比较。
     """
-    if config.region and config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    client = _new_garmin_client(config)
+    if config.secret_string:
+        client.loads(config.secret_string)
     api_path = "/activitylist-service/activities/search/activities"
-    activities_data = garth.connectapi(api_path, params={"start": 0, "limit": count})
+    activities_data = client.connectapi(api_path, params={"start": 0, "limit": count})
     if not activities_data or not isinstance(activities_data, list):
         return []
 
@@ -685,12 +749,11 @@ def download_garmin_activity_fit(
     config: BaseConnect, activity_id: str
 ) -> tuple[bytes, str]:
     """根据佳明活动 ID 直接下载 FIT 文件（自动解压 zip），返回 (文件字节, 文件名)。"""
-    if config.region and config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    client = _new_garmin_client(config)
+    if config.secret_string:
+        client.loads(config.secret_string)
     url = f"/download-service/files/activity/{activity_id}"
-    raw = garth.client.download(url)
+    raw = client.download(url)
     if not raw:
         raise Exception("下载内容为空")
     if raw.startswith(b"PK"):
@@ -742,15 +805,13 @@ def _upload_file_to_garmin(
 
     upload_data = file_data
     upload_filename = filename
-    # 刷新认证
-    target_config = base_connect_service.perform_relogin(
-        target_config.id, db=db, current_user=current_user
-    )
+    # 使用本连接独立 client（装载本连接凭证），不再依赖全局 garth
+    client = _garmin_client(target_config, db, current_user)
     # --- 配置域名 ---
     domain = (
         "garmin.cn" if (target_config.region or "").upper() == "CN" else "garmin.com"
     )
-    garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+    client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
 
     # --- 执行上传 ---
     try:
@@ -758,11 +819,11 @@ def _upload_file_to_garmin(
             domain = "garmin.cn"
         else:
             domain = "garmin.com"
-        # 使用 garth 的 API 接口进行上传
-        garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
+        # 使用本连接独立 client 的 OAuth 凭证进行上传
+        client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
         upload_url = f"https://connectapi.{domain}/upload-service/upload"
         files = {"file": (upload_filename, upload_data, "text/plain")}
-        headers = {"Authorization": str(garth.client.oauth2_token)}
+        headers = {"Authorization": str(client.oauth2_token)}
         response = requests.post(upload_url, headers=headers, files=files)
         result = response.json()
         print(f"佳明上传完成：{result}")
@@ -875,21 +936,11 @@ def get_garmin_daily_heart_rate(
     config = get_garmin_connect(connect_id, db, current_user)
     if not config:
         raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
-    if test_garmin_token(config.id, db, current_user):
-        base_connect = config
-    else:
-        try:
-            # 通过 secret_string 来刷新认证
-            base_connect = refresh_garmin_secret_string(config.id, db, current_user)
-            config = base_connect
-        except HTTPException:
-            base_connect = refresh_garmin_access_token(config.id, db, current_user)
-            config = base_connect
 
-    if config.region and config.region.upper() == "CN":
-        garth.client.configure(domain="garmin.cn", ssl_verify=False)
-    else:
-        garth.client.configure(domain="garmin.com")
+    # 使用本连接独立 client（装载本连接凭证），不再依赖全局 garth
+    client = _garmin_client(config, db, current_user)
+    region = (config.region or "").upper()
+    domain = "garmin.cn" if region == "CN" else "garmin.com"
 
     api_path = "/wellness-service/wellness/dailyHeartRate"
     params = {"date": date}
@@ -897,14 +948,20 @@ def get_garmin_daily_heart_rate(
     try:
         with log_request(
             current_user=current_user,
-            req_url=f"https://connect.{garth.client.domain}{api_path}",
+            req_url=f"https://connect.{domain}{api_path}",
             req_method="GET",
             req_params=params,
             log_type="query",
             module_name="garmin",
             op_desc=f"获取 Garmin {date} 心率数据",
         ):
-            response = garth.connectapi(api_path, params=params)
+            try:
+                response = client.connectapi(api_path, params=params)
+            except Exception:
+                # token 可能过期：刷新本连接凭证后重试一次
+                config = _relogin_garmin(config, db, current_user)
+                client = _garmin_client(config, db, current_user)
+                response = client.connectapi(api_path, params=params)
             return response
     except Exception as e:
         print(f"获取 Garmin 心率数据失败: {str(e)}")
@@ -1053,30 +1110,6 @@ def save_garmin_daily_heart_rate(
 SLEEP_LEVEL_NAMES = {0: "深睡", 1: "浅睡", 2: "REM", 3: "清醒"}
 
 
-def _ensure_garmin_client(
-    connect_id: int,
-    db: Session,
-    current_user: User,
-) -> BaseConnect:
-    """确保模块级 garth 客户端已装载该连接的有效凭证。
-
-    与心率链路同构：先探测 token，失效先用账号密码重新登录，
-    登录失败再退回 OAuth2 刷新。
-
-    注意：这里沿用 garth 的模块级单例（与心率实现保持一致），
-    并发跨用户场景下存在凭证互相覆盖的已知隐患，暂不改动以免波及心率。
-    """
-    config = get_garmin_connect(connect_id, db, current_user)
-    if not config:
-        raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
-    if test_garmin_token(config.id, db, current_user):
-        return config
-    try:
-        return refresh_garmin_secret_string(config.id, db, current_user)
-    except HTTPException:
-        return refresh_garmin_access_token(config.id, db, current_user)
-
-
 def _parse_gmt(value: Any) -> Optional[datetime]:
     """把佳明的时间字段解析成 UTC datetime。
 
@@ -1113,10 +1146,14 @@ def get_garmin_daily_sleep(
 
     :return: 佳明原始 JSON；当天没有睡眠记录时返回 None
     """
-    config = _ensure_garmin_client(connect_id, db, current_user)
+    config = get_garmin_connect(connect_id, db, current_user)
+    if not config:
+        raise HTTPException(status_code=404, detail="未找到 Garmin 授权配置")
+
+    # 使用本连接独立 client（装载本连接凭证），不再依赖全局 garth
+    client = _garmin_client(config, db, current_user)
     region = (config.region or "").upper()
     domain = "garmin.cn" if region == "CN" else "garmin.com"
-    garth.client.configure(domain=domain, ssl_verify=(domain == "garmin.cn"))
 
     params = {"date": date}
     # 首选：新版接口，不需要 displayName，省一次 socialProfile 请求
@@ -1132,7 +1169,13 @@ def get_garmin_daily_sleep(
             module_name="garmin",
             op_desc=f"获取 Garmin {date} 睡眠数据",
         ):
-            raw = garth.connectapi(api_path, params=params)
+            try:
+                raw = client.connectapi(api_path, params=params)
+            except Exception:
+                # token 可能过期：刷新本连接凭证后重试一次
+                config = _relogin_garmin(config, db, current_user)
+                client = _garmin_client(config, db, current_user)
+                raw = client.connectapi(api_path, params=params)
     except Exception as e:
         print(f"获取 Garmin 睡眠数据失败(主接口): {str(e)}")
 
@@ -1145,7 +1188,7 @@ def get_garmin_daily_sleep(
     if not _has_sleep(raw):
         # 回退：老 wellness 接口，路径里要带 displayName
         try:
-            username = garth.client.username
+            username = client.username
         except Exception:
             username = None
         if username:
@@ -1161,7 +1204,7 @@ def get_garmin_daily_sleep(
                     module_name="garmin",
                     op_desc=f"获取 Garmin {date} 睡眠数据(回退接口)",
                 ):
-                    raw = garth.connectapi(alt_path, params=alt_params)
+                    raw = client.connectapi(alt_path, params=alt_params)
             except Exception as e:
                 print(f"获取 Garmin 睡眠数据失败(回退接口): {str(e)}")
 
