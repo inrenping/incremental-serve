@@ -457,6 +457,9 @@ def _sync_garmin_activities_internal(
         # 返回的直接就是解析后的 JSON 数据（通常是 list 或 dict）
         activities_data = response
         print(f"获取佳明运动记录，{activities_data}")
+        # 记录源头真实返回条数：fetched_count 必须反映“从佳明拉到了多少”，
+        # 不受后续 guid 过滤 / 去重影响，否则会出现“日志有数据却返回 0”的诊断盲区。
+        raw_count = len(activities_data) if isinstance(activities_data, list) else 0
 
     except Exception as e:
         print(f"同步佳明数据失败: {str(e)}")
@@ -465,24 +468,29 @@ def _sync_garmin_activities_internal(
     if not activities_data or not isinstance(activities_data, list):
         return 0, 0
 
-    # 纵深防御：仅当活动自带归属标识且与本连接 guid 不一致时才丢弃，防止凭证残留串号
+    # 纵深防御（已弱化）：仅记录归属标识与 guid 不符的活动，不再硬丢弃。
+    # 原因：① 真正的串号防护已由「每连接独立 client + 装载本连接凭证」在凭证层解决，
+    #        残留他人 token 不会再拉到别人数据；
+    #      ② garmin_guid（UUID 形态）与活动返回的 ownerId（数字 userProfilePK）属于不同
+    #        标识体系，str() 相等比较必然误杀所有正常数据（即本次 fetched_count=0 的根因）。
+    # 若日后确需硬拦截，应在登录时获取真实的数字 userProfilePK 与活动 ownerId 比对，
+    # 而非用 UUID 与数字 PK 比较。
     if config.guid:
-        kept = []
+        denied = []
         for it in activities_data:
             pk = it.get("userProfilePK") or it.get("ownerId") or it.get("userId")
             if pk and str(pk) != str(config.guid):
-                log_operation_async(
-                    user_id=current_user.id,
-                    log_type="SECURITY_DENIED",
-                    module_name="garmin",
-                    op_desc=(
-                        f"丢弃归属不符的活动：connect_id={config.id} "
-                        f"pk={pk} expect_guid={config.guid}"
-                    ),
-                )
-                continue
-            kept.append(it)
-        activities_data = kept
+                denied.append((it.get("activityId"), pk))
+        if denied:
+            log_operation_async(
+                user_id=current_user.id,
+                log_type="SECURITY_WARN",
+                module_name="garmin",
+                op_desc=(
+                    f"归属标识与 guid 不符（已放行，凭证隔离为主防线）："
+                    f"connect_id={config.id} expect_guid={config.guid} 示例={denied[:5]}"
+                ),
+            )
 
     # 2. 提取 ID 并去重 (统一映射至 Garmin 真实的驼峰命名 'activityId')
     activity_ids = [
@@ -572,7 +580,7 @@ def _sync_garmin_activities_internal(
         db.add(new_activity)
         saved_count += 1
 
-    return len(activities_data), saved_count
+    return raw_count, saved_count
 
 
 def pull_full_garmin_activities(
