@@ -125,6 +125,36 @@ def list_runs(db: Session, user: User, limit: int = 10, page: int = 1) -> tuple[
     return items, total
 
 
+def get_region_map(db: Session, runs: list[SyncRun]) -> dict[int, str | None]:
+    """按 connect_id 回查批次源/目标账号的区域。
+
+    region 只落在 t_base_connect（garmin: cn/global、suunto: cn/intl、
+    coros: coros 即无区域概念），t_sync_run 本身不冗余该字段，
+    所以这里用 source_connect_id / target_connect_id 一次性批量回查，
+    历史批次也能正确展示。
+
+    Args:
+        db (Session): 数据库会话。
+        runs (list[SyncRun]): 当前页的批次列表。
+    Returns:
+        dict[int, str | None]: connect_id -> region。
+    """
+    connect_ids = {
+        cid
+        for r in runs
+        for cid in (r.source_connect_id, r.target_connect_id)
+        if cid
+    }
+    if not connect_ids:
+        return {}
+    rows = (
+        db.query(BaseConnect.id, BaseConnect.region)
+        .filter(BaseConnect.id.in_(connect_ids))
+        .all()
+    )
+    return {cid: region for cid, region in rows}
+
+
 def get_run(db: Session, user: User, run_id: int) -> SyncRun | None:
     return (
         db.query(SyncRun)

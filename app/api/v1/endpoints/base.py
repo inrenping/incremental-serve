@@ -457,13 +457,18 @@ def list_sync_runs(
 ):
     """查询当前用户的一键同步批次列表（分页）。"""
     runs, total = sync_run_service.list_runs(db, current_user, limit, page)
+    # 区域不在 t_sync_run 上，按 source/target_connect_id 回查 t_base_connect 补上，
+    # 供前端展示「佳明·中国区」「颂拓·国际区」这类区分（高驰无区域概念，返回 coros）。
+    region_map = sync_run_service.get_region_map(db, runs)
     data = [
         {
             "id": r.id,
             "source_platform": r.source_platform,
             "source_account": r.source_account,
+            "source_region": region_map.get(r.source_connect_id),
             "target_platform": r.target_platform,
             "target_account": r.target_account,
+            "target_region": region_map.get(r.target_connect_id),
             "window_size": r.window_size,
             "diff_count": r.diff_count,
             "uploaded_count": r.uploaded_count,

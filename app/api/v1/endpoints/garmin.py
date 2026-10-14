@@ -805,6 +805,36 @@ def sync_fitness_metrics_all(
     return {"status": "success", "data": summary}
 
 
+@router.get("/syncDailyHeartRateAll")
+def sync_daily_heart_rate_all(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """批量同步：所有「主账号是佳明」的用户各同步 昨天+今天 心率。
+
+    定时任务专用，需要 X-Sync-Token 头，普通登录用户不允许触发全量同步。
+    服务器内置 APScheduler 已自动周期性调用对应 service；此接口仅作手动兜底。
+    """
+    _require_cron_token(request)
+    summary = garmin_service.sync_daily_heart_rate_for_all_masters(db)
+    return {"status": "success", "data": summary}
+
+
+@router.get("/syncDailySleepAll")
+def sync_daily_sleep_all(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """批量同步：所有「主账号是佳明」的用户各同步当天（按用户时区）睡眠。
+
+    定时任务专用，需要 X-Sync-Token 头。服务器内置 APScheduler 已自动周期调用，
+    此接口仅作手动兜底。
+    """
+    _require_cron_token(request)
+    summary = garmin_service.sync_daily_sleep_for_all_masters(db)
+    return {"status": "success", "data": summary}
+
+
 @router.get("/getFitnessMetrics")
 def get_fitness_metrics(
     current_user: User = Depends(get_current_user),
