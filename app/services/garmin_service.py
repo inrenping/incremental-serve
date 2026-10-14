@@ -8,7 +8,7 @@ import zipfile
 import json
 import base64
 import requests
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Any, List
 from fastapi import HTTPException
@@ -923,6 +923,142 @@ def refresh_garmin_activity_count(db: Session) -> None:
         )
         activity_count = query.count()
         update_garmin_count(db, connect_id, activity_count)
+
+
+# ---------------------------------------------------------------------------
+# 全量同步：遍历所有「主账号是佳明」的用户（供服务器内置调度器 / 手动 All 接口调用）
+# 与 garmin_metrics_service.sync_fitness_metrics_for_all_masters 口径一致：
+#   只处理 t_base_connect 中 master=True 且 source_type=garmin 且 is_active=True 的连接，
+#   单个用户失败只记进 errors，不影响其他人。
+# ---------------------------------------------------------------------------
+
+
+def find_master_garmin_connects(db: Session) -> list:
+    """找出所有「主账号是佳明」的连接：master=True 且 source_type=garmin 且激活。"""
+    return (
+        db.query(BaseConnect)
+        .filter(
+            BaseConnect.master == True,  # noqa: E712 - SQLAlchemy 需要 == True
+            BaseConnect.source_type == "garmin",
+            BaseConnect.is_active == True,  # noqa: E712
+        )
+        .all()
+    )
+
+
+def _today_in_user_tz(user: User) -> str:
+    """按用户时区取「今天」，避免用 UTC 取日期在凌晨错一天。"""
+    tz_name = getattr(user, "timezone", None) or "Asia/Shanghai"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return datetime.now(tz).strftime("%Y-%m-%d")
+
+
+def _local_yesterday_and_today(user: User) -> tuple:
+    """按用户时区返回 (昨天, 今天) 两个 YYYY-MM-DD 字符串。"""
+    tz_name = getattr(user, "timezone", None) or "Asia/Shanghai"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    today = datetime.now(tz).date()
+    yesterday = today - timedelta(days=1)
+    return yesterday.isoformat(), today.isoformat()
+
+
+def sync_daily_heart_rate_for_all_masters(
+    db: Session, dates: list = None
+) -> dict:
+    """批量同步：所有主账号为佳明的用户，各同步指定日期（默认本地昨天+今天）的心率。
+
+    单个用户/单天失败只记进 errors，不影响其他人。每个连接使用自己的独立
+    GarminClient（save_garmin_daily_heart_rate 内部构造），天然按用户隔离。
+    """
+    connects = find_master_garmin_connects(db)
+    summary = {
+        "total": len(connects),
+        "synced": 0,
+        "failed": 0,
+        "details": [],
+        "errors": [],
+    }
+
+    for connect in connects:
+        user = db.query(User).filter(User.id == connect.user_id).first()
+        if user is None:
+            summary["failed"] += 1
+            summary["errors"].append({"connect_id": connect.id, "reason": "用户不存在"})
+            continue
+
+        target_dates = dates if dates else list(_local_yesterday_and_today(user))
+        user_res = {
+            "connect_id": connect.id,
+            "user_id": user.id,
+            "dates": target_dates,
+            "ok": [],
+            "errors": [],
+        }
+        user_failed = False
+        for d in target_dates:
+            try:
+                save_garmin_daily_heart_rate(
+                    connect_id=connect.id, date=d, db=db, current_user=user
+                )
+                user_res["ok"].append(d)
+            except Exception as e:  # noqa: BLE001
+                db.rollback()
+                user_failed = True
+                user_res["errors"].append({"date": d, "reason": str(e)[:300]})
+
+        if user_failed:
+            summary["failed"] += 1
+        else:
+            summary["synced"] += 1
+        summary["details"].append(user_res)
+
+    return summary
+
+
+def sync_daily_sleep_for_all_masters(db: Session, date: str = None) -> dict:
+    """批量同步：所有主账号为佳明的用户，各同步指定日期（默认本地今天）的睡眠。
+
+    单个用户失败只记进 errors，不影响其他人。
+    """
+    connects = find_master_garmin_connects(db)
+    summary = {
+        "total": len(connects),
+        "synced": 0,
+        "failed": 0,
+        "details": [],
+        "errors": [],
+    }
+
+    for connect in connects:
+        user = db.query(User).filter(User.id == connect.user_id).first()
+        if user is None:
+            summary["failed"] += 1
+            summary["errors"].append({"connect_id": connect.id, "reason": "用户不存在"})
+            continue
+
+        d = date if date else _today_in_user_tz(user)
+        try:
+            result = save_garmin_daily_sleep(
+                connect_id=connect.id, date=d, db=db, current_user=user
+            )
+            summary["synced"] += 1
+            summary["details"].append(
+                {"connect_id": connect.id, "user_id": user.id, "date": d, "result": result}
+            )
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            summary["failed"] += 1
+            summary["errors"].append(
+                {"connect_id": connect.id, "user_id": user.id, "reason": str(e)[:300]}
+            )
+
+    return summary
 
 
 def get_garmin_daily_heart_rate(
