@@ -6,6 +6,7 @@ from .heart_rate_daily import HeartRateDaily
 from .heart_rate_detail import HeartRateDetail
 from .sleep_daily import SleepDaily
 from .sleep_detail import SleepDetail
+from .sleep_nap import SleepNap
 
 __all__ = [
     "GarminFitnessAge",
@@ -16,4 +17,5 @@ __all__ = [
     "HeartRateDetail",
     "SleepDaily",
     "SleepDetail",
+    "SleepNap",
 ]

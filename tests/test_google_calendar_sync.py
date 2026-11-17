@@ -10,6 +10,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/tes
 from app.models.base_activity import BaseActivity
 from app.models.base_connect import BaseConnect
 from app.models.sleep_daily import SleepDaily
+from app.models.sleep_nap import SleepNap
 from app.services import google_calendar_sync_service as svc
 
 
@@ -88,6 +89,21 @@ def test_sleep_and_nap_events():
     assert nap["end"] == {"date": "2026-11-18"}
     assert "30分钟" in nap["summary"]
 
+    # 逐条小睡：带具体时段，key 稳定
+    nap_row = SimpleNamespace(
+        daily_id=7,
+        start_at=datetime(2026, 11, 17, 6, 58, 34, tzinfo=timezone.utc),
+        end_at=datetime(2026, 11, 17, 9, 2, 34, tzinfo=timezone.utc),
+        duration_seconds=7440,
+        nap_feedback="LATE_TIMING_LONG_DURATION_LOW_NEED",
+    )
+    detail = svc.build_nap_detail_event(nap_row, daily, _tz())
+    assert detail["summary"] == "小睡 2小时04分"
+    assert detail["start"]["dateTime"].startswith("2026-11-17T14:58:34+08:00")
+    assert detail["end"]["dateTime"].startswith("2026-11-17T17:02:34+08:00")
+    assert detail["extendedProperties"]["private"]["inc_kind"] == "nap"
+    assert detail["id"] == svc.build_nap_detail_event(nap_row, daily, _tz())["id"]
+
 
 def test_dedupe_activities_prefers_garmin():
     def activity(source, ident, distance, start_hour=8):
@@ -159,6 +175,9 @@ class FakeQuery:
     def filter(self, *args):
         return self
 
+    def order_by(self, *args):
+        return self
+
     def all(self):
         return self.rows
 
@@ -194,10 +213,22 @@ def test_sync_calendar_dry_run_then_idempotent():
         elevation_gain=None,
     )
     db = Mock()
-    # 查询 BaseConnect.id 返回主连接，其余按 model 返回 sleep / activity。
+    # 查询 BaseConnect.id 返回主连接，SleepNap 返回小睡明细，其余按 model 返回 sleep / activity。
     def query_side_effect(model):
         if model is BaseConnect.id:
             return FakeQuery([(10,)])
+        if model is SleepNap:
+            return FakeQuery(
+                [
+                    SimpleNamespace(
+                        daily_id=7,
+                        start_at=datetime(2026, 11, 17, 6, 58, tzinfo=timezone.utc),
+                        end_at=datetime(2026, 11, 17, 7, 28, tzinfo=timezone.utc),
+                        duration_seconds=1800,
+                        nap_feedback=None,
+                    )
+                ]
+            )
         return FakeQuery([daily] if model is SleepDaily else [activity])
 
     db.query.side_effect = query_side_effect
@@ -288,3 +319,76 @@ def test_sync_calendar_single_date_window():
     assert stats["window"] == ["2026-11-17", "2026-11-17"]
     assert stats["desired_events"] == 1
     assert stats["created"] == 1
+
+
+def test_parse_nap_dtos_extracts_per_nap_times():
+    from app.services.garmin_service import parse_nap_dtos
+
+    dto = {
+        "dailyNapDTOS": [
+            {
+                "napStartTimestampGMT": "2026-11-14T06:58:34",
+                "napEndTimestampGMT": "2026-11-14T09:02:34",
+                "napTimeSec": 7440,
+                "napStartTimeOffset": 480,
+                "napFeedback": "LATE_TIMING_LONG_DURATION_LOW_NEED",
+            },
+            {
+                # 乱序的第二条：解析结果应按开始时间排序
+                "napStartTimestampGMT": "2026-11-14T02:00:00",
+                "napEndTimestampGMT": "2026-11-14T02:30:00",
+                "napTimeSec": 1800,
+            },
+            {
+                # 缺结束时间 → 跳过
+                "napStartTimestampGMT": "2026-11-14T03:00:00",
+            },
+            {
+                # 缺 napTimeSec → 按起止时间推算
+                "napStartTimestampGMT": "2026-11-14T10:00:00",
+                "napEndTimestampGMT": "2026-11-14T10:20:00",
+            },
+        ]
+    }
+    rows = parse_nap_dtos(dto)
+    assert len(rows) == 3
+    assert rows[0]["duration_seconds"] == 1800
+    assert rows[1]["duration_seconds"] == 7440
+    assert rows[1]["nap_feedback"] == "LATE_TIMING_LONG_DURATION_LOW_NEED"
+    assert rows[2]["duration_seconds"] == 1200
+    assert rows[0]["start_at"] == datetime(2026, 11, 14, 2, 0, tzinfo=timezone.utc)
+
+    assert parse_nap_dtos({}) == []
+    assert parse_nap_dtos({"dailyNapDTOS": None}) == []
+
+
+def test_nap_summary_fallback_only_without_details():
+    """有逐条明细时只发逐条事件；无明细但有汇总秒数时才用全天占位。"""
+    daily = SimpleNamespace(
+        id=7,
+        calendar_date=date(2026, 11, 17),
+        sleep_start_at=datetime(2026, 11, 16, 15, 30, tzinfo=timezone.utc),
+        sleep_end_at=datetime(2026, 11, 16, 23, 0, tzinfo=timezone.utc),
+        sleep_time_seconds=27000,
+        nap_time_seconds=1800,
+        sleep_score=None,
+        deep_sleep_seconds=None,
+        light_sleep_seconds=None,
+        rem_sleep_seconds=None,
+        awake_sleep_seconds=None,
+    )
+    nap_row = SimpleNamespace(
+        daily_id=7,
+        start_at=datetime(2026, 11, 17, 6, 58, tzinfo=timezone.utc),
+        end_at=datetime(2026, 11, 17, 7, 28, tzinfo=timezone.utc),
+        duration_seconds=1800,
+        nap_feedback=None,
+    )
+
+    with_details = svc.build_desired_events([daily], [], {7: [nap_row]}, _tz())
+    kinds = {e["extendedProperties"]["private"]["inc_kind"] for e in with_details.values()}
+    assert kinds == {"sleep", "nap"}
+
+    without_details = svc.build_desired_events([daily], [], {}, _tz())
+    kinds = {e["extendedProperties"]["private"]["inc_kind"] for e in without_details.values()}
+    assert kinds == {"sleep", "nap-summary"}
