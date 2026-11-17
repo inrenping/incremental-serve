@@ -1,8 +1,14 @@
 import json
+import os
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.cron_auth import _require_cron_token
+from app.db.session import get_db
+from app.services import google_calendar_sync_service
+from app.services.user_service import get_user_by_email, get_user_by_username
 
 router = APIRouter()
 
@@ -91,3 +97,46 @@ def get_calendar_events(
         "status": "success",
         "data": events,
     }
+
+
+@router.post("/syncCalendar")
+def sync_calendar_to_google(
+    request: Request,
+    days: int = Query(
+        7, ge=1, le=3650, description="回看天数（含今天），显式日期优先"
+    ),
+    start_date: str = Query(None, description="回填起始日期 YYYY-MM-DD"),
+    end_date: str = Query(None, description="回填结束日期 YYYY-MM-DD"),
+    year: int = Query(None, description="指定同步日期：年"),
+    month: int = Query(None, description="指定同步日期：月"),
+    day: int = Query(None, description="指定同步日期：日"),
+    dry_run: bool = Query(False, description="只计算差异，不写 Google 日历"),
+    db: Session = Depends(get_db),
+):
+    """把定时任务账号的睡眠（含小睡占位）与运动同步到专用 Google 日历。
+
+    仅允许 X-Sync-Token 调用（GitHub Actions / 手动运维）。
+    year/month/day 同时传时只同步这一天；不传则按 days 回看（含今天）。
+    dry_run=true 可先看新建/更新/跳过/删除数量，确认后再正式写入。
+    """
+    _require_cron_token(request)
+    email = os.getenv("CRON_SYNC_USER_EMAIL", "inrenping")
+    user = get_user_by_username(db, email) or get_user_by_email(db, email)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"定时任务目标用户 {email} 不存在")
+
+    try:
+        result = google_calendar_sync_service.sync_calendar(
+            db=db,
+            user=user,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+            year=year,
+            month=month,
+            day=day,
+            dry_run=dry_run,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "success", "data": result}
