@@ -1,10 +1,10 @@
-"""把用户的睡眠（含小睡占位）与运动同步到专用 Google 日历。
+"""把用户的睡眠（含小睡）与运动同步到专用 Google 日历。
 
 设计要点：
 - 只写一个由用户显式共享给服务账号的日历，绝不碰公开赛事日历。
 - 事件 ID 由源记录确定性生成，重复跑不会重复创建；哈希不变则跳过更新。
 - 只清理带本服务标记（extendedProperties.private.inc_source）且在同步窗口内的事件。
-- 小睡目前只有每日汇总秒数，先生成全天占位事件；拿到逐条数据后可无缝替换。
+- 小睡优先按 t_sleep_nap 逐条生成带时段的事件；无明细但有汇总秒数时退回全天占位事件。
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.models.base_activity import BaseActivity
 from app.models.base_connect import BaseConnect
 from app.models.sleep_daily import SleepDaily
+from app.models.sleep_nap import SleepNap
 from app.services.user_service import get_user_by_email, get_user_by_username
 
 SYNC_SOURCE = "incremental-calendar"
@@ -278,7 +279,7 @@ def build_sleep_event(daily: SleepDaily, tz: ZoneInfo) -> dict | None:
 
 
 def build_nap_event(daily: SleepDaily) -> dict | None:
-    """小睡汇总占位：无法知道逐条起止时间，用全天事件如实展示总时长。"""
+    """小睡汇总占位（兜底）：当天有小睡秒数但没有逐条明细时才用。"""
     seconds = _to_int(daily.nap_time_seconds) or 0
     if seconds <= 0 or daily.calendar_date is None:
         return None
@@ -287,8 +288,7 @@ def build_nap_event(daily: SleepDaily) -> dict | None:
         "summary": f"小睡合计 {_fmt_duration(seconds)}",
         "description": (
             f"当天小睡共 {_fmt_duration(seconds)}。\n"
-            "佳明当前接口只提供每日汇总，未提供逐条小睡的起止时间，"
-            "因此用全天事件占位；拿到逐条数据后会自动替换为具体时段。"
+            "该日只有汇总数据、没有逐条小睡明细，因此用全天事件占位。"
         ),
         "start": {"date": day.isoformat()},
         "end": {"date": (day + timedelta(days=1)).isoformat()},
@@ -296,9 +296,33 @@ def build_nap_event(daily: SleepDaily) -> dict | None:
     return _attach_meta(body, "nap-summary", str(daily.id))
 
 
+def build_nap_detail_event(nap: SleepNap, daily: SleepDaily, tz: ZoneInfo) -> dict | None:
+    """逐条小睡事件：带具体起止时段。"""
+    if nap.start_at is None or nap.end_at is None or nap.end_at <= nap.start_at:
+        return None
+    seconds = _to_int(nap.duration_seconds) or int(
+        (nap.end_at - nap.start_at).total_seconds()
+    )
+    summary = f"小睡 {_fmt_duration(seconds)}"
+    lines = ["来源：Garmin / incremental"]
+    if nap.nap_feedback:
+        lines.append(f"小睡反馈：{nap.nap_feedback}")
+    if daily.calendar_date is not None:
+        lines.append(f"日历日期（起床日）：{daily.calendar_date}")
+    body = {
+        "summary": summary,
+        "description": "\n".join(lines),
+        "start": _fmt_datetime(nap.start_at, tz),
+        "end": _fmt_datetime(nap.end_at, tz),
+    }
+    # key 用 daily_id + 开始时刻：小睡行每次同步会重建（id 不稳定），内容 key 才能保证幂等
+    return _attach_meta(body, "nap", f"{daily.id}:{nap.start_at.isoformat()}")
+
+
 def build_desired_events(
     sleeps: list[SleepDaily],
     activities: list[BaseActivity],
+    naps_by_daily: dict[int, list],
     tz: ZoneInfo,
 ) -> dict[str, dict]:
     desired: dict[str, dict] = {}
@@ -307,9 +331,20 @@ def build_desired_events(
         if event:
             desired[event["id"]] = event
     for daily in sleeps:
-        for event in (build_sleep_event(daily, tz), build_nap_event(daily)):
-            if event:
-                desired[event["id"]] = event
+        event = build_sleep_event(daily, tz)
+        if event:
+            desired[event["id"]] = event
+        nap_rows = naps_by_daily.get(daily.id) or []
+        if nap_rows:
+            for nap in nap_rows:
+                nap_event = build_nap_detail_event(nap, daily, tz)
+                if nap_event:
+                    desired[nap_event["id"]] = nap_event
+        else:
+            # 无逐条明细时才用汇总占位，有明细后占位事件会被对账自动清掉
+            nap_event = build_nap_event(daily)
+            if nap_event:
+                desired[nap_event["id"]] = nap_event
     return desired
 
 
@@ -323,6 +358,21 @@ def _query_sleeps(db: Session, user_id: int, start: date, end: date) -> list[Sle
         )
         .all()
     )
+
+
+def _query_naps(db: Session, daily_ids: list[int]) -> dict[int, list[SleepNap]]:
+    """按 daily_id 分组取小睡明细。"""
+    if not daily_ids:
+        return {}
+    grouped: dict[int, list[SleepNap]] = {}
+    for nap in (
+        db.query(SleepNap)
+        .filter(SleepNap.daily_id.in_(daily_ids))
+        .order_by(SleepNap.daily_id, SleepNap.start_at)
+        .all()
+    ):
+        grouped.setdefault(nap.daily_id, []).append(nap)
+    return grouped
 
 
 def _query_activities(
@@ -461,8 +511,9 @@ def sync_calendar(
     calendar_id = calendar_id or get_calendar_id()
 
     sleeps = _query_sleeps(db, user.id, start, end)
+    naps_by_daily = _query_naps(db, [daily.id for daily in sleeps])
     activities = _query_activities(db, user.id, start, end)
-    desired = build_desired_events(sleeps, activities, tz)
+    desired = build_desired_events(sleeps, activities, naps_by_daily, tz)
 
     if service is None:
         service = build_google_service()
@@ -472,6 +523,7 @@ def sync_calendar(
         "calendar_id": calendar_id,
         "window": [start.isoformat(), end.isoformat()],
         "sleep_days": len(sleeps),
+        "naps": sum(len(rows) for rows in naps_by_daily.values()),
         "activities": len(activities),
         "desired_events": len(desired),
         "created": 0,

@@ -14,6 +14,7 @@ from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
 from app.models.sleep_daily import SleepDaily
 from app.models.sleep_detail import SleepDetail
+from app.models.sleep_nap import SleepNap
 from app.models.base_connect import BaseConnect
 from app.models.user import User
 from app.core.security import get_current_user, get_current_user_optional
@@ -594,6 +595,15 @@ def get_daily_sleep(
         else []
     )
 
+    nap_records = (
+        db.query(SleepNap)
+        .filter(SleepNap.daily_id == daily_record.id)
+        .order_by(SleepNap.start_at)
+        .all()
+        if daily_record is not None
+        else []
+    )
+
     def _iso(value):
         return value.isoformat() if value else None
 
@@ -631,6 +641,15 @@ def get_daily_sleep(
                     "activity_level": level.activity_level,
                 }
                 for level in detail_records
+            ],
+            "naps": [
+                {
+                    "start_at": nap.start_at.isoformat(),
+                    "end_at": nap.end_at.isoformat(),
+                    "duration_seconds": nap.duration_seconds,
+                    "feedback": nap.nap_feedback,
+                }
+                for nap in nap_records
             ],
         },
     }
@@ -725,6 +744,7 @@ def get_monthly_sleep(
                     "sleep_start_at": _iso(record.sleep_start_at),
                     "sleep_end_at": _iso(record.sleep_end_at),
                     "sleep_time_seconds": record.sleep_time_seconds,
+                    "nap_time_seconds": record.nap_time_seconds,
                     "deep_sleep_seconds": record.deep_sleep_seconds,
                     "light_sleep_seconds": record.light_sleep_seconds,
                     "rem_sleep_seconds": record.rem_sleep_seconds,

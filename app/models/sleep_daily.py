@@ -162,3 +162,8 @@ class SleepDaily(Base):
         back_populates="daily",
         cascade="all, delete-orphan",
     )
+    naps = relationship(
+        "SleepNap",
+        back_populates="daily",
+        cascade="all, delete-orphan",
+    )

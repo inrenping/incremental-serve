@@ -20,6 +20,7 @@ from app.models.heart_rate_daily import HeartRateDaily
 from app.models.heart_rate_detail import HeartRateDetail
 from app.models.sleep_daily import SleepDaily
 from app.models.sleep_detail import SleepDetail
+from app.models.sleep_nap import SleepNap
 from app.models.user import User
 from app.services import base_connect_service, coros_service
 from app.utils.crypto_utils import CryptoUtils
@@ -1277,6 +1278,47 @@ def _parse_gmt(value: Any) -> Optional[datetime]:
     return None
 
 
+def parse_nap_dtos(dto: dict) -> List[dict]:
+    """从 dailySleepDTO.dailyNapDTOS 解析逐条小睡。
+
+    每条形如：
+      {
+        "napStartTimestampGMT": "2026-11-14T06:58:34",
+        "napEndTimestampGMT": "2026-11-14T09:02:34",
+        "napTimeSec": 7440,
+        "napStartTimeOffset": 480,
+        "napFeedback": "LATE_TIMING_LONG_DURATION_LOW_NEED"
+      }
+    返回按开始时间排序的 dict 列表：start_at/end_at(UTC)、duration_seconds、nap_feedback。
+    缺起止时间或时段非法的条目直接跳过。
+    """
+    rows: List[dict] = []
+    for nap in dto.get("dailyNapDTOS") or []:
+        if not isinstance(nap, dict):
+            continue
+        start = _parse_gmt(nap.get("napStartTimestampGMT"))
+        end = _parse_gmt(nap.get("napEndTimestampGMT"))
+        if start is None or end is None or end <= start:
+            continue
+        try:
+            duration = int(nap.get("napTimeSec"))
+        except (TypeError, ValueError):
+            duration = int((end - start).total_seconds())
+        if duration <= 0:
+            continue
+        feedback = nap.get("napFeedback")
+        rows.append(
+            {
+                "start_at": start,
+                "end_at": end,
+                "duration_seconds": duration,
+                "nap_feedback": str(feedback).strip() if feedback else None,
+            }
+        )
+    rows.sort(key=lambda row: row["start_at"])
+    return rows
+
+
 def get_garmin_daily_sleep(
     connect_id: int,
     date: str,
@@ -1368,6 +1410,7 @@ def save_garmin_daily_sleep(
     1. 调用佳明接口获取 original 数据
     2. upsert 汇总到 t_sleep_daily
     3. 全量替换该日的阶段片段到 t_sleep_detail（保证重复同步幂等）
+    4. 全量替换该日的逐条小睡到 t_sleep_nap（dailyNapDTOS，保证重复同步幂等）
     """
     raw_data = get_garmin_daily_sleep(
         connect_id=connect_id,
@@ -1479,12 +1522,29 @@ def save_garmin_daily_sleep(
                 f"（{SLEEP_LEVEL_NAMES.get(level)}）"
             )
 
+    # 小睡明细：全量替换，保证幂等
+    db.query(SleepNap).filter(SleepNap.daily_id == daily_record.id).delete()
+    nap_rows = parse_nap_dtos(dto)
+    for row in nap_rows:
+        db.add(SleepNap(daily_id=daily_record.id, **row))
+
+    # 自检：逐条小睡加总 vs napTimeSeconds
+    nap_total = dto.get("napTimeSeconds")
+    if nap_rows and isinstance(nap_total, (int, float)) and nap_total > 0:
+        actual_nap = sum(row["duration_seconds"] for row in nap_rows)
+        if abs(actual_nap - nap_total) > max(300, nap_total * 0.1):
+            print(
+                f"[sleep] 小睡自检告警 {calendar_date}: "
+                f"汇总={nap_total}s 明细合计={actual_nap}s"
+            )
+
     db.commit()
 
     return {
         "has_data": True,
         "id": daily_record.id,
         "calendarDate": calendar_date.isoformat(),
+        "napCount": len(nap_rows),
         "sleepStartAt": start_at.isoformat() if start_at else None,
         "sleepEndAt": end_at.isoformat() if end_at else None,
         "sleepTimeSeconds": daily_record.sleep_time_seconds,
