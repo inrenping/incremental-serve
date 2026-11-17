@@ -87,10 +87,7 @@ def test_sleep_and_nap_events():
     assert sleep["end"]["dateTime"].startswith("2026-11-17T07:00:00+08:00")
     assert "得分 80" in sleep["summary"]
 
-    nap = svc.build_nap_event(daily)
-    assert nap["start"] == {"date": "2026-11-17"}
-    assert nap["end"] == {"date": "2026-11-18"}
-    assert "30分钟" in nap["summary"]
+    # 小睡全天占位已废弃：无逐条明细时不再生成任何小睡事件（见下条测试）
 
     # 逐条小睡：带具体时段，key 稳定
     nap_row = SimpleNamespace(
@@ -366,7 +363,7 @@ def test_parse_nap_dtos_extracts_per_nap_times():
 
 
 def test_nap_summary_fallback_only_without_details():
-    """有逐条明细时只发逐条事件；无明细但有汇总秒数时才用全天占位。"""
+    """小睡只发逐条事件；无明细时不再生成全天占位（占位已废弃）。"""
     daily = SimpleNamespace(
         id=7,
         calendar_date=date(2026, 11, 17),
@@ -392,9 +389,12 @@ def test_nap_summary_fallback_only_without_details():
     kinds = {e["extendedProperties"]["private"]["inc_kind"] for e in with_details.values()}
     assert kinds == {"sleep", "nap"}
 
+    # 只有汇总秒数、没有逐条明细：不生成任何小睡事件，更不能有全天占位
     without_details = svc.build_desired_events([daily], [], {}, _tz())
     kinds = {e["extendedProperties"]["private"]["inc_kind"] for e in without_details.values()}
-    assert kinds == {"sleep", "nap-summary"}
+    assert kinds == {"sleep"}
+    for e in without_details.values():
+        assert (e.get("start") or {}).get("date") is None
 
 
 def _http_error(status: int, message: str) -> HttpError:

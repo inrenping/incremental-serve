@@ -113,7 +113,7 @@ def sync_calendar_to_google(
     dry_run: bool = Query(False, description="只计算差异，不写 Google 日历"),
     db: Session = Depends(get_db),
 ):
-    """把定时任务账号的睡眠（含小睡占位）与运动同步到专用 Google 日历。
+    """把定时任务账号的睡眠（含逐条小睡）与运动同步到专用 Google 日历。
 
     仅允许 X-Sync-Token 调用（GitHub Actions / 手动运维）。
     year/month/day 同时传时只同步这一天；不传则按 days 回看（含今天）。

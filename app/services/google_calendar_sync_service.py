@@ -4,7 +4,7 @@
 - 只写一个由用户显式共享给服务账号的日历，绝不碰公开赛事日历。
 - 事件 ID 由源记录确定性生成，重复跑不会重复创建；哈希不变则跳过更新。
 - 只清理带本服务标记（extendedProperties.private.inc_source）且在同步窗口内的事件。
-- 小睡优先按 t_sleep_nap 逐条生成带时段的事件；无明细但有汇总秒数时退回全天占位事件。
+- 小睡只按 t_sleep_nap 逐条生成带起止时段的事件；没有逐条明细时不生成任何小睡事件（不放全天占位）。
 """
 
 from __future__ import annotations
@@ -279,24 +279,6 @@ def build_sleep_event(daily: SleepDaily, tz: ZoneInfo) -> dict | None:
     return _attach_meta(body, "sleep", str(daily.id))
 
 
-def build_nap_event(daily: SleepDaily) -> dict | None:
-    """小睡汇总占位（兜底）：当天有小睡秒数但没有逐条明细时才用。"""
-    seconds = _to_int(daily.nap_time_seconds) or 0
-    if seconds <= 0 or daily.calendar_date is None:
-        return None
-    day = daily.calendar_date
-    body = {
-        "summary": f"小睡合计 {_fmt_duration(seconds)}",
-        "description": (
-            f"当天小睡共 {_fmt_duration(seconds)}。\n"
-            "该日只有汇总数据、没有逐条小睡明细，因此用全天事件占位。"
-        ),
-        "start": {"date": day.isoformat()},
-        "end": {"date": (day + timedelta(days=1)).isoformat()},
-    }
-    return _attach_meta(body, "nap-summary", str(daily.id))
-
-
 def build_nap_detail_event(nap: SleepNap, daily: SleepDaily, tz: ZoneInfo) -> dict | None:
     """逐条小睡事件：带具体起止时段。"""
     if nap.start_at is None or nap.end_at is None or nap.end_at <= nap.start_at:
@@ -335,15 +317,8 @@ def build_desired_events(
         event = build_sleep_event(daily, tz)
         if event:
             desired[event["id"]] = event
-        nap_rows = naps_by_daily.get(daily.id) or []
-        if nap_rows:
-            for nap in nap_rows:
-                nap_event = build_nap_detail_event(nap, daily, tz)
-                if nap_event:
-                    desired[nap_event["id"]] = nap_event
-        else:
-            # 无逐条明细时才用汇总占位，有明细后占位事件会被对账自动清掉
-            nap_event = build_nap_event(daily)
+        for nap in naps_by_daily.get(daily.id) or []:
+            nap_event = build_nap_detail_event(nap, daily, tz)
             if nap_event:
                 desired[nap_event["id"]] = nap_event
     return desired

@@ -200,7 +200,7 @@ def _job_backup_fit() -> None:
 
 
 def _job_sync_google_calendar() -> None:
-    """睡眠（含小睡占位）与运动写入专用 Google 日历，默认同步用户时区「今天」。"""
+    """睡眠（含逐条小睡）与运动写入专用 Google 日历，默认同步用户时区「今天」。"""
     _safe_job(
         "sync_google_calendar",
         lambda db: google_calendar_sync_service.sync_calendar_for_cron_user(db),
