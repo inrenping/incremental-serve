@@ -5,6 +5,9 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httplib2
+from googleapiclient.errors import HttpError
+
 os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/test")
 
 from app.models.base_activity import BaseActivity
@@ -392,3 +395,101 @@ def test_nap_summary_fallback_only_without_details():
     without_details = svc.build_desired_events([daily], [], {}, _tz())
     kinds = {e["extendedProperties"]["private"]["inc_kind"] for e in without_details.values()}
     assert kinds == {"sleep", "nap-summary"}
+
+
+def _http_error(status: int, message: str) -> HttpError:
+    resp = httplib2.Response(
+        {"status": str(status), "reason": message, "content-type": "application/json"}
+    )
+    return HttpError(resp, f'{{"error": {{"message": "{message}"}}}}'.encode())
+
+
+class TombstoneEvents(FakeEvents):
+    """insert 一律报 409 duplicate，模拟 Google 对已删除事件 ID 的墓碑。"""
+
+    def insert(self, calendarId, body):
+        self.writes.append(("insert", body["id"]))
+        raise _http_error(409, "The requested identifier already exists.")
+
+
+class FlakyEvents(FakeEvents):
+    """前 n 次 insert 报 500，之后恢复正常。"""
+
+    def __init__(self, fail_times: int):
+        super().__init__()
+        self.fail_times = fail_times
+
+    def insert(self, calendarId, body):
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            self.writes.append(("insert-fail", body["id"]))
+            raise _http_error(500, "Backend Error")
+        return super().insert(calendarId, body)
+
+
+def _single_daily():
+    return SimpleNamespace(
+        id=7,
+        calendar_date=date(2026, 11, 17),
+        sleep_start_at=datetime(2026, 11, 16, 15, 30, tzinfo=timezone.utc),
+        sleep_end_at=datetime(2026, 11, 16, 23, 0, tzinfo=timezone.utc),
+        sleep_time_seconds=27000,
+        nap_time_seconds=1800,
+        sleep_score=80,
+        deep_sleep_seconds=None,
+        light_sleep_seconds=None,
+        rem_sleep_seconds=None,
+        awake_sleep_seconds=None,
+    )
+
+
+def _db_with_two_events():
+    """1 条睡眠 + 1 条小睡明细 → 2 条期望事件。"""
+    daily = _single_daily()
+    nap_row = SimpleNamespace(
+        daily_id=7,
+        start_at=datetime(2026, 11, 17, 6, 58, tzinfo=timezone.utc),
+        end_at=datetime(2026, 11, 17, 7, 28, tzinfo=timezone.utc),
+        duration_seconds=1800,
+        nap_feedback=None,
+    )
+    db = Mock()
+
+    def query_side_effect(model):
+        if model is BaseConnect.id:
+            return FakeQuery([(10,)])
+        if model is SleepNap:
+            return FakeQuery([nap_row])
+        return FakeQuery([daily] if model is SleepDaily else [])
+
+    db.query.side_effect = query_side_effect
+    return db
+
+
+def test_write_event_falls_back_to_update_on_tombstone_409():
+    """insert 撞到已删除事件 ID 的墓碑（409）时，改用同 ID update 复活。"""
+    events = TombstoneEvents()
+    service = FakeService()
+    service._events = events
+    body = {"id": "abc123", "summary": "x", "extendedProperties": {"private": {}}}
+
+    action = svc._write_event(service, "cal", "abc123", body, current=None)
+    assert action == "created"
+    assert ("insert", "abc123") in events.writes
+    assert ("update", "abc123") in events.writes
+    assert events.store["abc123"]["summary"] == "x"
+
+
+def test_sync_calendar_survives_single_event_write_error():
+    """单条写入失败只记入 errors，不拖垮整个同步。"""
+    db = _db_with_two_events()
+    user = SimpleNamespace(id=1, timezone="Asia/Shanghai")
+    service = FakeService()
+    service._events = FlakyEvents(fail_times=1)
+
+    stats = svc.sync_calendar(
+        db, user, days=7, dry_run=False, service=service, calendar_id="cal"
+    )
+    assert stats["created"] == 1
+    assert len(stats["errors"]) == 1
+    assert "500" in stats["errors"][0]["error"] or "Backend" in stats["errors"][0]["error"]
