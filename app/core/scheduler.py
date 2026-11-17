@@ -12,7 +12,12 @@ from app.models.task_item import TaskItem
 from app.models.task_result import TaskResult
 from app.models.user import User
 from app.services import quick_sync_service
-from app.services import garmin_service, garmin_metrics_service, main_activity_service
+from app.services import (
+    garmin_service,
+    garmin_metrics_service,
+    main_activity_service,
+    google_calendar_sync_service,
+)
 from app.services.base_activity_service import batch_upload_fit_to_storage
 
 logger = logging.getLogger(__name__)
@@ -194,6 +199,14 @@ def _job_backup_fit() -> None:
     )
 
 
+def _job_sync_google_calendar() -> None:
+    """睡眠（含小睡占位）与运动写入专用 Google 日历，默认同步用户时区「今天」。"""
+    _safe_job(
+        "sync_google_calendar",
+        lambda db: google_calendar_sync_service.sync_calendar_for_cron_user(db),
+    )
+
+
 def _register_periodic_sync_jobs() -> None:
     """注册周期同步任务。所有时间均为 UTC。"""
     # 心率：上海时间每天 06:00–24:00 每小时一次（对应 UTC 22:00/23:00 前一天 + 00:00–16:00 当天）。
@@ -252,6 +265,18 @@ def _register_periodic_sync_jobs() -> None:
         coalesce=True,
         max_instances=1,
     )
+    # 睡眠/运动 → Google 日历：每天 00:00 UTC（上海 08:00），
+    # 同步用户时区的「今天」；昨晚的睡眠在 23:00 UTC 的睡眠同步 job 已落库。
+    scheduler.add_job(
+        _job_sync_google_calendar,
+        trigger="cron",
+        hour="0",
+        id="sync_google_calendar",
+        replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
     # # 备份 FIT 到对象存储：每天 00:00 / 12:00 UTC（对应上海 08:00 / 20:00）
     # scheduler.add_job(
     #     _job_backup_fit,
@@ -267,7 +292,8 @@ def _register_periodic_sync_jobs() -> None:
         "[scheduler] registered periodic sync jobs: "
         "sync_heart_rate_all(0-16,22,23), sync_sleep_all(23,1), "
         "sync_fitness_metrics_all(23), sync_main_activity_all(*/6), "
-        "refresh_garmin_count(16), backup_fit(0,12) [UTC]"
+        "refresh_garmin_count(16), sync_google_calendar(0), "
+        "backup_fit(0,12) [UTC]"
     )
 
 
