@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.base_activity import BaseActivity
+from app.models.base_connect import BaseConnect
 from app.models.sleep_daily import SleepDaily
 from app.services.user_service import get_user_by_email, get_user_by_username
 
@@ -327,10 +328,30 @@ def _query_sleeps(db: Session, user_id: int, start: date, end: date) -> list[Sle
 def _query_activities(
     db: Session, user_id: int, start: date, end: date
 ) -> list[BaseActivity]:
+    """只取该用户主数据源（master=True 且激活）连接下的运动。
+
+    口径与 main_activity_service 一致：跨渠道同步过来的重复活动不进日历，
+    日历只反映用户指定的那一个主账号。
+    """
+    master_connect_ids = [
+        row[0]
+        for row in db.query(BaseConnect.id)
+        .filter(
+            BaseConnect.user_id == user_id,
+            BaseConnect.master == True,  # noqa: E712
+            BaseConnect.is_active == True,  # noqa: E712
+        )
+        .all()
+    ]
+    if not master_connect_ids:
+        _log(f"用户 {user_id} 没有主数据源连接，跳过运动同步")
+        return []
+
     return (
         db.query(BaseActivity)
         .filter(
             BaseActivity.user_id == user_id,
+            BaseActivity.base_connect_id.in_(master_connect_ids),
             or_(
                 BaseActivity.start_time_local.between(
                     datetime.combine(start, time.min),
