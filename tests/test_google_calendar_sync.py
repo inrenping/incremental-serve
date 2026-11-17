@@ -8,6 +8,7 @@ from unittest.mock import Mock
 os.environ.setdefault("DATABASE_URL", "postgresql://user:pass@localhost:5432/test")
 
 from app.models.base_activity import BaseActivity
+from app.models.base_connect import BaseConnect
 from app.models.sleep_daily import SleepDaily
 from app.services import google_calendar_sync_service as svc
 
@@ -193,9 +194,13 @@ def test_sync_calendar_dry_run_then_idempotent():
         elevation_gain=None,
     )
     db = Mock()
-    db.query.side_effect = lambda model: FakeQuery(
-        [daily] if model is SleepDaily else [activity]
-    )
+    # 查询 BaseConnect.id 返回主连接，其余按 model 返回 sleep / activity。
+    def query_side_effect(model):
+        if model is BaseConnect.id:
+            return FakeQuery([(10,)])
+        return FakeQuery([daily] if model is SleepDaily else [activity])
+
+    db.query.side_effect = query_side_effect
     user = SimpleNamespace(id=1, timezone="Asia/Shanghai")
     service = FakeService()
 
@@ -220,6 +225,35 @@ def test_sync_calendar_dry_run_then_idempotent():
     assert second["deleted"] == 0
 
 
+def test_activities_only_from_master_connect():
+    """运动只同步主数据源连接的数据；无主连接时直接返回空。"""
+    queried_models = []
+
+    db = Mock()
+
+    def query_side_effect(model):
+        queried_models.append(model)
+        if model is BaseConnect.id:
+            return FakeQuery([(10,)])
+        return FakeQuery([SimpleNamespace(id=1)])
+
+    db.query.side_effect = query_side_effect
+    result = svc._query_activities(db, 1, date(2026, 11, 1), date(2026, 11, 17))
+    assert result == [SimpleNamespace(id=1)]
+    assert BaseConnect.id in queried_models
+
+    # 没有主连接时直接返回空，不查运动表
+    queried_models.clear()
+    db_no_master = Mock()
+    db_no_master.query.side_effect = lambda model: (
+        queried_models.append(model) or FakeQuery([])
+    )
+    assert svc._query_activities(
+        db_no_master, 1, date(2026, 11, 1), date(2026, 11, 17)
+    ) == []
+    assert queried_models == [BaseConnect.id]
+
+
 def test_sync_calendar_single_date_window():
     daily = SimpleNamespace(
         id=9,
@@ -236,7 +270,7 @@ def test_sync_calendar_single_date_window():
     )
     db = Mock()
     db.query.side_effect = lambda model: FakeQuery(
-        [daily] if model is SleepDaily else []
+        [(10,)] if model is BaseConnect.id else ([daily] if model is SleepDaily else [])
     )
     user = SimpleNamespace(id=1, timezone="Asia/Shanghai")
     service = FakeService()
