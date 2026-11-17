@@ -16,6 +16,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from googleapiclient.errors import HttpError
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
@@ -483,6 +484,48 @@ def _event_in_window(event: dict, start: date, end: date) -> bool:
     return start <= day <= end
 
 
+def _is_duplicate_error(exc: Exception) -> bool:
+    """Google 对已删除事件的 ID 保留墓碑，insert 会报 409 duplicate。"""
+    resp = getattr(exc, "resp", None)
+    status = getattr(resp, "status", None)
+    if status != 409:
+        return False
+    return "duplicate" in str(exc).lower() or "already exists" in str(exc).lower()
+
+
+def _write_event(
+    service,
+    calendar_id: str,
+    event_id: str,
+    body: dict,
+    current: dict | None,
+    dry_run: bool = False,
+) -> str:
+    """写一条事件，返回 'created' / 'updated'。
+
+    insert 撞到删除墓碑（409 duplicate）时改用同 ID update 复活/覆盖。
+    """
+    payload = {k: v for k, v in body.items() if k != "id"}
+    if dry_run:
+        return "updated" if current is not None else "created"
+    if current is not None:
+        service.events().update(
+            calendarId=calendar_id, eventId=event_id, body=payload
+        ).execute()
+        return "updated"
+    try:
+        service.events().insert(calendarId=calendar_id, body=body).execute()
+        return "created"
+    except HttpError as exc:
+        if _is_duplicate_error(exc):
+            _log(f"事件 {event_id} 撞上删除墓碑（409），改用 update 复活")
+            service.events().update(
+                calendarId=calendar_id, eventId=event_id, body=payload
+            ).execute()
+            return "created"
+        raise
+
+
 def sync_calendar(
     db: Session,
     user,
@@ -530,6 +573,7 @@ def sync_calendar(
         "updated": 0,
         "skipped": 0,
         "deleted": 0,
+        "errors": [],
         "dry_run": bool(dry_run),
     }
 
@@ -544,22 +588,32 @@ def sync_calendar(
             if current_hash == body["extendedProperties"]["private"]["inc_hash"]:
                 stats["skipped"] += 1
                 continue
-            if not dry_run:
-                payload = {k: v for k, v in body.items() if k != "id"}
-                service.events().update(
-                    calendarId=calendar_id, eventId=event_id, body=payload
-                ).execute()
-            stats["updated"] += 1
-        else:
-            if not dry_run:
-                service.events().insert(calendarId=calendar_id, body=body).execute()
-            stats["created"] += 1
+        try:
+            action = _write_event(
+                service, calendar_id, event_id, body, current, dry_run=dry_run
+            )
+        except Exception as exc:  # noqa: BLE001 单条失败不应拖垮整个同步
+            _log(f"写入事件失败 {event_id} {body.get('summary')}: {exc}")
+            stats["errors"].append(
+                {"event_id": event_id, "error": str(exc)[:300]}
+            )
+            continue
+        stats[action] += 1
 
     for event_id, event in existing.items():
         if event_id in desired or not _event_in_window(event, start, end):
             continue
         if not dry_run:
-            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+            try:
+                service.events().delete(
+                    calendarId=calendar_id, eventId=event_id
+                ).execute()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"删除事件失败 {event_id}: {exc}")
+                stats["errors"].append(
+                    {"event_id": event_id, "error": str(exc)[:300]}
+                )
+                continue
         stats["deleted"] += 1
 
     _log(json.dumps(stats, ensure_ascii=False))
