@@ -473,8 +473,20 @@ def _fetch_with_pages(service, params: dict, filtered: bool) -> dict[str, dict]:
 
 
 def _event_in_window(event: dict, start: date, end: date) -> bool:
-    start_info = event.get("start") or {}
-    raw = start_info.get("date") or start_info.get("dateTime")
+    """对账删除时判断事件归属日是否落在 [start, end]。
+
+    睡眠事件从前一晚开始，归属日是「起床日」（与 _query_sleeps 按
+    calendar_date 过滤的口径一致，即事件 end 的本地日期），所以睡眠按
+    end 日期判窗口；其余类型（运动/小睡）按 start 日期。
+    否则窗口右边界会把「起床日 = 末日 + 1」的睡眠误判成窗口内孤儿而删除。
+    """
+    private = (event.get("extendedProperties") or {}).get("private") or {}
+    kind = private.get("inc_kind")
+    info = (event.get("end") if kind == "sleep" else event.get("start")) or {}
+    raw = info.get("date") or info.get("dateTime")
+    if kind == "sleep" and not raw:
+        info = event.get("start") or {}
+        raw = info.get("date") or info.get("dateTime")
     if not raw:
         return False
     try:

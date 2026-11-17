@@ -493,3 +493,87 @@ def test_sync_calendar_survives_single_event_write_error():
     assert stats["created"] == 1
     assert len(stats["errors"]) == 1
     assert "500" in stats["errors"][0]["error"] or "Backend" in stats["errors"][0]["error"]
+
+
+def test_event_in_window_sleep_uses_wake_date():
+    """睡眠按起床日归属窗口，不能按开始日（前一晚）误判。"""
+    sleep_event = {
+        "id": "s1",
+        "start": {"dateTime": "2026-06-15T22:45:06+08:00"},
+        "end": {"dateTime": "2026-06-16T05:47:06+08:00"},
+        "extendedProperties": {"private": {"inc_kind": "sleep"}},
+    }
+    activity_event = {
+        "id": "a1",
+        "start": {"dateTime": "2026-06-15T21:35:00+08:00"},
+        "end": {"dateTime": "2026-06-15T21:43:00+08:00"},
+        "extendedProperties": {"private": {"inc_kind": "activity"}},
+    }
+    # 6-15 单日窗口：睡眠归 6-16（起床日），不算 6-15 的；运动算
+    assert not svc._event_in_window(sleep_event, date(2026, 6, 15), date(2026, 6, 15))
+    assert svc._event_in_window(sleep_event, date(2026, 6, 16), date(2026, 6, 16))
+    assert svc._event_in_window(activity_event, date(2026, 6, 15), date(2026, 6, 15))
+    # 月窗口右边界：7-1 晚开始、7-2 起床的睡眠不属于 [06-01, 07-01]
+    sleep_jul2 = {
+        "id": "s2",
+        "start": {"dateTime": "2026-07-01T23:00:00+08:00"},
+        "end": {"dateTime": "2026-07-02T06:00:00+08:00"},
+        "extendedProperties": {"private": {"inc_kind": "sleep"}},
+    }
+    assert svc._event_in_window(sleep_event, date(2026, 6, 1), date(2026, 7, 1))
+    assert not svc._event_in_window(sleep_jul2, date(2026, 6, 1), date(2026, 7, 1))
+
+
+def test_sync_calendar_keeps_next_day_sleep_deletes_true_orphan():
+    """对账删除不得误删「起床日=窗口末日+1」的睡眠，但仍要清掉真孤儿。"""
+    db = Mock()
+    db.query.side_effect = lambda model: FakeQuery([])
+    user = SimpleNamespace(id=1, timezone="Asia/Shanghai")
+    service = FakeService()
+
+    boundary_sleep = svc._attach_meta(
+        {
+            "summary": "睡眠 7小时",
+            "start": {
+                "dateTime": "2026-06-15T22:45:06+08:00",
+                "timeZone": "Asia/Shanghai",
+            },
+            "end": {
+                "dateTime": "2026-06-16T05:47:06+08:00",
+                "timeZone": "Asia/Shanghai",
+            },
+        },
+        "sleep",
+        "111",
+    )
+    orphan_activity = svc._attach_meta(
+        {
+            "summary": "旧活动",
+            "start": {
+                "dateTime": "2026-06-15T08:00:00+08:00",
+                "timeZone": "Asia/Shanghai",
+            },
+            "end": {
+                "dateTime": "2026-06-15T09:00:00+08:00",
+                "timeZone": "Asia/Shanghai",
+            },
+        },
+        "activity",
+        "garmin:999",
+    )
+    service._events.store[boundary_sleep["id"]] = boundary_sleep
+    service._events.store[orphan_activity["id"]] = orphan_activity
+
+    stats = svc.sync_calendar(
+        db,
+        user,
+        year=2026,
+        month=6,
+        day=15,
+        dry_run=False,
+        service=service,
+        calendar_id="cal",
+    )
+    assert stats["deleted"] == 1
+    assert boundary_sleep["id"] in service._events.store
+    assert orphan_activity["id"] not in service._events.store
